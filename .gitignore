@@ -1,3 +1,39 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# Env files
+.env *.log
+backend/.env
+frontend/.env
+
+# Node / React
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Playwright specific
+test-results/
+playwright-report/
+blob-report/
+playwright/.auth/
+.local-browsers/
+
+# Scraping data outputs
+data/
+*.csv
+*.json
+screenshots/
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
