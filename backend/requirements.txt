@@ -30,3 +30,5 @@ tzlocal==5.3.1
 uvicorn==0.46.0
 watchfiles==1.1.1
 websockets==16.0
+et_xmlfile==2.0.0 #needed for playwright
+openpyxl==3.1.5 #needed for playwright
