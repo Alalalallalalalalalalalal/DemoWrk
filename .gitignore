@@ -31,7 +31,25 @@ playwright/.auth/
 data/
 *.csv
 *.json
+*.png
 screenshots/
+#Never commit this
+
+.env
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.csv
+*.png
+DemoWrk-output.txt
+DemoWrk-output.md
+journal/
+reports/
+screenshots/
+member_id_map.csv
+explore_structure.json
+*.json
 
 
 # Byte-compiled / optimized / DLL files
