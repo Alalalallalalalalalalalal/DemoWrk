@@ -315,7 +315,7 @@ def main():
             screenshot(page, "fatal_error")
 
         finally:
-            input("\nPress Enter to close browser...")
+            print("Ending session...")
             browser.close()
 
 

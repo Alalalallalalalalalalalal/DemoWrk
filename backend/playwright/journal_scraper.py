@@ -567,7 +567,7 @@ def main():
             print(f"  Skipped: {len(results['skipped'])}")
             if results["failed"]:
                 print(f"  Failed: {results['failed']}")
-            input("\nPress Enter to close browser...")
+            print("Ending session...")
             browser.close()
 
 
