@@ -1,6 +1,6 @@
 """
 report_utils.py — Shared utilities for report navigation and frame finding.
-                  Used by each individual report module.
+                Used by each individual report module.
 """
 import os
 from datetime import datetime
