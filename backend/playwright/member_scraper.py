@@ -81,7 +81,7 @@ def main():
             print(f"Error screenshot saved: {screenshot_path}")
 
         finally:
-            page.close()
+            print("\nEnding session...")
             browser.close()
 
 
