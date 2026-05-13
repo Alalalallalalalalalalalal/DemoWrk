@@ -1,6 +1,7 @@
 from apscheduler.schedulers.blocking import BlockingScheduler
 from pipeline import run_pipeline
 import logging
+from datetime import datetime
 
 logging.basicConfig(
     filename="scheduler.log",
@@ -13,7 +14,9 @@ scheduler = BlockingScheduler()
 scheduler.add_job(
     run_pipeline,
     trigger='interval',
-    #hours=4, # run every 4 hours for now, can adjust as needed
+    #run immediately on startup
+    next_run_time=datetime.now(),
+    hours=4, # run every 4 hours for now, can adjust as needed
     # prevents overlapping runs
     max_instances=1,
     # if scheduler misses execution while offline
