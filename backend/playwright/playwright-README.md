@@ -31,3 +31,7 @@
 ## Notes: (These files do not affect playwright's function)
 1. cleaner.py is untested but I think that may be what you need to push over to Postgres
 2. db_schema.sql is created in the playwright folder but it is empty - not sure what the plan is for the schema.
+
+## To run full pipeline from playwright to cleaner.
+1. cd to backend (ensure env is activated)
+2. type in gitbash/shell: python apscheduler/scheduler.py
