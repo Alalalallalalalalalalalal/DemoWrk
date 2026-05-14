@@ -32,6 +32,7 @@ import os
 import csv
 import argparse
 from datetime import datetime
+import sys
 from playwright.sync_api import sync_playwright
 
 from config import OUTPUT_FOLDER, BASE_URL
@@ -569,6 +570,7 @@ def main():
                 print(f"  Failed: {results['failed']}")
             print("Ending session...")
             browser.close()
+            sys.exit()
 
 
 if __name__ == "__main__":

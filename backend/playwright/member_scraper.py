@@ -18,6 +18,7 @@ Usage:
 """
 import os
 from datetime import datetime
+import sys
 from playwright.sync_api import sync_playwright
 
 from config import OUTPUT_FOLDER, REPORTS_FOLDER
@@ -83,6 +84,7 @@ def main():
         finally:
             print("\nEnding session...")
             browser.close()
+            sys.exit()
 
 
 if __name__ == "__main__":
