@@ -138,6 +138,82 @@ def save_tab_csv(folder_name, suffix, rows):
 
     return filepath
 
+def scrape_deactivation_date(page):
+    """
+    Scrape the member deactivation date from Member Info page.
+    Returns string date or empty string.
+    """
+    frame = find_landing_frame(page)
+    if not frame:
+        return ""
+
+    try:
+        # From inspect:
+        # <input name="DeactivationDate" value="06/18/2024">
+
+        el = frame.query_selector('input[name="DeactivationDate"]')
+
+        if el:
+            value = el.get_attribute("value")
+            if value:
+                return value.strip()
+
+    except Exception as e:
+        print(f"    Failed to scrape deactivation date: {e}")
+
+    return ""
+
+
+def append_deactivation_to_profile(folder_name, deactivation_date):
+    """
+    Append/update Deactivation Date column
+    inside existing profile CSV.
+    """
+
+    profile_csv = os.path.join(
+        JOURNAL_FOLDER,
+        folder_name,
+        f"{folder_name}_profile.csv"
+    )
+
+    if not os.path.exists(profile_csv):
+        print(f"    Profile CSV not found: {profile_csv}")
+        return False
+
+    try:
+        # Read existing profile CSV
+        with open(profile_csv, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+
+        if not rows:
+            return False
+
+        # Add/update column
+        for row in rows:
+            row["Deactivation Date"] = deactivation_date or ""
+
+        # Preserve all columns
+        fieldnames = list(rows[0].keys())
+
+        if "Deactivation Date" not in fieldnames:
+            fieldnames.append("Deactivation Date")
+
+        # Rewrite CSV
+        with open(profile_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        if deactivation_date:
+            print(f"    Added Deactivation Date → {deactivation_date}")
+        else:
+            print(f"    Added blank Deactivation Date column")
+
+        return True
+
+    except Exception as e:
+        print(f"    Failed updating profile CSV: {e}")
+        return False
 
 # ─────────────────────────────────────────────
 # NAVIGATION
@@ -404,6 +480,23 @@ def scrape_member(page, member_number, member_id):
     if not ok:
         print(f"  Could not navigate to member {member_number}")
         return saved
+
+    #add deactivation date
+    #append to profile.csv
+
+    # ─────────────────────────────────────
+    # SCRAPE DEACTIVATION DATE
+    # ─────────────────────────────────────
+
+    deactivation_date = scrape_deactivation_date(page)
+
+    append_deactivation_to_profile(
+        folder_name,
+        deactivation_date
+    )
+
+    if not deactivation_date:
+        print("    No deactivation date found")
 
     shell = find_folio_shell_frame(page)
     if not shell:
