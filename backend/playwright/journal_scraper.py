@@ -138,35 +138,101 @@ def save_tab_csv(folder_name, suffix, rows):
 
     return filepath
 
-def scrape_deactivation_date(page):
+def scrape_member_info_fields(page):
     """
-    Scrape the member deactivation date from Member Info page.
-    Returns string date or empty string.
+    Scrape additional member info fields
+    from Member Info page.
+
+    Returns:
+        dict
     """
+
     frame = find_landing_frame(page)
+
     if not frame:
-        return ""
+        return {}
+
+    data = {
+        "Deactivation Date": "",
+        "Date of Death": "",
+        "Billing Cycle": "",
+        "Bill To Member": "",
+        "FICO Score": "",
+    }
 
     try:
-        # From inspect:
-        # <input name="DeactivationDate" value="06/18/2024">
-
-        el = frame.query_selector('input[name="DeactivationDate"]')
+        # Deactivation Date
+        el = frame.query_selector(
+            'input[name="DeactivationDate"]'
+        )
 
         if el:
-            value = el.get_attribute("value")
+            value = el.get_attribute("value") or el.inner_text()
+            print(f"    Found deactivation date element with value: {value}")
+
             if value:
-                return value.strip()
+                data["Deactivation Date"] = value.strip()
+
+        # -------------------------------------------------
+        # PLACEHOLDER SELECTORS
+        # Replace after inspecting portal HTML
+        # -------------------------------------------------
+
+        # Date of Death
+        el = frame.query_selector(
+            'input[name="deathDate"]'
+        )
+
+        if el:
+            value = el.get_attribute("value") or el.inner_text()
+            print(f"    Found date of death element with value: {value}")
+
+            if value:
+                data["Date of Death"] = value.strip()
+
+        # Billing Cycle
+        el = frame.query_selector(
+            'input[name="BillingCycleIdDisplay"]'
+        )
+
+        if el:
+            value = el.get_attribute("value") or el.inner_text()
+            print(f"    Found billing cycle element with value: {value}")
+            if value:
+                data["Billing Cycle"] = value.strip()
+
+        # Bill To Member
+        el = frame.query_selector(
+            'input[name="BillTo"]'
+        )
+
+        if el:
+            value = el.get_attribute("value") or el.inner_text()
+            print(f"    Found bill to member element with value: {value}")
+
+            if value:
+                data["Bill To Member"] = value.strip()
+
+        # FICO Score
+        el = frame.query_selector(
+            'input[name="FICOScore"]'
+        )
+
+        if el:
+            value = el.get_attribute("value") or el.inner_text()
+            print(f"    Found FICO score element with value: {value}")
+
+            if value:
+                data["FICO Score"] = value.strip()
 
     except Exception as e:
-        print(f"    Failed to scrape deactivation date: {e}")
+        print(f"    Failed scraping member info fields: {e}")
 
-    return ""
+    return data
 
-
-def append_deactivation_to_profile(folder_name, deactivation_date):
+def append_member_info_to_profile(folder_name, info_data):
     """
-    Append/update Deactivation Date column
+    Append/update member info columns
     inside existing profile CSV.
     """
 
@@ -181,40 +247,57 @@ def append_deactivation_to_profile(folder_name, deactivation_date):
         return False
 
     try:
-        # Read existing profile CSV
+
+        # Read existing CSV
         with open(profile_csv, newline="", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
 
         if not rows:
             return False
 
-        # Add/update column
-        for row in rows:
-            row["Deactivation Date"] = deactivation_date or ""
+        # -------------------------------------------------
+        # Add/update fields
+        # -------------------------------------------------
 
-        # Preserve all columns
+        for row in rows:
+
+            for key, value in info_data.items():
+
+                row[key] = value or ""
+
+        # -------------------------------------------------
+        # Preserve columns
+        # -------------------------------------------------
+
         fieldnames = list(rows[0].keys())
 
-        if "Deactivation Date" not in fieldnames:
-            fieldnames.append("Deactivation Date")
+        for key in info_data.keys():
 
+            if key not in fieldnames:
+                fieldnames.append(key)
+
+        # -------------------------------------------------
         # Rewrite CSV
+        # -------------------------------------------------
+
         with open(profile_csv, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+            writer = csv.DictWriter(
+                f,
+                fieldnames=fieldnames
+            )
+
             writer.writeheader()
             writer.writerows(rows)
 
-        if deactivation_date:
-            print(f"    Added Deactivation Date → {deactivation_date}")
-        else:
-            print(f"    Added blank Deactivation Date column")
+        print("    Added member info fields to profile CSV")
 
         return True
 
     except Exception as e:
         print(f"    Failed updating profile CSV: {e}")
-        return False
 
+        return False
 # ─────────────────────────────────────────────
 # NAVIGATION
 # ─────────────────────────────────────────────
@@ -481,22 +564,13 @@ def scrape_member(page, member_number, member_id):
         print(f"  Could not navigate to member {member_number}")
         return saved
 
-    #add deactivation date
-    #append to profile.csv
+    # SCRAPE MEMBER INFO
+    member_info = scrape_member_info_fields(page)
 
-    # ─────────────────────────────────────
-    # SCRAPE DEACTIVATION DATE
-    # ─────────────────────────────────────
-
-    deactivation_date = scrape_deactivation_date(page)
-
-    append_deactivation_to_profile(
+    append_member_info_to_profile(
         folder_name,
-        deactivation_date
+        member_info
     )
-
-    if not deactivation_date:
-        print("    No deactivation date found")
 
     shell = find_folio_shell_frame(page)
     if not shell:
