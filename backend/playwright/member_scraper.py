@@ -26,6 +26,7 @@ from login import login, open_reporting_menu
 from report_utils import navigate_to_search_reports
 import report_member_demographics
 import report_member_dependents
+import new_member_updater
 
 SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
 
@@ -62,6 +63,12 @@ def main():
                 try:
                     success = report_module.download(page)
                     results[report_name] = success
+
+                    # Run ONLY after demographics report downloads
+                    if (success and report_name.lower() == "member_demographics"):
+                        print("\nRunning new member updater...\n")
+                        new_member_updater.main()
+
                 except Exception as e:
                     print(f"  Failed: {e}\n")
                     results[report_name] = False
