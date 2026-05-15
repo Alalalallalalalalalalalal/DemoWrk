@@ -106,9 +106,13 @@ CREATE TABLE IF NOT EXISTS dependents (
     marital_status      VARCHAR(50),
     age                 INTEGER,
     date_of_birth       DATE,
+    date_of_death       DATE,
     activation_date     DATE,
     deactivation_date   DATE,
     since_date          DATE,
+    billing_cycle       VARCHAR(50),
+    bill_to_member      VARCHAR(50),
+    FICO_score          INTEGER,
     email               VARCHAR(255),
     status              VARCHAR(50)
 );
@@ -610,10 +614,14 @@ def load_dependents(conn, member_number, filepath, dry_run=False):
             "marital_status":   clean_category(row.get("Dependant Marital Status"), 50),
             "age":              clean_int(row.get("Dependant Age")),
             "date_of_birth":    clean_date(row.get("Dependant Date of Birth")),
+            "date_of_death":    clean_date(row.get("Dependant Date of Death")),
             "activation_date":  clean_date(row.get("Dependant Member Activation")),
             "deactivation_date": clean_date(row.get("Dependant Member Deactivation")),
         
             "since_date":       clean_date(row.get("Dependant Member Since")),
+            "billing_cycle":    clean_str(row.get("Dependant Billing Cycle"), 50),
+            "bill_to_member":   clean_str(row.get("Dependant Bill To Member"), 50),
+            "FICO_score":       clean_int(row.get("Dependant FICO Score")),
             "email":            clean_email(row.get("Dependant Email")),
             "status":           clean_status(row.get("Dependant Status")),
         }
