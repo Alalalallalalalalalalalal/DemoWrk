@@ -66,7 +66,11 @@ CREATE TABLE IF NOT EXISTS members (
     deactivation_date   DATE,
     since_date          DATE,
     date_of_birth       DATE,
+    date_of_death       DATE,
     email               VARCHAR(255),
+    billing_cycle       VARCHAR(50),
+    bill_to_member      VARCHAR(50),
+    fico_score          INTEGER,
     created_at          TIMESTAMP DEFAULT NOW(),
     updated_at          TIMESTAMP DEFAULT NOW()
 );
@@ -102,9 +106,13 @@ CREATE TABLE IF NOT EXISTS dependents (
     marital_status      VARCHAR(50),
     age                 INTEGER,
     date_of_birth       DATE,
+    date_of_death       DATE,
     activation_date     DATE,
     deactivation_date   DATE,
     since_date          DATE,
+    billing_cycle       VARCHAR(50),
+    bill_to_member      VARCHAR(50),
+    FICO_score          INTEGER,
     email               VARCHAR(255),
     status              VARCHAR(50)
 );
@@ -537,6 +545,10 @@ def load_profile(conn, member_number, filepath, dry_run=False):
             "deactivation_date":clean_date(row.get("Member Deactivation")),
             "since_date":       clean_date(row.get("Member Since")),
             "date_of_birth":    clean_date(row.get("Date of Birth")),
+            "date_of_death":    clean_date(row.get("Date of Death")),
+            "billing_cycle":    clean_str(row.get("Billing Cycle"), 50),
+            "bill_to_member":   clean_str(row.get("Bill To Member"), 50),
+            "fico_score":       clean_int(row.get("FICO Score")),
             "email":            clean_email(row.get("Email")),
         }
         upsert(conn, "members", [member], "member_number", dry_run)
@@ -572,7 +584,7 @@ def load_profile(conn, member_number, filepath, dry_run=False):
                 })
         if phone_rows:
             upsert_multi(conn, "member_phones", phone_rows,
-                         ["member_number", "phone_type"], dry_run)
+                        ["member_number", "phone_type"], dry_run)
 
 def load_dependents(conn, member_number, filepath, dry_run=False):
     """Load _dependents.csv into dependents, dependent_addresses, dependent_phones."""
@@ -602,10 +614,14 @@ def load_dependents(conn, member_number, filepath, dry_run=False):
             "marital_status":   clean_category(row.get("Dependant Marital Status"), 50),
             "age":              clean_int(row.get("Dependant Age")),
             "date_of_birth":    clean_date(row.get("Dependant Date of Birth")),
+            "date_of_death":    clean_date(row.get("Dependant Date of Death")),
             "activation_date":  clean_date(row.get("Dependant Member Activation")),
             "deactivation_date": clean_date(row.get("Dependant Member Deactivation")),
         
             "since_date":       clean_date(row.get("Dependant Member Since")),
+            "billing_cycle":    clean_str(row.get("Dependant Billing Cycle"), 50),
+            "bill_to_member":   clean_str(row.get("Dependant Bill To Member"), 50),
+            "FICO_score":       clean_int(row.get("Dependant FICO Score")),
             "email":            clean_email(row.get("Dependant Email")),
             "status":           clean_status(row.get("Dependant Status")),
         }
@@ -669,7 +685,7 @@ def load_rooms(conn, member_number, filepath, dry_run=False):
 
     if rows:
         upsert_multi(conn, "rooms", rows,
-                     ["member_number", "confirmation_code"], dry_run)
+                    ["member_number", "confirmation_code"], dry_run)
         log.info(f"  rooms: {len(rows)} rows")
 
 
@@ -700,7 +716,7 @@ def load_recent_activity(conn, member_number, filepath, dry_run=False):
 
     if rows:
         upsert_multi(conn, "recent_activity", rows,
-                     ["member_number", "transaction_id"], dry_run)
+                    ["member_number", "transaction_id"], dry_run)
         log.info(f"  recent_activity: {len(rows)} rows")
 
 

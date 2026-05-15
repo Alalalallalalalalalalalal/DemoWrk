@@ -6,8 +6,8 @@ retrieve.jsp?memberid=X, scrapes 5 specific tabs, and saves
 one CSV per tab under journal/{folder_name}/.
 
 Folder naming:
-  - Unique member numbers (1C, 22A)  → journal/1C/
-  - Generic labels (Guests, Dependent) → journal/Guests_35849/
+    - Unique member numbers (1C, 22A)  → journal/1C/
+    - Generic labels (Guests, Dependent) → journal/Guests_35849/
 
 Output structure:
     journal/
@@ -168,15 +168,9 @@ def scrape_member_info_fields(page):
 
         if el:
             value = el.get_attribute("value") or el.inner_text()
-            print(f"    Found deactivation date element with value: {value}")
 
             if value:
                 data["Deactivation Date"] = value.strip()
-
-        # -------------------------------------------------
-        # PLACEHOLDER SELECTORS
-        # Replace after inspecting portal HTML
-        # -------------------------------------------------
 
         # Date of Death
         el = frame.query_selector(
@@ -185,7 +179,6 @@ def scrape_member_info_fields(page):
 
         if el:
             value = el.get_attribute("value") or el.inner_text()
-            print(f"    Found date of death element with value: {value}")
 
             if value:
                 data["Date of Death"] = value.strip()
@@ -197,7 +190,7 @@ def scrape_member_info_fields(page):
 
         if el:
             value = el.get_attribute("value") or el.inner_text()
-            print(f"    Found billing cycle element with value: {value}")
+
             if value:
                 data["Billing Cycle"] = value.strip()
 
@@ -208,7 +201,6 @@ def scrape_member_info_fields(page):
 
         if el:
             value = el.get_attribute("value") or el.inner_text()
-            print(f"    Found bill to member element with value: {value}")
 
             if value:
                 data["Bill To Member"] = value.strip()
@@ -220,13 +212,13 @@ def scrape_member_info_fields(page):
 
         if el:
             value = el.get_attribute("value") or el.inner_text()
-            print(f"    Found FICO score element with value: {value}")
 
             if value:
                 data["FICO Score"] = value.strip()
 
     except Exception as e:
         print(f"    Failed scraping member info fields: {e}")
+        screenshot(page, "member_info_error")
 
     return data
 
