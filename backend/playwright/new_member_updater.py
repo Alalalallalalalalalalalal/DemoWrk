@@ -12,9 +12,10 @@ import os
 import re
 import csv
 import glob
+import sys
 from playwright.sync_api import sync_playwright
 
-from config import REPORTS_FOLDER, OUTPUT_FOLDER, BASE_URL
+from config import REPORTS_FOLDER, OUTPUT_FOLDER
 from login import login
 from build_member_map import navigate_to_list_members
 
@@ -151,9 +152,7 @@ def search_member_and_get_id(page, member_number):
             )
 
             for link in links:
-
                 title = link.get_attribute("title") or ""
-
                 number_match = re.search(
                     r'(?:Member|Guest) Number\s*:\s*(\S+)',
                     title
@@ -166,15 +165,11 @@ def search_member_and_get_id(page, member_number):
 
                 # EXACT MATCH
                 if found_member_number == member_number:
-
-
                     href = link.get_attribute("href") or ""
-
                     match = re.search(
                         r'memberid=(\d+)',
                         href
                     )
-
                     if match:
                         return match.group(1)
 
@@ -254,7 +249,9 @@ def main():
                     print(f"Could not find ID for {member_number}")
 
         finally:
+            print("\nEnding session...")
             browser.close()
+            sys.exit()
 
 
 if __name__ == "__main__":
