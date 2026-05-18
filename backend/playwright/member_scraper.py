@@ -67,7 +67,10 @@ def main():
                     # Run ONLY after demographics report downloads
                     if (success and report_name.lower() == "member_demographics"):
                         print("\nRunning new member updater...\n")
-                        new_member_updater.main()
+                        import subprocess
+                        subprocess.run([
+                            "python",
+                            "backend/playwright/new_member_updater.py"])
 
                 except Exception as e:
                     print(f"  Failed: {e}\n")
