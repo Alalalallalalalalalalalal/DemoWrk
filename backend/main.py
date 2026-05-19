@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from postgres.database import test_db
 
+from postgres.analytics import router as analytics_router
 
 app = FastAPI()
 
@@ -13,14 +13,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# @app.on_event("startup")
-# def startup():
-#     start_scheduler()
-
 @app.get("/")
 def root():
     return {"message": "FastAPI backend is running"}
 
-@app.get("/db-test")
-def db_test():
-    return {"result": test_db()}
+app.include_router(
+    analytics_router,
+    prefix="/analytics",
+    tags=["Analytics"]
+)
