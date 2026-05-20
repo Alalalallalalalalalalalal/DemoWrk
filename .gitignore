@@ -281,6 +281,7 @@ venv/
 __pycache__/
 *.pyc
 *.csv
+*.txt
 *.png
 DemoWrk-output.txt
 DemoWrk-output.md
