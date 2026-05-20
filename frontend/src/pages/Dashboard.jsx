@@ -4,18 +4,13 @@ import {
   Bar,
   LineChart,
   Line,
-  PieChart,
-  Pie,
-  Cell,
   XAxis,
   YAxis,
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
-  Legend,
 } from "recharts";
 import {
-  Users,
   UserCheck,
   BedDouble,
   Sparkles,
@@ -23,109 +18,210 @@ import {
   CircleDot,
   DollarSign,
   CalendarClock,
-  Percent,
   Baby,
   MapPin,
   TrendingUp,
+  Clock,
 } from "lucide-react";
+
 import { analyticsApi } from "../api/analytics";
+import { styles, TOOLTIP_STYLE, COLORS } from "./dashboardStyles";
+import {
+  StatCard,
+  ChartCard,
+  SectionLabel,
+  PieLegendCard,
+  RoomHighlightCard,
+  DirectoryRow,
+} from "./DashboardComponents";
 
-/* ─── Design tokens ──────────────────────────────────────────── */
-const COLORS = [
-  "#C8976E",
-  "#5B9EAD",
-  "#2D5F6E",
-  "#C4A24D",
-  "#8B6B4A",
-  "#7ABCCC",
-];
-const TOOLTIP_STYLE = {
-  background: "#FDFAF6",
-  border: "1px solid #E8DDD0",
-  borderRadius: 10,
-  fontSize: 12,
-  color: "#3D2B1F",
-  boxShadow: "0 4px 20px rgba(0,0,0,0.08)",
+const TAB_LABELS = {
+  overview: "Overview",
+  demographics: "Demographics",
+  visits: "Visits & Rooms",
+  finance: "Finance",
+  directory: "Directory",
+  ml: "ML Insights",
 };
-
-/* ─── Sub-components ─────────────────────────────────────────── */
-function StatCard({ icon: Icon, label, value, hint }) {
-  return (
-    <div style={styles.statCard}>
-      <div style={{ minWidth: 0, flex: 1, marginRight: 12 }}>
-        <p style={styles.statLabel}>{label}</p>
-        <p style={styles.statValue}>{value}</p>
-        {hint && <p style={styles.statHint}>{hint}</p>}
-      </div>
-      <div style={{ ...styles.statIcon, flexShrink: 0 }}>
-        <Icon size={18} color="#C8976E" />
-      </div>
-    </div>
-  );
-}
-
-function ChartCard({ title, description, children, span2 }) {
-  return (
-    <div style={{ ...styles.card, ...(span2 ? styles.span2 : {}) }}>
-      <div style={styles.cardHeader}>
-        <p style={styles.cardTitle}>{title}</p>
-        {description && <p style={styles.cardDesc}>{description}</p>}
-      </div>
-      <div style={{ height: 260 }}>{children}</div>
-    </div>
-  );
-}
-
-function SectionLabel({ children }) {
-  return (
-    <div style={styles.sectionLabel}>
-      <span style={styles.sectionLabelLine} />
-      <span style={styles.sectionLabelText}>{children}</span>
-      <span style={styles.sectionLabelLine} />
-    </div>
-  );
-}
 
 /* ─── Main Dashboard ─────────────────────────────────────────── */
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("overview");
 
+  // Members
   const [membersByCountry, setMembersByCountry] = useState([]);
   const [membersByState, setMembersByState] = useState([]);
   const [membersByGender, setMembersByGender] = useState([]);
   const [membersByAgeGroup, setMembersByAgeGroup] = useState([]);
   const [membersByType, setMembersByType] = useState([]);
   const [membersByStatus, setMembersByStatus] = useState([]);
+  const [membersByMaritalStatus, setMembersByMaritalStatus] = useState([]);
+  const [newMembersPerYear, setNewMembersPerYear] = useState([]);
+  const [averageTenure, setAverageTenure] = useState(null);
+
+  // Bookings / rooms
   const [bookingsByRoomType, setBookingsByRoomType] = useState([]);
   const [bookingsByMonth, setBookingsByMonth] = useState([]);
   const [averageLengthOfStay, setAverageLengthOfStay] = useState(null);
+  const [mostUsedRoomTypes, setMostUsedRoomTypes] = useState([]);
+  const [leastUsedRoomTypes, setLeastUsedRoomTypes] = useState([]);
+
+  // Live
+  const [liveInHouseCount, setLiveInHouseCount] = useState(null);
+  const [liveInHouseRoster, setLiveInHouseRoster] = useState([]);
+
+  // Spend
   const [spendByMonth, setSpendByMonth] = useState([]);
+  const [totalRecentActivitySpend, setTotalRecentActivitySpend] =
+    useState(null);
+  const [topSpendDescriptions, setTopSpendDescriptions] = useState([]);
+
+  // Finance
   const [totalAmountDue, setTotalAmountDue] = useState(null);
+  const [amountDueByPeriod, setAmountDueByPeriod] = useState([]);
+
+  // Dependents
+  const [totalDependents, setTotalDependents] = useState(null);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
+  const [dependentsPerMember, setDependentsPerMember] = useState([]);
+
+  // Directory
+  const [directoryMembers, setDirectoryMembers] = useState([]);
+  const [directorySearch, setDirectorySearch] = useState("");
 
   useEffect(() => {
-    analyticsApi.membersByCountry().then(setMembersByCountry);
-    analyticsApi.membersByState().then(setMembersByState);
-    analyticsApi.membersByGender().then(setMembersByGender);
-    analyticsApi.membersByAgeGroup().then(setMembersByAgeGroup);
-    analyticsApi.membersByType().then(setMembersByType);
-    analyticsApi.membersByStatus().then(setMembersByStatus);
-    analyticsApi.bookingsByRoomType().then(setBookingsByRoomType);
-    analyticsApi.bookingsByMonth().then(setBookingsByMonth);
-    analyticsApi.averageLengthOfStay().then(setAverageLengthOfStay);
-    analyticsApi.spendByMonth().then(setSpendByMonth);
-    analyticsApi.totalAmountDue().then(setTotalAmountDue);
-    analyticsApi.dependentsByAgeGroup().then(setDependentsByAgeGroup);
+    analyticsApi
+      .membersByCountry()
+      .then(setMembersByCountry)
+      .catch(() => {});
+    analyticsApi
+      .membersByState()
+      .then(setMembersByState)
+      .catch(() => {});
+    analyticsApi
+      .membersByGender()
+      .then(setMembersByGender)
+      .catch(() => {});
+    analyticsApi
+      .membersByAgeGroup()
+      .then(setMembersByAgeGroup)
+      .catch(() => {});
+    analyticsApi
+      .membersByType()
+      .then(setMembersByType)
+      .catch(() => {});
+    analyticsApi
+      .membersByStatus()
+      .then(setMembersByStatus)
+      .catch(() => {});
+    analyticsApi
+      .membersByMaritalStatus()
+      .then(setMembersByMaritalStatus)
+      .catch(() => {});
+    analyticsApi
+      .newMembersPerYear()
+      .then(setNewMembersPerYear)
+      .catch(() => {});
+    analyticsApi
+      .averageTenure()
+      .then(setAverageTenure)
+      .catch(() => {});
+
+    analyticsApi
+      .bookingsByRoomType()
+      .then(setBookingsByRoomType)
+      .catch(() => {});
+    analyticsApi
+      .bookingsByMonth()
+      .then(setBookingsByMonth)
+      .catch(() => {});
+    analyticsApi
+      .averageLengthOfStay()
+      .then(setAverageLengthOfStay)
+      .catch(() => {});
+    analyticsApi
+      .mostUsedRoomTypes()
+      .then(setMostUsedRoomTypes)
+      .catch(() => {});
+    analyticsApi
+      .leastUsedRoomTypes()
+      .then(setLeastUsedRoomTypes)
+      .catch(() => {});
+
+    analyticsApi
+      .liveInHouseCount()
+      .then(setLiveInHouseCount)
+      .catch(() => {});
+    analyticsApi
+      .liveInHouseRoster()
+      .then(setLiveInHouseRoster)
+      .catch(() => {});
+
+    analyticsApi
+      .spendByMonth()
+      .then(setSpendByMonth)
+      .catch(() => {});
+    analyticsApi
+      .totalRecentActivitySpend()
+      .then(setTotalRecentActivitySpend)
+      .catch(() => {});
+    analyticsApi
+      .topSpendDescriptions()
+      .then(setTopSpendDescriptions)
+      .catch(() => {});
+
+    analyticsApi
+      .totalAmountDue()
+      .then(setTotalAmountDue)
+      .catch(() => {});
+    analyticsApi
+      .amountDueByPeriod()
+      .then(setAmountDueByPeriod)
+      .catch(() => {});
+
+    analyticsApi
+      .totalDependents()
+      .then(setTotalDependents)
+      .catch(() => {});
+    analyticsApi
+      .dependentsByAgeGroup()
+      .then(setDependentsByAgeGroup)
+      .catch(() => {});
+    analyticsApi
+      .dependentsPerMember()
+      .then(setDependentsPerMember)
+      .catch(() => {});
+
+    analyticsApi
+      .memberDirectory()
+      .then(setDirectoryMembers)
+      .catch(() => {});
   }, []);
 
-  const tabs = ["overview", "demographics", "visits", "directory"];
+  const totalMembers = membersByType.reduce((a, b) => a + (b.total || 0), 0);
+
+  const filteredDirectory = directoryMembers.filter((m) => {
+    const q = directorySearch.toLowerCase();
+    if (!q) return true;
+    return [
+      m.member_name,
+      m.member_number,
+      m.member_type,
+      m.status,
+      m.city,
+      m.state,
+      m.country,
+      m.occupation,
+      m.employer,
+    ].some((v) => v && String(v).toLowerCase().includes(q));
+  });
 
   return (
     <div style={styles.root}>
       <main style={styles.main}>
-        {/* Tabs */}
+        {/* ── Tab nav ── */}
         <div style={styles.tabRow}>
-          {tabs.map((t) => (
+          {Object.keys(TAB_LABELS).map((t) => (
             <button
               key={t}
               onClick={() => setActiveTab(t)}
@@ -134,27 +230,65 @@ export default function Dashboard() {
                 ...(activeTab === t ? styles.tabActive : styles.tabInactive),
               }}
             >
-              {t === "visits"
-                ? "Visits & Rooms"
-                : t.charAt(0).toUpperCase() + t.slice(1)}
+              {TAB_LABELS[t]}
             </button>
           ))}
         </div>
 
-        {/* ── OVERVIEW ── */}
+        {/* ════════════════════ OVERVIEW ════════════════════ */}
         {activeTab === "overview" && (
           <div style={styles.tabContent}>
             <div style={styles.statsGrid}>
               <StatCard
                 icon={UserCheck}
-                label="Members"
-                value={
-                  membersByType.reduce((a, b) => a + (b.total || 0), 0) || "—"
-                }
-                hint="Primary holders"
+                label="Total Members"
+                value={totalMembers ? totalMembers.toLocaleString() : "—"}
+                hint="All membership types"
               />
               <StatCard
-                icon={Users}
+                icon={Activity}
+                label="Currently In-House"
+                value={liveInHouseCount?.total_in_house ?? 0}
+                hint="Live roster"
+              />
+              <StatCard
+                icon={CalendarClock}
+                label="Avg. Tenure"
+                value={
+                  averageTenure?.average_tenure_years != null
+                    ? `${Number(averageTenure.average_tenure_years).toFixed(1)} yrs`
+                    : "—"
+                }
+                hint="Across all members"
+              />
+              <StatCard
+                icon={DollarSign}
+                label="Outstanding Balance"
+                value={
+                  totalAmountDue?.total_amount_due != null
+                    ? `$${Number(totalAmountDue.total_amount_due).toLocaleString()}`
+                    : "—"
+                }
+                hint="Total dues owed"
+              />
+              <StatCard
+                icon={TrendingUp}
+                label="Recent Activity Spend"
+                value={
+                  totalRecentActivitySpend?.total != null
+                    ? `$${Number(totalRecentActivitySpend.total).toLocaleString()}`
+                    : "—"
+                }
+                hint="Latest activity period"
+              />
+              <StatCard
+                icon={Baby}
+                label="Total Dependents"
+                value={totalDependents?.total_dependents ?? 0}
+                hint="Linked to member folios"
+              />
+              <StatCard
+                icon={MapPin}
                 label="Countries"
                 value={membersByCountry.length || "—"}
                 hint="Member markets"
@@ -165,19 +299,44 @@ export default function Dashboard() {
                 value={bookingsByRoomType.length || "—"}
                 hint="Tracked categories"
               />
-              <StatCard
-                icon={DollarSign}
-                label="Outstanding Balance"
-                value={
-                  totalAmountDue?.total_amount_due != null
-                    ? `$${Number(totalAmountDue.total_amount_due).toLocaleString()}`
-                    : "—"
-                }
-                hint="Accounts with dues"
+            </div>
+
+            <SectionLabel>Member Acquisition</SectionLabel>
+            <div style={styles.chartsGrid}>
+              <ChartCard
+                title="New Members per Year"
+                description="Growth trend from member-since date"
+                span2
+              >
+                <ResponsiveContainer>
+                  <LineChart
+                    data={newMembersPerYear}
+                    margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
+                    <XAxis dataKey="year" stroke="#A08070" fontSize={11} />
+                    <YAxis stroke="#A08070" fontSize={11} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Line
+                      type="monotone"
+                      dataKey="total"
+                      stroke="#C8976E"
+                      strokeWidth={2}
+                      dot={{ r: 3, fill: "#C8976E" }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartCard>
+              <PieLegendCard
+                title="Member Type Mix"
+                description="Category breakdown"
+                data={membersByType}
+                dataKey="total"
+                nameKey="member_type"
               />
             </div>
 
-            <SectionLabel>Member Analytics</SectionLabel>
+            <SectionLabel>Bookings &amp; Spend</SectionLabel>
             <div style={styles.chartsGrid}>
               <ChartCard
                 title="Bookings by Month"
@@ -196,111 +355,14 @@ export default function Dashboard() {
                     <Line
                       type="monotone"
                       dataKey="total"
-                      stroke="#C8976E"
+                      stroke="#5B9EAD"
                       strokeWidth={2}
-                      dot={{ r: 3, fill: "#C8976E" }}
+                      dot={{ r: 3 }}
                     />
                   </LineChart>
                 </ResponsiveContainer>
               </ChartCard>
-
-              <div style={{ ...styles.card }}>
-                <div style={styles.cardHeader}>
-                  <p style={styles.cardTitle}>Member Type Mix</p>
-                  <p style={styles.cardDesc}>Category breakdown</p>
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 16,
-                    height: 260,
-                  }}
-                >
-                  {/* Pie chart — fixed width so it doesn't squash */}
-                  <div style={{ flex: "0 0 180px", height: "100%" }}>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={membersByType}
-                          dataKey="total"
-                          nameKey="member_type"
-                          outerRadius={80}
-                          innerRadius={44}
-                          paddingAngle={2}
-                        >
-                          {membersByType.map((_, i) => (
-                            <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip contentStyle={TOOLTIP_STYLE} />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                  {/* Custom legend beside the chart */}
-                  <div
-                    style={{
-                      flex: 1,
-                      overflowY: "auto",
-                      maxHeight: 260,
-                      paddingRight: 4,
-                    }}
-                  >
-                    {membersByType.map((item, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 7,
-                          marginBottom: 6,
-                        }}
-                      >
-                        <span
-                          style={{
-                            flexShrink: 0,
-                            width: 10,
-                            height: 10,
-                            borderRadius: 3,
-                            background: COLORS[i % COLORS.length],
-                            display: "inline-block",
-                          }}
-                        />
-                        <span
-                          style={{
-                            fontSize: 11,
-                            color: "#5A3E2B",
-                            fontFamily: "'Helvetica Neue', Arial, sans-serif",
-                            lineHeight: 1.3,
-                          }}
-                        >
-                          {item.member_type}
-                        </span>
-                        <span
-                          style={{
-                            marginLeft: "auto",
-                            fontSize: 11,
-                            color: "#9C7B65",
-                            fontWeight: 600,
-                            fontFamily: "'Helvetica Neue', Arial, sans-serif",
-                          }}
-                        >
-                          {item.total}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <SectionLabel>Spend Analytics</SectionLabel>
-            <div style={styles.chartsGrid}>
-              <ChartCard
-                title="Spend by Month"
-                description="Revenue trend"
-                span2
-              >
+              <ChartCard title="Spend by Month" description="Revenue trend">
                 <ResponsiveContainer>
                   <BarChart
                     data={spendByMonth}
@@ -318,7 +380,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ── DEMOGRAPHICS ── */}
+        {/* ════════════════════ DEMOGRAPHICS ════════════════════ */}
         {activeTab === "demographics" && (
           <div style={styles.tabContent}>
             <SectionLabel>Age / Gender / Status</SectionLabel>
@@ -337,29 +399,25 @@ export default function Dashboard() {
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
+              <PieLegendCard
+                title="Gender Split"
+                description="Male vs Female"
+                data={membersByGender}
+                dataKey="total"
+                nameKey="gender"
+              />
+              <PieLegendCard
+                title="Marital Status"
+                description="Household composition"
+                data={membersByMaritalStatus}
+                dataKey="total"
+                nameKey="marital_status"
+              />
+            </div>
 
-              <ChartCard title="Gender Split" description="Male vs Female">
-                <ResponsiveContainer>
-                  <PieChart>
-                    <Pie
-                      data={membersByGender}
-                      dataKey="total"
-                      nameKey="gender"
-                      outerRadius={90}
-                      innerRadius={50}
-                      paddingAngle={2}
-                    >
-                      {membersByGender.map((_, i) => (
-                        <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
-                    <Legend wrapperStyle={{ fontSize: 11, color: "#7A6050" }} />
-                  </PieChart>
-                </ResponsiveContainer>
-              </ChartCard>
-
-              <ChartCard title="Member Status" description="Active vs inactive">
+            <SectionLabel>Member Status &amp; Tenure</SectionLabel>
+            <div style={styles.chartsGrid}>
+              <ChartCard title="Member Status" description="Active vs Inactive">
                 <ResponsiveContainer>
                   <BarChart data={membersByStatus}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
@@ -370,9 +428,33 @@ export default function Dashboard() {
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
+              <ChartCard
+                title="New Members per Year"
+                description="Acquisition over time"
+                span2
+              >
+                <ResponsiveContainer>
+                  <LineChart
+                    data={newMembersPerYear}
+                    margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
+                    <XAxis dataKey="year" stroke="#A08070" fontSize={11} />
+                    <YAxis stroke="#A08070" fontSize={11} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Line
+                      type="monotone"
+                      dataKey="total"
+                      stroke="#C8976E"
+                      strokeWidth={2}
+                      dot={{ r: 3 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartCard>
             </div>
 
-            <SectionLabel>Location Analytics</SectionLabel>
+            <SectionLabel>Location</SectionLabel>
             <div style={styles.chartsGrid}>
               <ChartCard
                 title="Members by Country"
@@ -388,10 +470,10 @@ export default function Dashboard() {
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
-
               <ChartCard
                 title="Members by State"
                 description="US state breakdown"
+                span2
               >
                 <ResponsiveContainer>
                   <BarChart
@@ -435,18 +517,57 @@ export default function Dashboard() {
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
+              <ChartCard
+                title="Top Members by Dependents"
+                description="Members with the most linked dependents"
+                span2
+              >
+                <ResponsiveContainer>
+                  <BarChart
+                    data={dependentsPerMember}
+                    margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
+                    <XAxis
+                      dataKey="member_number"
+                      stroke="#A08070"
+                      fontSize={11}
+                      angle={-15}
+                      textAnchor="end"
+                      height={55}
+                    />
+                    <YAxis stroke="#A08070" fontSize={11} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Bar
+                      dataKey="total_dependents"
+                      fill="#7ABCCC"
+                      radius={[6, 6, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
             </div>
           </div>
         )}
 
-        {/* ── VISITS & ROOMS ── */}
+        {/* ════════════════════ VISITS & ROOMS ════════════════════ */}
         {activeTab === "visits" && (
           <div style={styles.tabContent}>
             <div style={styles.statsGrid}>
               <StatCard
-                icon={CalendarClock}
+                icon={Activity}
+                label="Currently In-House"
+                value={liveInHouseCount?.total_in_house ?? 0}
+                hint="Live count"
+              />
+              <StatCard
+                icon={Clock}
                 label="Avg. Length of Stay"
-                value={`${averageLengthOfStay?.average_nights ?? "—"} nights`}
+                value={
+                  averageLengthOfStay?.average_nights != null
+                    ? `${Number(averageLengthOfStay.average_nights).toFixed(1)} nights`
+                    : "—"
+                }
               />
               <StatCard
                 icon={BedDouble}
@@ -458,19 +579,15 @@ export default function Dashboard() {
                 icon={TrendingUp}
                 label="Total Bookings"
                 value={
-                  bookingsByMonth.reduce((a, b) => a + (b.total || 0), 0) || "—"
+                  bookingsByMonth
+                    .reduce((a, b) => a + (b.total || 0), 0)
+                    .toLocaleString() || "—"
                 }
                 hint="All time"
               />
-              <StatCard
-                icon={MapPin}
-                label="Markets"
-                value={membersByCountry.length || "—"}
-                hint="Countries"
-              />
             </div>
 
-            <SectionLabel>Room Analytics</SectionLabel>
+            <SectionLabel>Room Performance</SectionLabel>
             <div style={styles.chartsGrid}>
               <ChartCard
                 title="Bookings by Room Type"
@@ -494,10 +611,18 @@ export default function Dashboard() {
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
+              <RoomHighlightCard
+                most={mostUsedRoomTypes[0]}
+                least={leastUsedRoomTypes[0]}
+              />
+            </div>
 
+            <SectionLabel>Booking Trends</SectionLabel>
+            <div style={styles.chartsGrid}>
               <ChartCard
                 title="Bookings by Month"
                 description="Monthly reservation trend"
+                span2
               >
                 <ResponsiveContainer>
                   <LineChart
@@ -520,15 +645,133 @@ export default function Dashboard() {
               </ChartCard>
             </div>
 
-            <SectionLabel>Spend</SectionLabel>
+            <SectionLabel>Live In-House Roster</SectionLabel>
+            <div style={styles.card}>
+              <div style={styles.cardHeader}>
+                <p style={styles.cardTitle}>Currently Checked In</p>
+                <p style={styles.cardDesc}>
+                  {liveInHouseRoster.length} guests on property
+                </p>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={styles.table}>
+                  <thead>
+                    <tr>
+                      {["Name", "Member #", "Room Type", "Check-in"].map(
+                        (h) => (
+                          <th key={h} style={styles.th}>
+                            {h}
+                          </th>
+                        ),
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {liveInHouseRoster.length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={4}
+                          style={{
+                            ...styles.td,
+                            textAlign: "center",
+                            color: "#B09880",
+                          }}
+                        >
+                          No data available
+                        </td>
+                      </tr>
+                    ) : (
+                      liveInHouseRoster.map((m, i) => (
+                        <tr
+                          key={i}
+                          style={{
+                            background: i % 2 === 0 ? "transparent" : "#FAF6F0",
+                          }}
+                        >
+                          <td style={styles.td}>
+                            <span style={{ fontWeight: 600, color: "#3D2B1F" }}>
+                              {m.member_full_name ?? m.member_name ?? "—"}
+                            </span>
+                          </td>
+                          <td style={styles.td}>{m.member_number ?? "—"}</td>
+                          <td style={styles.td}>{m.room_type ?? "—"}</td>
+                          <td style={styles.td}>
+                            {m.check_in_date ?? m.checkin ?? "—"}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════ FINANCE ════════════════════ */}
+        {activeTab === "finance" && (
+          <div style={styles.tabContent}>
+            <div style={styles.statsGrid}>
+              <StatCard
+                icon={DollarSign}
+                label="Outstanding Balance"
+                value={
+                  totalAmountDue?.total_amount_due != null
+                    ? `$${Number(totalAmountDue.total_amount_due).toLocaleString()}`
+                    : "—"
+                }
+                hint="Total dues owed"
+              />
+              <StatCard
+                icon={TrendingUp}
+                label="Recent Activity Spend"
+                value={
+                  totalRecentActivitySpend?.total != null
+                    ? `$${Number(totalRecentActivitySpend.total).toLocaleString()}`
+                    : "—"
+                }
+                hint="Latest activity period"
+              />
+            </div>
+
+            <SectionLabel>Amount Due</SectionLabel>
             <div style={styles.chartsGrid}>
               <ChartCard
-                title="Spend by Month"
-                description="Revenue over time"
+                title="Amount Due by Period"
+                description="Outstanding balances over time"
                 span2
               >
                 <ResponsiveContainer>
-                  <BarChart data={spendByMonth}>
+                  <BarChart
+                    data={amountDueByPeriod}
+                    margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
+                    <XAxis
+                      dataKey="statement_period"
+                      stroke="#A08070"
+                      fontSize={11}
+                    />
+                    <YAxis stroke="#A08070" fontSize={11} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Bar dataKey="total" fill="#C8976E" radius={[6, 6, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
+            </div>
+
+            <SectionLabel>Spend Breakdown</SectionLabel>
+            <div style={styles.chartsGrid}>
+              <ChartCard
+                title="Spend by Month"
+                description="Revenue trend"
+                span2
+              >
+                <ResponsiveContainer>
+                  <BarChart
+                    data={spendByMonth}
+                    margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
+                  >
                     <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
                     <XAxis dataKey="month" stroke="#A08070" fontSize={11} />
                     <YAxis stroke="#A08070" fontSize={11} />
@@ -537,24 +780,276 @@ export default function Dashboard() {
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
+
+              <div style={styles.card}>
+                <div style={styles.cardHeader}>
+                  <p style={styles.cardTitle}>Top Spend Descriptions</p>
+                  <p style={styles.cardDesc}>Highest activity categories</p>
+                </div>
+                <div style={{ overflowY: "auto", maxHeight: 260 }}>
+                  {topSpendDescriptions.length === 0 ? (
+                    <p
+                      style={{
+                        color: "#B09880",
+                        fontSize: 13,
+                        fontFamily: "sans-serif",
+                      }}
+                    >
+                      No data available
+                    </p>
+                  ) : (
+                    topSpendDescriptions.map((item, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          padding: "8px 0",
+                          borderBottom:
+                            i < topSpendDescriptions.length - 1
+                              ? "1px solid #EDE5D8"
+                              : "none",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: 22,
+                              height: 22,
+                              borderRadius: "50%",
+                              background: COLORS[i % COLORS.length],
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              fontSize: 10,
+                              color: "#fff",
+                              fontWeight: 700,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {i + 1}
+                          </span>
+                          <span
+                            style={{
+                              fontSize: 12,
+                              color: "#3D2B1F",
+                              fontFamily: "sans-serif",
+                            }}
+                          >
+                            {item.description ?? item.name ?? "—"}
+                          </span>
+                        </div>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            fontWeight: 700,
+                            color: "#C8976E",
+                            fontFamily: "sans-serif",
+                          }}
+                        >
+                          ${Number(item.total ?? 0).toLocaleString()}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         )}
 
-        {/* ── DIRECTORY ── */}
+        {/* ════════════════════ DIRECTORY ════════════════════ */}
         {activeTab === "directory" && (
           <div style={styles.tabContent}>
             <div style={styles.card}>
-              <div style={styles.cardHeader}>
-                <p style={styles.cardTitle}>Member Directory</p>
-                <p style={styles.cardDesc}>
-                  Full member search &amp; table coming soon
-                </p>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: 16,
+                  marginBottom: 20,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <p style={styles.cardTitle}>All members &amp; guests</p>
+                  <p style={styles.cardDesc}>
+                    {filteredDirectory.length} of {directoryMembers.length}{" "}
+                    records
+                  </p>
+                </div>
+                <div style={{ position: "relative", width: 300 }}>
+                  <span
+                    style={{
+                      position: "absolute",
+                      left: 12,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      color: "#B09880",
+                      pointerEvents: "none",
+                    }}
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                    >
+                      <circle cx="11" cy="11" r="8" />
+                      <path d="m21 21-4.35-4.35" />
+                    </svg>
+                  </span>
+                  <input
+                    value={directorySearch}
+                    onChange={(e) => setDirectorySearch(e.target.value)}
+                    placeholder="Search name, number, city, occupation…"
+                    style={styles.searchInput}
+                  />
+                </div>
               </div>
-              <div style={styles.directoryPlaceholder}>
-                <Users size={40} color="#D4C4B0" />
-                <p style={{ marginTop: 16, color: "#A08070", fontSize: 14 }}>
-                  Directory will be added after analytics charts are complete.
+
+              <div
+                style={{
+                  overflowX: "auto",
+                  borderRadius: 10,
+                  border: "1px solid #EDE5D8",
+                }}
+              >
+                <div style={{ maxHeight: 600, overflowY: "auto" }}>
+                  <table style={{ ...styles.table, minWidth: 900 }}>
+                    <thead
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        background: "#FDFAF6",
+                        zIndex: 1,
+                      }}
+                    >
+                      <tr>
+                        {[
+                          "Member",
+                          "Type",
+                          "Status",
+                          "In-house",
+                          "Age / Gender",
+                          "Location",
+                          "Occupation",
+                          "Tenure",
+                          "Dependents",
+                          "Balance",
+                        ].map((h) => (
+                          <th key={h} style={styles.th}>
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredDirectory.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={10}
+                            style={{
+                              ...styles.td,
+                              textAlign: "center",
+                              color: "#B09880",
+                              padding: 40,
+                            }}
+                          >
+                            No data available
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredDirectory.map((m, i) => (
+                          <DirectoryRow
+                            key={m.member_number ?? i}
+                            m={m}
+                            i={i}
+                          />
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════ ML INSIGHTS ════════════════════ */}
+        {activeTab === "ml" && (
+          <div style={styles.tabContent}>
+            <div style={styles.card}>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "80px 0",
+                  textAlign: "center",
+                }}
+              >
+                <div
+                  style={{
+                    width: 64,
+                    height: 64,
+                    borderRadius: 16,
+                    background: "#F5EFE6",
+                    border: "1px solid #E8DDD0",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    marginBottom: 20,
+                  }}
+                >
+                  <svg
+                    width="28"
+                    height="28"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="#C8976E"
+                    strokeWidth="1.5"
+                  >
+                    <path d="M12 2a4 4 0 0 1 4 4 4 4 0 0 1-4 4 4 4 0 0 1-4-4 4 4 0 0 1 4-4z" />
+                    <path d="M12 10v4M8 14h8M6 18h12M4 22h16" />
+                    <circle cx="6" cy="12" r="2" />
+                    <circle cx="18" cy="12" r="2" />
+                    <path d="M8 12H6M18 12h-6" />
+                  </svg>
+                </div>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 17,
+                    fontWeight: 600,
+                    color: "#3D2B1F",
+                  }}
+                >
+                  ML Insights
+                </p>
+                <p
+                  style={{
+                    margin: "8px 0 0",
+                    fontSize: 13,
+                    color: "#9C7B65",
+                    fontFamily: "sans-serif",
+                    maxWidth: 380,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  Machine learning models and predictive analytics will appear
+                  here. Coming soon.
                 </p>
               </div>
             </div>
@@ -564,211 +1059,3 @@ export default function Dashboard() {
     </div>
   );
 }
-
-/* ─── Styles ─────────────────────────────────────────────────── */
-const styles = {
-  root: {
-    minHeight: "100vh",
-    background: "#F5EFE6",
-    fontFamily: "'Georgia', 'Times New Roman', serif",
-  },
-  header: {
-    background: "#FDFAF6",
-    borderBottom: "1px solid #E8DDD0",
-    backdropFilter: "blur(8px)",
-  },
-  headerInner: {
-    maxWidth: 1200,
-    margin: "0 auto",
-    padding: "18px 28px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  headerBrand: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-  },
-  headerLogo: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    background: "#3D2B1F",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  headerTitle: {
-    margin: 0,
-    fontSize: 15,
-    fontWeight: 600,
-    color: "#3D2B1F",
-    letterSpacing: "0.02em",
-  },
-  headerSub: {
-    margin: 0,
-    fontSize: 11,
-    color: "#9C7B65",
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
-  },
-  liveBadge: {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    background: "#F5EFE6",
-    border: "1px solid #E8DDD0",
-    borderRadius: 20,
-    padding: "5px 12px",
-    fontSize: 11,
-    color: "#7A6050",
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
-  },
-  main: {
-    maxWidth: 1200,
-    margin: "0 auto",
-    padding: "28px 28px 60px",
-  },
-  tabRow: {
-    display: "flex",
-    gap: 4,
-    marginBottom: 28,
-    background: "#EDE5D8",
-    borderRadius: 10,
-    padding: 4,
-    width: "fit-content",
-  },
-  tab: {
-    padding: "8px 20px",
-    borderRadius: 7,
-    border: "none",
-    cursor: "pointer",
-    fontSize: 13,
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
-    fontWeight: 500,
-    transition: "all 0.15s ease",
-    letterSpacing: "0.01em",
-  },
-  tabActive: {
-    background: "#FDFAF6",
-    color: "#3D2B1F",
-    boxShadow: "0 1px 4px rgba(0,0,0,0.10)",
-  },
-  tabInactive: {
-    background: "transparent",
-    color: "#9C7B65",
-  },
-  tabContent: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 24,
-  },
-  statsGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-    gap: 14,
-  },
-  statCard: {
-    background: "#FDFAF6",
-    border: "1px solid #E8DDD0",
-    borderRadius: 14,
-    padding: "20px 22px",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    boxShadow: "0 1px 6px rgba(0,0,0,0.04)",
-    minWidth: 0,
-    overflow: "hidden",
-  },
-  statLabel: {
-    margin: 0,
-    fontSize: 10,
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
-    fontWeight: 600,
-    letterSpacing: "0.10em",
-    textTransform: "uppercase",
-    color: "#9C7B65",
-  },
-  statValue: {
-    margin: "6px 0 4px",
-    fontSize: 24,
-    fontWeight: 700,
-    color: "#3D2B1F",
-    lineHeight: 1.1,
-    letterSpacing: "-0.02em",
-    wordBreak: "break-word",
-    overflowWrap: "break-word",
-  },
-  statHint: {
-    margin: 0,
-    fontSize: 11,
-    color: "#B09880",
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
-  },
-  statIcon: {
-    background: "#F5EFE6",
-    borderRadius: 9,
-    padding: 10,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  chartsGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(3, 1fr)",
-    gap: 14,
-  },
-  card: {
-    background: "#FDFAF6",
-    border: "1px solid #E8DDD0",
-    borderRadius: 14,
-    padding: "20px 22px",
-    boxShadow: "0 1px 6px rgba(0,0,0,0.04)",
-  },
-  span2: {
-    gridColumn: "span 2",
-  },
-  cardHeader: {
-    marginBottom: 16,
-  },
-  cardTitle: {
-    margin: 0,
-    fontSize: 14,
-    fontWeight: 600,
-    color: "#3D2B1F",
-  },
-  cardDesc: {
-    margin: "3px 0 0",
-    fontSize: 11,
-    color: "#9C7B65",
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
-  },
-  sectionLabel: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    margin: "4px 0",
-  },
-  sectionLabelLine: {
-    flex: 1,
-    height: 1,
-    background: "#E8DDD0",
-  },
-  sectionLabelText: {
-    fontSize: 10,
-    fontFamily: "'Helvetica Neue', Arial, sans-serif",
-    fontWeight: 700,
-    letterSpacing: "0.14em",
-    textTransform: "uppercase",
-    color: "#B09880",
-    whiteSpace: "nowrap",
-  },
-  directoryPlaceholder: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: "60px 0",
-    color: "#C4B0A0",
-  },
-};

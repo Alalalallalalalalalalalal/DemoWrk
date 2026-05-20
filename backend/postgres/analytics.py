@@ -187,12 +187,14 @@ def top_spend_descriptions(db: Session = Depends(get_db)):
 @router.get("/total-amount-due")
 def total_amount_due(db: Session = Depends(get_db)):
     row = db.execute(text("""
-        SELECT SUM(amount_due) AS total
+        SELECT COALESCE(SUM(amount_due), 0) AS total_amount_due
         FROM statements
         WHERE amount_due IS NOT NULL;
     """)).mappings().first()
 
-    return {"total_amount_due": float(row["total"] or 0)}
+    return {
+        "total_amount_due": float(row["total_amount_due"] or 0)
+    }
 
 
 @router.get("/amount-due-by-period")
@@ -254,3 +256,237 @@ def dependents_per_member(db: Session = Depends(get_db)):
         }
         for row in result
     ]
+
+@router.get("/total-dependents")
+def total_dependents(db: Session = Depends(get_db)):
+    row = db.execute(text("""
+        SELECT COUNT(*) AS total_dependents
+        FROM dependents;
+    """)).mappings().first()
+
+    return {"total_dependents": row["total_dependents"]}
+
+@router.get("/new-members-per-year")
+def new_members_per_year(db: Session = Depends(get_db)):
+    result = db.execute(text("""
+        SELECT
+            EXTRACT(YEAR FROM since_date)::INT AS year,
+            COUNT(*) AS total
+        FROM members
+        WHERE since_date IS NOT NULL
+        AND EXTRACT(YEAR FROM since_date) >= 2018
+        GROUP BY year
+        ORDER BY year;
+    """)).mappings().all()
+
+    return [{"year": row["year"], "total": row["total"]} for row in result]
+
+@router.get("/most-used-room-types")
+def most_used_room_types(db: Session = Depends(get_db)):
+    result = db.execute(text("""
+        SELECT room_type, COUNT(*) AS total
+        FROM rooms
+        WHERE room_type IS NOT NULL
+        GROUP BY room_type
+        ORDER BY total DESC
+        LIMIT 10;
+    """)).mappings().all()
+
+    return [{"room_type": row["room_type"], "total": row["total"]} for row in result]
+
+@router.get("/least-used-room-types")
+def least_used_room_types(db: Session = Depends(get_db)):
+    result = db.execute(text("""
+        SELECT room_type, COUNT(*) AS total
+        FROM rooms
+        WHERE room_type IS NOT NULL
+        GROUP BY room_type
+        ORDER BY total ASC
+        LIMIT 10;
+    """)).mappings().all()
+
+    return [{"room_type": row["room_type"], "total": row["total"]} for row in result]
+
+@router.get("/average-tenure")
+def average_tenure(db: Session = Depends(get_db)):
+    row = db.execute(text("""
+        SELECT
+            ROUND(
+                AVG(EXTRACT(YEAR FROM AGE(CURRENT_DATE, since_date))),
+                2
+            ) AS average_tenure_years
+        FROM members
+        WHERE since_date IS NOT NULL;
+    """)).mappings().first()
+
+    return {
+        "average_tenure_years": float(row["average_tenure_years"] or 0)
+    }
+
+@router.get("/members-by-marital-status")
+def members_by_marital_status(db: Session = Depends(get_db)):
+    result = db.execute(text("""
+        SELECT marital_status, COUNT(*) AS total
+        FROM members
+        WHERE marital_status IS NOT NULL
+        GROUP BY marital_status
+        ORDER BY total DESC;
+    """)).mappings().all()
+
+    return [
+        {
+            "marital_status": row["marital_status"],
+            "total": row["total"]
+        }
+        for row in result
+    ]
+
+@router.get("/currently-checked-in-members")
+def currently_checked_in_members(db: Session = Depends(get_db)):
+    result = db.execute(text("""
+        SELECT
+            r.member_number,
+            m.member_full_name,
+            r.confirmation_code,
+            r.room_type,
+            r.room_number,
+            r.check_in_date,
+            r.check_out_date,
+            r.status
+        FROM rooms r
+        JOIN members m
+        ON r.member_number = m.member_number
+        WHERE r.check_in_date <= CURRENT_DATE
+        AND r.check_out_date > CURRENT_DATE
+        AND (
+            r.status IS NULL
+            OR LOWER(r.status) NOT IN ('cancelled', 'canceled')
+        )
+        ORDER BY r.check_in_date DESC;
+    """)).mappings().all()
+
+    return [
+        {
+            "member_number": row["member_number"],
+            "member_full_name": row["member_full_name"],
+            "confirmation_code": row["confirmation_code"],
+            "room_type": row["room_type"],
+            "room_number": row["room_number"],
+            "check_in_date": row["check_in_date"],
+            "check_out_date": row["check_out_date"],
+            "status": row["status"]
+        }
+        for row in result
+    ]
+
+@router.get("/live-in-house-count")
+def live_in_house_count(db: Session = Depends(get_db)):
+    row = db.execute(text("""
+        SELECT COUNT(*) AS total_in_house
+        FROM rooms
+        WHERE check_in_date <= CURRENT_DATE
+        AND check_out_date > CURRENT_DATE
+        AND (
+            status IS NULL
+            OR LOWER(status) NOT IN ('cancelled', 'canceled')
+        );
+    """)).mappings().first()
+
+    return {"total_in_house": row["total_in_house"]}
+
+@router.get("/live-in-house-roster")
+def live_in_house_roster(db: Session = Depends(get_db)):
+    result = db.execute(text("""
+        SELECT
+            r.member_number,
+            m.member_full_name,
+            m.member_type,
+            r.confirmation_code,
+            r.room_type,
+            r.room_number,
+            r.check_in_date,
+            r.check_out_date,
+            r.status
+        FROM rooms r
+        JOIN members m
+        ON r.member_number = m.member_number
+        WHERE r.check_in_date <= CURRENT_DATE
+        AND r.check_out_date > CURRENT_DATE
+        AND (
+            r.status IS NULL
+            OR LOWER(r.status) NOT IN ('cancelled', 'canceled')
+        )
+        ORDER BY r.room_number;
+    """)).mappings().all()
+
+    return [
+        {
+            "member_number": row["member_number"],
+            "member_full_name": row["member_full_name"],
+            "member_type": row["member_type"],
+            "confirmation_code": row["confirmation_code"],
+            "room_type": row["room_type"],
+            "room_number": row["room_number"],
+            "check_in_date": row["check_in_date"],
+            "check_out_date": row["check_out_date"],
+            "status": row["status"]
+        }
+        for row in result
+    ]
+
+@router.get("/member-directory")
+def member_directory(db: Session = Depends(get_db)):
+    result = db.execute(text("""
+        SELECT
+            m.member_number,
+            m.member_name,
+            m.member_full_name,
+            m.member_type,
+            m.member_or_guest,
+            m.status,
+            m.age,
+            m.gender,
+            m.occupation,
+            m.employer,
+            m.email,
+            m.membership_tenure,
+            a.city,
+            a.state,
+            a.country,
+            COALESCE(d.total_dependents, 0) AS dependents,
+            COALESCE(s.amount_due, 0) AS amount_due,
+            CASE
+                WHEN r.member_number IS NOT NULL THEN true
+                ELSE false
+            END AS currently_checked_in
+        FROM members m
+        LEFT JOIN member_addresses a
+        ON m.member_number = a.member_number
+        LEFT JOIN (
+            SELECT member_number, COUNT(*) AS total_dependents
+            FROM dependents
+            GROUP BY member_number
+        ) d
+        ON m.member_number = d.member_number
+        LEFT JOIN (
+            SELECT member_number, SUM(amount_due) AS amount_due
+            FROM statements
+            GROUP BY member_number
+        ) s
+        ON m.member_number = s.member_number
+        LEFT JOIN (
+            SELECT DISTINCT member_number
+            FROM rooms
+            WHERE check_in_date <= CURRENT_DATE
+            AND check_out_date > CURRENT_DATE
+            AND (
+                status IS NULL
+                OR LOWER(status) NOT IN ('cancelled', 'canceled')
+            )
+        ) r
+        ON m.member_number = r.member_number
+        ORDER BY m.member_name
+        LIMIT 500;
+    """)).mappings().all()
+
+    return [dict(row) for row in result]

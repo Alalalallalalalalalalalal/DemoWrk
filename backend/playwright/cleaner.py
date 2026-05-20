@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS dependents (
     since_date          DATE,
     billing_cycle       VARCHAR(50),
     bill_to_member      VARCHAR(50),
-    FICO_score          INTEGER,
+    fico_score          INTEGER,
     email               VARCHAR(255),
     status              VARCHAR(50)
 );
@@ -472,10 +472,14 @@ def upsert(conn, table, rows, conflict_col, dry_run=False):
         log.info(f"  [DRY RUN] Would upsert {len(rows)} rows into {table}")
         return len(rows)
 
-    with conn.cursor() as cur:
-        execute_values(cur, sql, values)
-    conn.commit()
-    return len(rows)
+    try:
+        with conn.cursor() as cur:
+            execute_values(cur, sql, values)
+        conn.commit()
+        return len(rows)
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def upsert_multi(conn, table, rows, conflict_cols, dry_run=False):
@@ -500,10 +504,14 @@ def upsert_multi(conn, table, rows, conflict_cols, dry_run=False):
         log.info(f"  [DRY RUN] Would upsert {len(rows)} rows into {table}")
         return len(rows)
 
-    with conn.cursor() as cur:
-        execute_values(cur, sql, values)
-    conn.commit()
-    return len(rows)
+    try:
+        with conn.cursor() as cur:
+            execute_values(cur, sql, values)
+        conn.commit()
+        return len(rows)
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # ─────────────────────────────────────────────
@@ -542,7 +550,7 @@ def load_profile(conn, member_number, filepath, dry_run=False):
             "occupation":       clean_category(row.get("Occupation"), 255),
             "marital_status":   clean_category(row.get("Marital Status"), 50),
             "activation_date":  clean_date(row.get("Member Activation")),
-            "deactivation_date":clean_date(row.get("Member Deactivation")),
+            "deactivation_date":clean_date(row.get("Member Deactivation") or row.get("Deactivation Date")),
             "since_date":       clean_date(row.get("Member Since")),
             "date_of_birth":    clean_date(row.get("Date of Birth")),
             "date_of_death":    clean_date(row.get("Date of Death")),
@@ -621,7 +629,7 @@ def load_dependents(conn, member_number, filepath, dry_run=False):
             "since_date":       clean_date(row.get("Dependant Member Since")),
             "billing_cycle":    clean_str(row.get("Dependant Billing Cycle"), 50),
             "bill_to_member":   clean_str(row.get("Dependant Bill To Member"), 50),
-            "FICO_score":       clean_int(row.get("Dependant FICO Score")),
+            "fico_score":       clean_int(row.get("Dependant FICO Score")),
             "email":            clean_email(row.get("Dependant Email")),
             "status":           clean_status(row.get("Dependant Status")),
         }
@@ -834,6 +842,7 @@ def load_member(conn, member_folder_path, dry_run=False):
             try:
                 loader_fn(conn, member_number, filepath, dry_run)
             except Exception as e:
+                conn.rollback()
                 log.error(f"  Error loading {suffix} for {folder_name}: {e}")
         else:
             log.debug(f"  No {suffix} file for {folder_name}")
@@ -845,6 +854,12 @@ def load_member(conn, member_folder_path, dry_run=False):
 
 def data_quality_report(conn):
     """Print simple data quality checks after loading."""
+    # If any earlier insert failed, clear the failed transaction state first.
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
     checks = {
         "Members missing email": """
             SELECT COUNT(*) FROM members WHERE email IS NULL;
@@ -878,11 +893,15 @@ def data_quality_report(conn):
     print("Data Quality Report")
     print("=" * 60)
 
-    with conn.cursor() as cur:
-        for label, query in checks.items():
-            cur.execute(query)
-            count = cur.fetchone()[0]
-            print(f"  {label}: {count}")
+    for label, query in checks.items():
+        try:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                count = cur.fetchone()[0]
+                print(f"  {label}: {count}")
+        except Exception as e:
+            conn.rollback()
+            print(f"  {label}: skipped ({e})")
 
 
 # ─────────────────────────────────────────────
@@ -941,6 +960,7 @@ def main():
             load_member(conn, folder, dry_run=args.dry_run)
             success.append(os.path.basename(folder))
         except Exception as e:
+            conn.rollback()
             log.error(f"Failed {os.path.basename(folder)}: {e}")
             failed.append(os.path.basename(folder))
 
