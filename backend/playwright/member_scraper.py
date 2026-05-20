@@ -16,6 +16,7 @@ Setup:
 Usage:
     python member_scraper.py
 """
+
 import os
 from datetime import datetime
 import sys
@@ -36,6 +37,30 @@ REPORTS = [
 ]
 
 
+def dismiss_notification_popup(page):
+    try:
+        for frame in page.frames:
+            try:
+                btn = frame.query_selector(
+                    "a[onclick*='close'], button[onclick*='close'], "
+                    ".ui-dialog-titlebar-close, button.close, .close"
+                )
+
+                if btn:
+                    btn.click()
+                    page.wait_for_timeout(1000)
+                    return
+
+            except Exception:
+                continue
+
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+
+    except Exception:
+        pass
+
+
 def main():
     print("=" * 60)
     print("Member Report Downloader")
@@ -50,15 +75,20 @@ def main():
 
         try:
             login(page)
+            dismiss_notification_popup(page)
 
             for i, report_module in enumerate(REPORTS, 1):
                 report_name = report_module.REPORT_NAME
+
                 print(f"{'=' * 40}")
                 print(f"Report {i} of {len(REPORTS)}: {report_name}")
                 print(f"{'=' * 40}")
 
                 open_reporting_menu(page)
+                dismiss_notification_popup(page)
+
                 navigate_to_search_reports(page)
+                dismiss_notification_popup(page)
 
                 try:
                     success = report_module.download(page)
@@ -71,16 +101,25 @@ def main():
             print("\n" + "=" * 60)
             print("Download Summary")
             print("=" * 60)
+
             for report_name, success in results.items():
                 status = "Success" if success else "Failed — check screenshot"
                 print(f"  {report_name}: {status}")
 
         except Exception as e:
             print(f"\nError: {e}")
+
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
             os.makedirs(SCREENSHOT_FOLDER, exist_ok=True)
-            screenshot_path = os.path.join(SCREENSHOT_FOLDER, f"error_screenshot_{timestamp}.png")
+
+            screenshot_path = os.path.join(
+                SCREENSHOT_FOLDER,
+                f"error_screenshot_{timestamp}.png"
+            )
+
             page.screenshot(path=screenshot_path)
+
             print(f"Error screenshot saved: {screenshot_path}")
 
         finally:
