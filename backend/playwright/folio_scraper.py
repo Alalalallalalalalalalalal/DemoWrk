@@ -663,15 +663,14 @@ def scrape_chunk(args):
                         pr(prefix, f"Retrying {conf_code}...")
                         saved = scrape_reservation(page, row, prefix)
 
-                mark_done(conf_code)
-                done_set.add(conf_code)
-
                 if saved:
+                    mark_done(conf_code)
+                    done_set.add(conf_code)
                     count = sum(len(v) for v in saved.values())
                     pr(prefix, f"Done: {count} file(s) saved.")
                     results["success"].append(conf_code)
                 else:
-                    pr(prefix, "Nothing saved.")
+                    pr(prefix, "Nothing saved — not marking done, will retry next run.")
                     results["failed"].append(conf_code)
 
         except Exception as e:
@@ -761,6 +760,45 @@ def main():
         print(f"  Failed codes: {failed_codes}")
     print(f"  Journal: {JOURNAL_FOLDER}")
     print("=" * 60)
+
+    # Auto-rerun failed reservations
+    if failed_codes:
+        print(f"\n  Retrying {len(failed_codes)} failed reservation(s)...")
+        retry_rows = [r for r in all_reservations if get_conf_code(r) in set(failed_codes)]
+
+        if len(retry_rows) == 1 or args.workers == 1:
+            retry_result = scrape_chunk((retry_rows, 1))
+            retry_results = [retry_result]
+        else:
+            num_workers = min(args.workers, len(retry_rows))
+            chunk_size  = math.ceil(len(retry_rows) / num_workers)
+            chunks = [
+                (retry_rows[i : i + chunk_size], wid)
+                for wid, i in enumerate(range(0, len(retry_rows), chunk_size), 1)
+            ]
+            pool = Pool(processes=num_workers, initializer=_worker_init)
+            try:
+                retry_results = pool.map(scrape_chunk, chunks)
+            except KeyboardInterrupt:
+                pool.terminate()
+                pool.join()
+                sys.exit(0)
+            else:
+                pool.close()
+                pool.join()
+
+        retry_success = sum(len(r["success"]) for r in retry_results)
+        retry_failed  = sum(len(r["failed"])  for r in retry_results)
+        still_failed  = [c for r in retry_results for c in r["failed"]]
+
+        print("\n" + "=" * 60)
+        print("Retry Summary")
+        print("=" * 60)
+        print(f"  Retry success: {retry_success}")
+        print(f"  Still failed:  {retry_failed}")
+        if still_failed:
+            print(f"  Still failing: {still_failed}")
+        print("=" * 60)
 
 if __name__ == "__main__":
     main()

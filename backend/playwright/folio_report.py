@@ -72,8 +72,20 @@ def get_main_screen_frame(page, timeout_ms=FRAME_TIMEOUT):
 
 def dismiss_popup(page):
     try:
+        for frame in page.frames:
+            try:
+                btn = frame.query_selector(
+                    "a[onclick*='close'], button[onclick*='close'], "
+                    ".ui-dialog-titlebar-close, button.close, .close"
+                )
+                if btn:
+                    btn.click()
+                    page.wait_for_timeout(800)
+                    return
+            except Exception:
+                continue
         page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(500)
     except Exception:
         pass
 
@@ -221,16 +233,14 @@ def run_search(page):
                     except Exception:
                         pass
 
-                    # Map cells to headers, skipping empty-header columns
+                    # Build index map: only positions where header is non-empty
+                    named_positions = [
+                        (i, h) for i, h in enumerate(headers) if h.strip()
+                    ]
                     row = {}
-                    header_idx = 0
-                    for cell_idx, cell_val in enumerate(cells):
-                        # Skip columns whose header is empty (e.g. checkbox/icon cols)
-                        while header_idx < len(headers) and not headers[header_idx]:
-                            header_idx += 1
-                        if header_idx < len(headers):
-                            row[headers[header_idx]] = cell_val
-                            header_idx += 1
+                    for cell_idx, header_name in named_positions:
+                        if cell_idx < len(cells):
+                            row[header_name] = cells[cell_idx]
 
                     row["_conf_href"]   = conf_href
                     row["_member_name"] = member_name
