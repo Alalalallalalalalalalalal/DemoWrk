@@ -8,16 +8,19 @@
 
 1.  python backend/playwright/member_scraper.py
 
+2.  python backend/playwright/build_journal_profiles.py
 
-2.  python backend/playwright/build_member_map.py --limit 1000        (for testing)
+3.  python backend/playwright/folio_report.py
+
+4.  python backend/playwright/folio_scraper.py  
+
+
+5.  python backend/playwright/build_member_map.py --limit 1000        (for testing)
 
     python backend/playwright/build_member_map.py                     (for full run)
-    
-
-3.  python backend/playwright/build_journal_profiles.py
 
 
-4.  python backend/playwright/journal_scraper.py                    # First 10 members      (for testing)
+6.  python backend/playwright/journal_scraper.py                    # First 10 members      (for testing)
 
     python backend/playwright/journal_scraper.py --all              # All members           (for full run)
 
