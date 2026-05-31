@@ -27,6 +27,22 @@ PIPELINE = [
             sys.executable, 
             "playwright/new_member_updater.py"]
     },
+    #stage for building folio reports
+    {
+        "name": "build_folio_reports",
+        "command": [
+            sys.executable,
+            "playwright/folio_report.py"
+        ]
+    },
+    #stage for folio scrapper
+    {
+        "name": "folio_scraper",
+        "command": [
+            sys.executable,
+            "playwright/folio_scraper.py "
+        ]
+    },
     #stage for building member map, with skip logic to avoid unnecessary runs
     {
         "name": "build_member_map",
