@@ -72,8 +72,20 @@ def get_main_screen_frame(page, timeout_ms=FRAME_TIMEOUT):
 
 def dismiss_popup(page):
     try:
+        for frame in page.frames:
+            try:
+                btn = frame.query_selector(
+                    "a[onclick*='close'], button[onclick*='close'], "
+                    ".ui-dialog-titlebar-close, button.close, .close"
+                )
+                if btn:
+                    btn.click()
+                    page.wait_for_timeout(800)
+                    return
+            except Exception:
+                continue
         page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(500)
     except Exception:
         pass
 
