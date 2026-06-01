@@ -221,16 +221,14 @@ def run_search(page):
                     except Exception:
                         pass
 
-                    # Map cells to headers, skipping empty-header columns
+                    # Build index map: only positions where header is non-empty
+                    named_positions = [
+                        (i, h) for i, h in enumerate(headers) if h.strip()
+                    ]
                     row = {}
-                    header_idx = 0
-                    for cell_idx, cell_val in enumerate(cells):
-                        # Skip columns whose header is empty (e.g. checkbox/icon cols)
-                        while header_idx < len(headers) and not headers[header_idx]:
-                            header_idx += 1
-                        if header_idx < len(headers):
-                            row[headers[header_idx]] = cell_val
-                            header_idx += 1
+                    for cell_idx, header_name in named_positions:
+                        if cell_idx < len(cells):
+                            row[header_name] = cells[cell_idx]
 
                     row["_conf_href"]   = conf_href
                     row["_member_name"] = member_name

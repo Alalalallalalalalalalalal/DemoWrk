@@ -5,6 +5,7 @@ import re
 import glob
 import argparse
 import logging
+import hashlib
 from datetime import datetime, date
 
 import pandas as pd
@@ -17,7 +18,9 @@ load_dotenv()
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-JOURNAL_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+JOURNAL_FOLDER = os.path.join(BASE_DIR, "journal")
+FOLIO_REPORT_FILE = os.path.join(BASE_DIR, "backend", "playwright", "reports", "folio_report.csv")
 
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST"),
@@ -149,6 +152,29 @@ CREATE TABLE IF NOT EXISTS rooms (
     UNIQUE (member_number, confirmation_code)
 );
 
+CREATE TABLE IF NOT EXISTS folios (
+    folio_key           VARCHAR(64) PRIMARY KEY,
+    conf_code           VARCHAR(100),
+    group_name          VARCHAR(255),
+    member_guest_name   VARCHAR(255),
+    credit_limit        NUMERIC(12, 2),
+    check_in_date       DATE,
+    check_out_date      DATE,
+    room_number         VARCHAR(50),
+    room_rate           NUMERIC(12, 2),
+    folio_name          VARCHAR(255),
+    folio_owner         VARCHAR(255),
+    reservation_total   NUMERIC(12, 2),
+    total_charges       NUMERIC(12, 2),
+    total_payments      NUMERIC(12, 2),
+    reservation_status  VARCHAR(100),
+    folio_balance       NUMERIC(12, 2),
+    conf_href           TEXT,
+    member_name         VARCHAR(255),
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS recent_activity (
     id                  SERIAL PRIMARY KEY,
     member_number       VARCHAR(50) REFERENCES members(member_number) ON DELETE CASCADE,
@@ -187,7 +213,7 @@ CREATE TABLE IF NOT EXISTS interests (
 
 DROP_ALL = """
 DROP TABLE IF EXISTS interests, services, statements, recent_activity,
-    rooms, dependent_phones, dependent_addresses, dependents,
+    folios, rooms, dependent_phones, dependent_addresses, dependents,
     member_phones, member_addresses, members CASCADE;
 """
 
@@ -363,6 +389,12 @@ def clean_int(val):
         return int(float(str(val).strip()))
     except (ValueError, TypeError):
         return None
+
+def make_folio_key(*parts):
+    """Create a stable key for folio upserts from identifying report columns."""
+    raw = "|".join(clean_str(part) or "" for part in parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 
 def extract_prefix(name):
     """Extract common prefixes from names."""
@@ -812,6 +844,73 @@ def load_interests(conn, member_number, filepath, dry_run=False):
         log.info(f"  interests: {len(rows)} rows")
 
 
+
+def load_folios(conn, filepath=FOLIO_REPORT_FILE, dry_run=False):
+    """Load backend/playwright/reports/folio_report.csv into folios table."""
+    if not os.path.exists(filepath):
+        log.warning(f"Folio report not found: {filepath}")
+        return 0
+
+    try:
+        df = pd.read_csv(filepath)
+    except Exception as e:
+        log.warning(f"Could not read folio report {filepath}: {e}")
+        return 0
+
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+
+    required_cols = {
+        "Conf. Code", "Group Name", "Member/Guest Name", "Credit Limit",
+        "Check-In Date", "Check-Out Date", "Room #", "Room Rate",
+        "Folio Name", "Folio Owner", "Reservation Total", "Total Charges",
+        "Total Payments", "Reservation Status", "Folio Balance",
+        "_conf_href", "_member_name",
+    }
+    missing = sorted(required_cols - set(df.columns))
+    if missing:
+        log.warning(f"Folio report is missing columns: {missing}")
+
+    rows = []
+    for _, row in df.iterrows():
+        conf_code = clean_str(row.get("Conf. Code"), 100)
+        folio_name = clean_str(row.get("Folio Name"), 255)
+        folio_owner = clean_str(row.get("Folio Owner"), 255)
+        member_guest_name = clean_name(row.get("Member/Guest Name"))
+
+        # Skip rows that do not have enough identity to upsert safely.
+        if not any([conf_code, folio_name, folio_owner, member_guest_name]):
+            continue
+
+        rows.append({
+            "folio_key":          make_folio_key(conf_code, folio_name, folio_owner, member_guest_name),
+            "conf_code":          conf_code,
+            "group_name":         clean_name(row.get("Group Name")),
+            "member_guest_name":  member_guest_name,
+            "credit_limit":       clean_amount(row.get("Credit Limit")),
+            "check_in_date":      clean_date(row.get("Check-In Date")),
+            "check_out_date":     clean_date(row.get("Check-Out Date")),
+            "room_number":        clean_str(row.get("Room #"), 50),
+            "room_rate":          clean_amount(row.get("Room Rate")),
+            "folio_name":         folio_name,
+            "folio_owner":        folio_owner,
+            "reservation_total":  clean_amount(row.get("Reservation Total")),
+            "total_charges":      clean_amount(row.get("Total Charges")),
+            "total_payments":     clean_amount(row.get("Total Payments")),
+            "reservation_status": clean_category(row.get("Reservation Status"), 100),
+            "folio_balance":      clean_amount(row.get("Folio Balance")),
+            "conf_href":          clean_str(row.get("_conf_href")),
+            "member_name":        clean_name(row.get("_member_name")),
+        })
+
+    if rows:
+        count = upsert(conn, "folios", rows, "folio_key", dry_run)
+        log.info(f"folios: {count} rows")
+        return count
+
+    log.info("folios: 0 rows")
+    return 0
+
+
 # ─────────────────────────────────────────────
 # PER-MEMBER LOADER
 # ─────────────────────────────────────────────
@@ -923,6 +1022,7 @@ def main():
     print("=" * 60)
     print(f"Database:  {DB_CONFIG['database']} @ {DB_CONFIG['host']}")
     print(f"Journal:   {JOURNAL_FOLDER}")
+    print(f"Folios:    {FOLIO_REPORT_FILE}")
     print(f"Dry run:   {args.dry_run}")
     print()
 
@@ -963,6 +1063,12 @@ def main():
             conn.rollback()
             log.error(f"Failed {os.path.basename(folder)}: {e}")
             failed.append(os.path.basename(folder))
+
+    try:
+        load_folios(conn, FOLIO_REPORT_FILE, dry_run=args.dry_run)
+    except Exception as e:
+        conn.rollback()
+        log.error(f"Failed loading folio report: {e}")
 
     if not args.dry_run:
         data_quality_report(conn)
