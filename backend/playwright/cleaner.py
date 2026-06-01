@@ -19,8 +19,12 @@ load_dotenv()
 # CONFIG
 # ─────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-JOURNAL_FOLDER = os.path.join(BASE_DIR, "journal")
-FOLIO_REPORT_FILE = os.path.join(BASE_DIR, "backend", "playwright", "reports", "folio_report.csv")
+
+# cleaner.py is already inside backend/playwright
+PLAYWRIGHT_FOLDER = BASE_DIR
+
+JOURNAL_FOLDER = os.path.join(PLAYWRIGHT_FOLDER, "journal")
+FOLIO_REPORT_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "folio_report.csv")
 
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST"),
@@ -153,26 +157,65 @@ CREATE TABLE IF NOT EXISTS rooms (
 );
 
 CREATE TABLE IF NOT EXISTS folios (
-    folio_key           VARCHAR(64) PRIMARY KEY,
-    conf_code           VARCHAR(100),
-    group_name          VARCHAR(255),
-    member_guest_name   VARCHAR(255),
-    credit_limit        NUMERIC(12, 2),
-    check_in_date       DATE,
-    check_out_date      DATE,
-    room_number         VARCHAR(50),
-    room_rate           NUMERIC(12, 2),
-    folio_name          VARCHAR(255),
-    folio_owner         VARCHAR(255),
-    reservation_total   NUMERIC(12, 2),
-    total_charges       NUMERIC(12, 2),
-    total_payments      NUMERIC(12, 2),
-    reservation_status  VARCHAR(100),
-    folio_balance       NUMERIC(12, 2),
-    conf_href           TEXT,
-    member_name         VARCHAR(255),
-    created_at          TIMESTAMP DEFAULT NOW(),
-    updated_at          TIMESTAMP DEFAULT NOW()
+    folio_key              VARCHAR(64) PRIMARY KEY,
+
+    -- Transaction columns from each folio CSV
+    transaction_date       DATE,
+    description            VARCHAR(500),
+    amount                 NUMERIC(12, 2),
+
+    -- Folio/reservation metadata added by Playwright scraper
+    folio_num              VARCHAR(100),
+    folio_name             VARCHAR(255),
+    balance_due            NUMERIC(12, 2),
+    reservation_folio_id   VARCHAR(100),
+
+    -- Reservation/person context
+    conf_code              VARCHAR(100),
+    main_member_number     VARCHAR(50),
+    member_number          VARCHAR(50),
+    guest_name             VARCHAR(255),
+    check_in_date          DATE,
+    check_out_date         DATE,
+    room_number            VARCHAR(50),
+    room_rate              VARCHAR(255),
+    reservation_status     VARCHAR(100),
+
+    -- Folder/source audit columns
+    journal_folder         VARCHAR(255),
+    source_file            TEXT,
+
+    -- Legacy summary/report columns, kept so old folio_report.csv imports still work
+    group_name             VARCHAR(255),
+    member_guest_name      VARCHAR(255),
+    credit_limit           NUMERIC(12, 2),
+    folio_owner            VARCHAR(255),
+    reservation_total      NUMERIC(12, 2),
+    total_charges          NUMERIC(12, 2),
+    total_payments         NUMERIC(12, 2),
+    folio_balance          NUMERIC(12, 2),
+    conf_href              TEXT,
+    member_name            VARCHAR(255),
+
+    created_at             TIMESTAMP DEFAULT NOW(),
+    updated_at             TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS reservation_guests (
+    guest_key              VARCHAR(64) PRIMARY KEY,
+    main_member_number     VARCHAR(50),
+    conf_code              VARCHAR(100),
+    member_number          VARCHAR(50),
+    guest_name             VARCHAR(255),
+    folio                  VARCHAR(100),
+    is_owner               BOOLEAN,
+    check_in_date          DATE,
+    check_out_date         DATE,
+    room_number            VARCHAR(50),
+    journal_folder         VARCHAR(255),
+    source_file            TEXT,
+    created_at             TIMESTAMP DEFAULT NOW(),
+    updated_at             TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS recent_activity (
@@ -213,7 +256,7 @@ CREATE TABLE IF NOT EXISTS interests (
 
 DROP_ALL = """
 DROP TABLE IF EXISTS interests, services, statements, recent_activity,
-    folios, rooms, dependent_phones, dependent_addresses, dependents,
+    reservation_guests, folios, rooms, dependent_phones, dependent_addresses, dependents,
     member_phones, member_addresses, members CASCADE;
 """
 
@@ -246,12 +289,13 @@ def clean_date(val):
 
 
 def clean_amount(val):
-    """Parse currency strings like ($43,857.50) → -43857.50. Returns None if empty."""
-    if not val or str(val).strip() in ("", "nan"):
+    if not val or str(val).strip() in ("", "nan", "-", "--"):
         return None
+
     val = str(val).strip()
     negative = val.startswith("(") and val.endswith(")")
     val = re.sub(r"[()$,\s]", "", val)
+
     try:
         amount = float(val)
         return -amount if negative else amount
@@ -394,6 +438,34 @@ def make_folio_key(*parts):
     """Create a stable key for folio upserts from identifying report columns."""
     raw = "|".join(clean_str(part) or "" for part in parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def first_token(val):
+    """Return the first non-space token from a value."""
+    s = clean_str(val)
+    return s.split()[0] if s else None
+
+
+def clean_bool(val):
+    """Parse common true/false values from CSV cells."""
+    if val is None or str(val).strip() in ("", "nan"):
+        return None
+    v = str(val).strip().lower()
+    if v in ("true", "t", "yes", "y", "1", "owner"):
+        return True
+    if v in ("false", "f", "no", "n", "0"):
+        return False
+    return None
+
+
+def get_first(row, *names):
+    """Return the first present value from a pandas row using possible column names."""
+    for name in names:
+        if name in row.index:
+            val = row.get(name)
+            if clean_str(val) is not None:
+                return val
+    return None
 
 
 def extract_prefix(name):
@@ -845,8 +917,176 @@ def load_interests(conn, member_number, filepath, dry_run=False):
 
 
 
+def normalize_folio_row(row, journal_folder=None, source_file=None):
+    """Normalize one Playwright folio transaction row to the folios table shape."""
+    member_guest_name = get_first(row, "Member/Guest Name", "Guest Name")
+    main_member_number = clean_str(get_first(row, "Main Member #", "Main Member Number"), 50)
+
+    # Folder naming rule for non-guest folios: journal/{main_member_number}/,
+    # where main_member_number is the first token of Member/Guest Name when not supplied.
+    if not main_member_number:
+        main_member_number = first_token(member_guest_name) or clean_str(journal_folder, 50)
+
+    conf_code = clean_str(get_first(row, "Conf. Code", "Confirmation Code"), 100)
+    folio_num = clean_str(get_first(row, "_folio_num", "Folio", "Folio #", "Folio Num"), 100)
+    folio_name = clean_str(get_first(row, "_folio_name", "Folio Name"), 255)
+    reservation_folio_id = clean_str(get_first(row, "_reservation_folio_id", "Reservation Folio Id"), 100)
+    description = clean_str(get_first(row, "Description"), 500)
+    transaction_date = clean_date(get_first(row, "Date", "Transaction Date"))
+    amount = clean_amount(get_first(row, "Amount"))
+    member_number = clean_str(get_first(row, "Member #", "Member Number"), 50)
+    guest_name = clean_name(get_first(row, "Guest Name", "Member/Guest Name"))
+
+    return {
+        "folio_key": make_folio_key(
+            source_file, journal_folder, conf_code, reservation_folio_id,
+            folio_num, folio_name, transaction_date, description, amount,
+            member_number, guest_name,
+        ),
+        "transaction_date": transaction_date,
+        "description": description,
+        "amount": amount,
+        "folio_num": folio_num,
+        "folio_name": folio_name,
+        "balance_due": clean_amount(get_first(row, "_balance_due", "Balance Due")),
+        "reservation_folio_id": reservation_folio_id,
+        "conf_code": conf_code,
+        "main_member_number": main_member_number,
+        "member_number": member_number,
+        "guest_name": guest_name,
+        "check_in_date": clean_date(get_first(row, "Check-In Date", "Check In Date")),
+        "check_out_date": clean_date(get_first(row, "Check-Out Date", "Check Out Date")),
+        "room_number": clean_str(get_first(row, "Room #", "Room Number"), 50),
+        "room_rate": clean_str(row.get("Room Rate"), 255),
+        "reservation_status": clean_category(get_first(row, "Reservation Status"), 100),
+        "journal_folder": clean_str(journal_folder, 255),
+        "source_file": clean_str(source_file),
+        "group_name": clean_name(get_first(row, "Group Name")),
+        "member_guest_name": clean_name(member_guest_name),
+        "credit_limit": clean_amount(row.get("Credit Limit")),
+        "folio_owner": clean_str(get_first(row, "Folio Owner"), 255),
+        "reservation_total": clean_amount(get_first(row, "Reservation Total")),
+        "total_charges": clean_amount(get_first(row, "Total Charges")),
+        "total_payments": clean_amount(get_first(row, "Total Payments")),
+        "folio_balance": clean_amount(get_first(row, "Folio Balance")),
+        "conf_href": clean_str(get_first(row, "_conf_href")),
+        "member_name": clean_name(get_first(row, "_member_name")),
+    }
+
+
+def load_folio_file(conn, filepath, journal_folder=None, dry_run=False):
+    """Load one per-person journal folio CSV into folios."""
+    try:
+        df = pd.read_csv(filepath)
+    except Exception as e:
+        log.warning(f"  Could not read folio file {filepath}: {e}")
+        return 0
+
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+
+    rows = []
+    for _, row in df.iterrows():
+        out = normalize_folio_row(row, journal_folder, filepath)
+
+        # Skip blank/detail-less rows safely.
+        if not any([
+            out["transaction_date"], out["description"], out["amount"],
+            out["folio_num"], out["folio_name"], out["reservation_folio_id"],
+            out["conf_code"], out["member_number"], out["guest_name"],
+        ]):
+            continue
+        rows.append(out)
+
+    if rows:
+        count = upsert(conn, "folios", rows, "folio_key", dry_run)
+        log.info(f"  folios from {os.path.basename(filepath)}: {count} rows")
+        return count
+    return 0
+
+
+def load_reservation_guests(conn, main_member_number, filepath, dry_run=False):
+    """
+    Load journal/{main_member_num}/{main_member_num}_guests.csv.
+    Expected columns: Conf. Code, Member #, Guest Name, Folio, Is Owner,
+                      Check-In Date, Check-Out Date, Room #
+    """
+    try:
+        df = pd.read_csv(filepath)
+    except Exception as e:
+        log.warning(f"  Could not read guests file {filepath}: {e}")
+        return 0
+
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+    rows = []
+    journal_folder = os.path.basename(os.path.dirname(filepath))
+
+    for _, row in df.iterrows():
+        conf_code = clean_str(get_first(row, "Conf. Code", "Confirmation Code"), 100)
+        member_number = clean_str(get_first(row, "Member #", "Member Number"), 50)
+        guest_name = clean_name(get_first(row, "Guest Name"))
+        folio = clean_str(get_first(row, "Folio"), 100)
+
+        if not any([conf_code, member_number, guest_name, folio]):
+            continue
+
+        rows.append({
+            "guest_key": make_folio_key(main_member_number, conf_code, member_number, guest_name, folio),
+            "main_member_number": clean_str(main_member_number, 50),
+            "conf_code": conf_code,
+            "member_number": member_number,
+            "guest_name": guest_name,
+            "folio": folio,
+            "is_owner": clean_bool(get_first(row, "Is Owner")),
+            "check_in_date": clean_date(get_first(row, "Check-In Date", "Check In Date")),
+            "check_out_date": clean_date(get_first(row, "Check-Out Date", "Check Out Date")),
+            "room_number": clean_str(get_first(row, "Room #", "Room Number"), 50),
+            "journal_folder": clean_str(journal_folder, 255),
+            "source_file": clean_str(filepath),
+        })
+
+    if rows:
+        count = upsert(conn, "reservation_guests", rows, "guest_key", dry_run)
+        log.info(f"  reservation_guests: {count} rows")
+        return count
+    return 0
+
+
+def load_journal_folios(conn, journal_folder=JOURNAL_FOLDER, dry_run=False):
+    """Scan backend/playwright/journal/{person}/ for folio CSVs and guest tables."""
+    if not os.path.isdir(journal_folder):
+        log.warning(f"Journal folder not found: {journal_folder}")
+        return 0
+
+    total = 0
+    for person_dir in sorted(f.path for f in os.scandir(journal_folder) if f.is_dir()):
+        folder_name = os.path.basename(person_dir)
+
+        guest_table = os.path.join(person_dir, f"{folder_name}_guests.csv")
+        if os.path.exists(guest_table):
+            load_reservation_guests(conn, folder_name, guest_table, dry_run)
+
+        # Load any folio CSV in this person folder, but do not treat the guests table as transactions.
+        for filepath in sorted(glob.glob(os.path.join(person_dir, "*.csv"))):
+            base = os.path.basename(filepath).lower()
+            if base.endswith("_guests.csv"):
+                continue
+            if "folio" not in base:
+                continue
+            total += load_folio_file(conn, filepath, folder_name, dry_run)
+
+    log.info(f"journal folios: {total} rows")
+    return total
+
+
 def load_folios(conn, filepath=FOLIO_REPORT_FILE, dry_run=False):
-    """Load backend/playwright/reports/folio_report.csv into folios table."""
+    """
+    Load folios. Preferred source is backend/playwright/journal/{person}/ folio CSVs.
+    Falls back to backend/playwright/reports/folio_report.csv for legacy exports.
+    """
+    total = load_journal_folios(conn, JOURNAL_FOLDER, dry_run)
+    if total:
+        return total
+
     if not os.path.exists(filepath):
         log.warning(f"Folio report not found: {filepath}")
         return 0
@@ -858,49 +1098,12 @@ def load_folios(conn, filepath=FOLIO_REPORT_FILE, dry_run=False):
         return 0
 
     df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
-
-    required_cols = {
-        "Conf. Code", "Group Name", "Member/Guest Name", "Credit Limit",
-        "Check-In Date", "Check-Out Date", "Room #", "Room Rate",
-        "Folio Name", "Folio Owner", "Reservation Total", "Total Charges",
-        "Total Payments", "Reservation Status", "Folio Balance",
-        "_conf_href", "_member_name",
-    }
-    missing = sorted(required_cols - set(df.columns))
-    if missing:
-        log.warning(f"Folio report is missing columns: {missing}")
-
     rows = []
     for _, row in df.iterrows():
-        conf_code = clean_str(row.get("Conf. Code"), 100)
-        folio_name = clean_str(row.get("Folio Name"), 255)
-        folio_owner = clean_str(row.get("Folio Owner"), 255)
-        member_guest_name = clean_name(row.get("Member/Guest Name"))
-
-        # Skip rows that do not have enough identity to upsert safely.
-        if not any([conf_code, folio_name, folio_owner, member_guest_name]):
+        out = normalize_folio_row(row, None, filepath)
+        if not any([out["conf_code"], out["folio_name"], out["folio_owner"], out["member_guest_name"]]):
             continue
-
-        rows.append({
-            "folio_key":          make_folio_key(conf_code, folio_name, folio_owner, member_guest_name),
-            "conf_code":          conf_code,
-            "group_name":         clean_name(row.get("Group Name")),
-            "member_guest_name":  member_guest_name,
-            "credit_limit":       clean_amount(row.get("Credit Limit")),
-            "check_in_date":      clean_date(row.get("Check-In Date")),
-            "check_out_date":     clean_date(row.get("Check-Out Date")),
-            "room_number":        clean_str(row.get("Room #"), 50),
-            "room_rate":          clean_amount(row.get("Room Rate")),
-            "folio_name":         folio_name,
-            "folio_owner":        folio_owner,
-            "reservation_total":  clean_amount(row.get("Reservation Total")),
-            "total_charges":      clean_amount(row.get("Total Charges")),
-            "total_payments":     clean_amount(row.get("Total Payments")),
-            "reservation_status": clean_category(row.get("Reservation Status"), 100),
-            "folio_balance":      clean_amount(row.get("Folio Balance")),
-            "conf_href":          clean_str(row.get("_conf_href")),
-            "member_name":        clean_name(row.get("_member_name")),
-        })
+        rows.append(out)
 
     if rows:
         count = upsert(conn, "folios", rows, "folio_key", dry_run)
