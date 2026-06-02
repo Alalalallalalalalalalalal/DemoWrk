@@ -491,8 +491,9 @@ def member_directory(db: Session = Depends(get_db)):
 
     return [dict(row) for row in result]
 
+
 # ═══════════════════════════════════════════════════════════
-# ML INSIGHT ENDPOINTS - S.S
+# ML INSIGHT ENDPOINTS
 # ═══════════════════════════════════════════════════════════
 # These read from tables that ml_insights.build_insights() writes.
 # The scheduler / pipeline should run build_insights() before these
@@ -507,8 +508,8 @@ def member_directory(db: Session = Depends(get_db)):
 def ml_member_segments(db: Session = Depends(get_db)):
     """
     Full per-member segment table.
-    Includes: cluster_id, segment_name, active/inactive flag, spend,
-    visits, avg stay, favourite amenity, and campaign assignment.
+    Includes: segment_name, active/inactive flag, spend, visits,
+    avg stay, favourite amenity, and campaign assignment.
     """
     result = db.execute(text("""
         SELECT
@@ -517,15 +518,12 @@ def ml_member_segments(db: Session = Depends(get_db)):
             ms.status,
             ms.member_type,
             ms.is_active,
-            ms.cluster_id,
             ms.segment_name,
             ms.total_spend,
             ms.avg_spend,
             ms.visit_count,
             ms.avg_stay,
             ms.days_since_last_visit,
-            ms.amenity_diversity,
-            ms.favorite_amenity,
             ms.campaign
         FROM member_segments ms
         LEFT JOIN members m ON ms.member_number = m.member_number
@@ -543,38 +541,18 @@ def ml_segment_summary(db: Session = Depends(get_db)):
     result = db.execute(text("""
         SELECT
             segment_name,
-            COUNT(*)                        AS member_count,
-            ROUND(AVG(total_spend)::NUMERIC, 2)  AS avg_total_spend,
-            ROUND(AVG(visit_count)::NUMERIC, 2)  AS avg_visits,
-            ROUND(AVG(avg_stay)::NUMERIC, 2)     AS avg_stay_nights,
-            SUM(CASE WHEN is_active THEN 1 ELSE 0 END)  AS active_count,
-            SUM(CASE WHEN NOT is_active THEN 1 ELSE 0 END) AS inactive_count
+            COUNT(*)                             AS member_count,
+            ROUND(AVG(total_spend)::NUMERIC, 2) AS avg_total_spend,
+            ROUND(AVG(visit_count)::NUMERIC, 2) AS avg_visits,
+            ROUND(AVG(avg_stay)::NUMERIC, 2)    AS avg_stay_nights,
+            SUM(CASE WHEN is_active THEN 1 ELSE 0 END)      AS active_count,
+            SUM(CASE WHEN NOT is_active THEN 1 ELSE 0 END)  AS inactive_count
         FROM member_segments
         GROUP BY segment_name
         ORDER BY member_count DESC;
     """)).mappings().all()
     return [dict(row) for row in result]
  
- 
-@router.get("/ml/cluster-summary")
-def ml_cluster_summary(db: Session = Depends(get_db)):
-    """
-    KMeans cluster breakdown — useful for exploring raw cluster behaviour.
-    """
-    result = db.execute(text("""
-        SELECT
-            cluster_id,
-            COUNT(*)                             AS member_count,
-            ROUND(AVG(total_spend)::NUMERIC, 2) AS avg_total_spend,
-            ROUND(AVG(visit_count)::NUMERIC, 2) AS avg_visits,
-            ROUND(AVG(avg_stay)::NUMERIC, 2)    AS avg_stay_nights,
-            MODE() WITHIN GROUP (ORDER BY favorite_amenity) AS dominant_amenity,
-            MODE() WITHIN GROUP (ORDER BY segment_name)     AS dominant_segment
-        FROM member_segments
-        GROUP BY cluster_id
-        ORDER BY cluster_id;
-    """)).mappings().all()
-    return [dict(row) for row in result]
  
  
 # ───────────────────────────────────────────────────────────
@@ -614,6 +592,15 @@ def ml_member_amenity_usage(db: Session = Depends(get_db)):
     return [dict(row) for row in result]
  
  
+@router.get("/ml/member-amenity-segments")
+def member_amenity_segments(db: Session = Depends(get_db)):
+    result = db.execute(text("""
+        SELECT *
+        FROM member_amenity_segments
+        ORDER BY total_amenity_visits DESC
+    """)).mappings().all()
+
+    return [dict(row) for row in result]
 # ───────────────────────────────────────────────────────────
 # Seasonal Behaviour
 # ───────────────────────────────────────────────────────────
@@ -724,4 +711,3 @@ def ml_marketing_targets_by_campaign(db: Session = Depends(get_db)):
         ORDER BY member_count DESC;
     """)).mappings().all()
     return [{"campaign": row["campaign"], "member_count": row["member_count"]} for row in result]
- 

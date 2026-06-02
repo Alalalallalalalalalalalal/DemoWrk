@@ -5,25 +5,21 @@ Builds and persists all ML-derived insight tables used by the analytics API.
 
 Tables written to PostgreSQL
 ─────────────────────────────
-  member_segments        - one row per member: cluster, segment label, spend,
+  member_segments        – one row per member: cluster, segment label, spend,
                            visits, recency, favorite amenity, active/inactive,
                            and campaign assignment.
-  member_amenity_usage   - per-member x per-amenity usage count + spend.
-  amenity_adoption       - how many distinct members used each amenity.
-  amenity_revenue        - total revenue + transaction count per amenity.
-  seasonal_visits        - aggregated visits + avg stay per calendar month.
-  airport_transfer_users - top members by ground-transport booking count.
-  marketing_targets      - member_number, segment_name, campaign (slim table
+  member_amenity_usage   – per-member × per-amenity usage count + spend.
+  amenity_adoption       – how many distinct members used each amenity.
+  amenity_revenue        – total revenue + transaction count per amenity.
+  seasonal_visits        – aggregated visits + avg stay per calendar month.
+  airport_transfer_users – top members by ground-transport booking count.
+  marketing_targets      – member_number, segment_name, campaign (slim table
                            for targeted marketing queries).
 
 Entry point
 ───────────
   Call  build_insights()  from a scheduler, pipeline, or CLI.
   Each sub-function can also be called individually for incremental refreshes.
-  *****
-  To run in bash from your project root (DemoWrk/) run: python backend/machinelearning/ml_insights.py
-  To run in bash from the backend/ directory run: python machinelearning/ml_insights.py
-  
 """
 
 import os
@@ -70,8 +66,10 @@ def get_engine():
     return _engine
 
 
-def _query(sql: str) -> pd.DataFrame:
-    return pd.read_sql(sql, get_engine())
+def _query(sql: str, params: dict | None = None) -> pd.DataFrame:
+    from sqlalchemy import text as _text
+    with get_engine().connect() as conn:
+        return pd.read_sql(_text(sql), conn, params=params)
 
 
 def _save(df: pd.DataFrame, table: str) -> None:
@@ -149,12 +147,37 @@ def _load_rooms() -> pd.DataFrame:
     return df
 
 
+# Member types that have meaningful activity data and are relevant for
+# marketing segmentation.  Staff records and other internal accounts are
+# excluded so they don't dilute segment quality or skew spend statistics.
+RELEVANT_MEMBER_TYPES = (
+    "Guests",
+    "Dependent",
+    "Golf Guest",
+    "Spa Outside Guests",
+    "Family Dependent",
+    "Proprietary Members",
+    "Group/Tournament Accounts",
+    "Non-Proprietary Members",
+    "Overseas Golf Members",
+    "Overseas Standard Members",
+    "Honorary Members",
+    "Resident Members",
+)
+
+
 def _load_members() -> pd.DataFrame:
-    df = _query("""
+    placeholders = ", ".join(f":{i}" for i in range(len(RELEVANT_MEMBER_TYPES)))
+    params       = {str(i): v for i, v in enumerate(RELEVANT_MEMBER_TYPES)}
+    df = _query(
+        f"""
         SELECT member_number, status, member_type
         FROM members
-    """)
-    log.info("Loaded members: %d rows", len(df))
+        WHERE member_type IN ({placeholders})
+        """,
+        params=params,
+    )
+    log.info("Loaded members: %d rows  (filtered to relevant member types)", len(df))
     return df
 
 
@@ -287,13 +310,13 @@ def _build_feature_matrix(
 
     Features
     ─────────
-    total_spend          - lifetime folio spend
-    avg_spend            - average transaction value
-    visit_count          - number of room stays
-    avg_stay             - average length of stay (nights)
-    days_since_last_visit- recency (9999 = never stayed)
-    amenity_diversity    - number of distinct amenity types used
-    <amenity>_visits     - visit count per amenity category (amenity mix)
+    total_spend          – lifetime folio spend
+    avg_spend            – average transaction value
+    visit_count          – number of room stays
+    avg_stay             – average length of stay (nights)
+    days_since_last_visit– recency (9999 = never stayed)
+    amenity_diversity    – number of distinct amenity types used
+    <amenity>_visits     – visit count per amenity category (amenity mix)
     """
     # Visit / recency features from rooms
     visit_features = (
@@ -329,6 +352,8 @@ def _build_feature_matrix(
     )
 
     # Amenity-mix pivot (visit counts per category per member)
+    # Keep member_id as-is after reset_index to avoid pandas axis-name
+    # quirks that can corrupt the rename when columns.name == "amenity".
     amenity_pivot = (
         member_amenity_usage
         .pivot_table(
@@ -338,36 +363,59 @@ def _build_feature_matrix(
             fill_value=0,
         )
         .reset_index()
-        .rename(columns={"member_id": "member_number"})
     )
     amenity_pivot.columns.name = None
-    amenity_cols = [c for c in amenity_pivot.columns if c != "member_number"]
+    amenity_cols = [c for c in amenity_pivot.columns if c != "member_id"]
 
-    # Favorite amenity (most-used category)
+    # Favorite amenity (most-used category) — idxmax guarantees correct top
+    # amenity per member regardless of DataFrame ordering.
     fav = (
-    member_amenity_usage.loc[
-        member_amenity_usage.groupby("member_id")["usage_count"].idxmax()
-    ][["member_id", "amenity"]]
-    .rename(columns={"amenity": "favorite_amenity"})
+        member_amenity_usage
+        .loc[
+            member_amenity_usage.groupby("member_id")["usage_count"].idxmax()
+        ][["member_id", "amenity"]]
+        .rename(columns={"amenity": "favorite_amenity"})
     )
 
-    # Merge everything onto the members table
+    # ── Normalise all join keys to str before merging ──────────────────────
+    # Postgres may return member_number as INTEGER in some tables and VARCHAR
+    # in others.  A type mismatch silently produces all-NaN join results, so
+    # we cast every key column to str here in one place.
+    members["member_number"]          = members["member_number"].astype(str)
+    visit_features["member_number"]   = visit_features["member_number"].astype(str)
+    spend_features["member_number"]   = spend_features["member_number"].astype(str)
+    amenity_diversity["member_number"]= amenity_diversity["member_number"].astype(str)
+    amenity_pivot["member_id"]        = amenity_pivot["member_id"].astype(str)
+    fav["member_id"]                  = fav["member_id"].astype(str)
+
     df = (
         members
-        .merge(visit_features,   on="member_number", how="left")
-        .merge(spend_features,   on="member_number", how="left")
-        .merge(amenity_diversity, on="member_number", how="left")
-        .merge(amenity_pivot,    on="member_number", how="left")
-        .merge(fav,              on="member_number", how="left")
+        .merge(visit_features,    on="member_number",                            how="left")
+        .merge(spend_features,    on="member_number",                            how="left")
+        .merge(amenity_diversity, on="member_number",                            how="left")
+        .merge(amenity_pivot,     left_on="member_number", right_on="member_id", how="left")
+        .drop(columns=["member_id"], errors="ignore")
+        .merge(fav,               left_on="member_number", right_on="member_id", how="left")
+        .drop(columns=["member_id"], errors="ignore")
     )
+
+    matched = df["favorite_amenity"].notna().sum()
+    log.info("favorite_amenity matched %d / %d members", matched, len(df))
 
     # Fill nulls
     for col in ["visit_count", "avg_stay", "total_spend", "avg_spend", "amenity_diversity"] + amenity_cols:
         df[col] = df.get(col, 0).fillna(0)
 
-    # Recency
+    # Recency — coerce first so NaT subtracts cleanly, then fill never-stayed
+    # members with 9999. Negative values (future checkouts) are clamped to 0.
     today = pd.Timestamp.today().normalize()
-    df["days_since_last_visit"] = (today - df["last_visit"]).dt.days.fillna(9999)
+    df["last_visit"] = pd.to_datetime(df["last_visit"], errors="coerce")
+    df["days_since_last_visit"] = (today - df["last_visit"]).dt.days
+    df["days_since_last_visit"] = (
+        df["days_since_last_visit"]
+        .fillna(9999)
+        .clip(lower=0)
+    )
 
     # Active flag: visited in the last 365 days
     df["is_active"] = df["days_since_last_visit"] <= 365
@@ -381,15 +429,15 @@ def _assign_segment(row, p90_spend: float) -> str:
 
     Segments
     ────────
-    High Value Guest   - top 10 % by lifetime spend
-    At Risk            - no visit in > 365 days (inactive)
-    Corporate Traveler - transportation is their most-used amenity
-    Long Stay Guest    - avg stay ≥ 7 nights
-    Golf Enthusiast    - golf is their top amenity
-    Spa & Wellness     - spa is their top amenity
-    Regular Member     - everyone else
+    High Value Guest   – top 10 % by lifetime spend
+    At Risk            – no visit in > 365 days (inactive)
+    Corporate Traveler – transportation is their most-used amenity
+    Long Stay Guest    – avg stay ≥ 7 nights
+    Golf Enthusiast    – golf is their top amenity
+    Spa & Wellness     – spa is their top amenity
+    Regular Member     – everyone else
     """
-    if row["total_spend"] >= p90_spend:
+    if row["total_spend"] > 0 and row["total_spend"] >= p90_spend:
         return "High Value Guest"
     if not row["is_active"]:
         return "At Risk"
@@ -455,7 +503,7 @@ def build_member_segments(
 
     X = feature_df[cluster_features].fillna(0)
 
-    if len(feature_df) >= n_clusters * 5:  # only cluster if we have enough members to form meaningful groups
+    if len(feature_df) >= n_clusters * 5:
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
@@ -463,26 +511,33 @@ def build_member_segments(
     else:
         feature_df["cluster_id"] = 0
 
-    p90_spend = feature_df["total_spend"].quantile(0.90)
+    # Exclude zero-spend members from the p90 calculation.
+    # With ~98 % of members having no folio data, a naive quantile(0.90)
+    # returns 0 and every member becomes "High Value Guest".
+    spenders = feature_df[feature_df["total_spend"] > 0]["total_spend"]
+    p90_spend = spenders.quantile(0.90) if len(spenders) >= 10 else float("inf")
+
     feature_df["segment_name"] = feature_df.apply(
         lambda r: _assign_segment(r, p90_spend), axis=1
     )
     feature_df["campaign"] = feature_df.apply(_assign_campaign, axis=1)
 
+    # cluster_id stays in feature_df for internal use but is not written to
+    # member_segments — on a dataset that is ~98 % zero-activity members the
+    # KMeans groupings are not meaningful enough to surface to end users.
+    # amenity_diversity and favorite_amenity are used internally for segment
+    # assignment and clustering but are not written to the output table.
     output_cols = [
         "member_number",
         "status",
         "member_type",
         "is_active",
-        "cluster_id",
         "segment_name",
         "total_spend",
         "avg_spend",
         "visit_count",
         "avg_stay",
         "days_since_last_visit",
-        "amenity_diversity",
-        "favorite_amenity",
         "campaign",
     ]
     member_segments = feature_df[output_cols].copy()
@@ -525,7 +580,7 @@ def build_insights() -> None:
     members = _load_members()
 
     if folios.empty:
-        log.error("No folio data found - aborting insights pipeline.")
+        log.error("No folio data found — aborting insights pipeline.")
         return
 
     # Build derived tables (order matters — some feed into later steps)

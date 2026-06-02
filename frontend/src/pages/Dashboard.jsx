@@ -1,3 +1,5 @@
+// dashboard.jsx
+
 import { useEffect, useState } from "react";
 import {
   BarChart,
@@ -88,6 +90,17 @@ export default function Dashboard() {
   // Directory
   const [directoryMembers, setDirectoryMembers] = useState([]);
   const [directorySearch, setDirectorySearch] = useState("");
+
+  // ML / Segmentation
+
+  const [memberSegments, setMemberSegments] = useState([]);
+  const [segmentSummary, setSegmentSummary] = useState([]);
+  const [amenityAdoption, setAmenityAdoption] = useState([]);
+  const [seasonalVisits, setSeasonalVisits] = useState([]);
+  const [amenityRevenue, setAmenityRevenue] = useState([]);
+  const [airportTransferUsers, setAirportTransferUsers] = useState([]);
+  const [mlSearch, setMlSearch] = useState("");
+  const [memberAmenityUsage, setMemberAmenityUsage] = useState([]);
 
   useEffect(() => {
     analyticsApi
@@ -196,6 +209,35 @@ export default function Dashboard() {
       .memberDirectory()
       .then(setDirectoryMembers)
       .catch(() => {});
+
+    analyticsApi
+      .memberSegments()
+      .then(setMemberSegments)
+      .catch(() => {});
+    analyticsApi
+      .segmentSummary()
+      .then(setSegmentSummary)
+      .catch(() => {});
+    analyticsApi
+      .amenityAdoption()
+      .then(setAmenityAdoption)
+      .catch(() => {});
+    analyticsApi
+      .seasonalVisits()
+      .then(setSeasonalVisits)
+      .catch(() => {});
+    analyticsApi
+      .amenityRevenue()
+      .then(setAmenityRevenue)
+      .catch(() => {});
+    analyticsApi
+      .airportTransferUsers()
+      .then(setAirportTransferUsers)
+      .catch(() => {});
+    analyticsApi
+      .memberAmenityUsage()
+      .then(setMemberAmenityUsage)
+      .catch(() => {});
   }, []);
 
   const totalMembers = membersByType.reduce((a, b) => a + (b.total || 0), 0);
@@ -215,6 +257,104 @@ export default function Dashboard() {
       m.employer,
     ].some((v) => v && String(v).toLowerCase().includes(q));
   });
+
+  const selectedMlMember = memberSegments.find((m) => {
+    const q = mlSearch.toLowerCase();
+    if (!q) return false;
+
+    return [
+      m.member_full_name,
+      m.member_number,
+      m.segment_name,
+      m.member_type,
+      m.campaign,
+    ].some((v) => v && String(v).toLowerCase().includes(q));
+  });
+
+  const selectedMemberAmenityUsage = selectedMlMember
+    ? memberAmenityUsage
+        .filter(
+          (a) =>
+            String(a.member_number) === String(selectedMlMember.member_number),
+        )
+        .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0))
+    : [];
+
+  const topAmenity = selectedMemberAmenityUsage[0];
+
+  const seasonOrder = ["Winter", "Spring", "Summer", "Autumn"];
+
+  const getSeason = (monthValue) => {
+    const month = Number(String(monthValue).split("-")[1]);
+
+    if ([1, 2, 3].includes(month)) return "Spring";
+    if ([4, 5, 6, 7].includes(month)) return "Summer";
+    if ([8].includes(month)) return "Late Summer";
+    if ([9, 10].includes(month)) return "Autumn";
+    return "Winter";
+  };
+
+  const seasonalBySeason = Object.values(
+    seasonalVisits.reduce((acc, row) => {
+      const season = getSeason(row.month);
+
+      if (!acc[season]) {
+        acc[season] = {
+          season,
+          visits: 0,
+          totalStay: 0,
+          months: 0,
+        };
+      }
+
+      acc[season].visits += Number(row.visits ?? 0);
+      acc[season].totalStay += Number(row.avg_stay ?? 0);
+      acc[season].months += 1;
+
+      return acc;
+    }, {}),
+  )
+    .map((s) => ({
+      ...s,
+      avg_stay: s.months ? Number((s.totalStay / s.months).toFixed(1)) : 0,
+    }))
+    .sort(
+      (a, b) => seasonOrder.indexOf(a.season) - seasonOrder.indexOf(b.season),
+    );
+
+  const amenityRevenueReadable = amenityRevenue
+    .map((a) => ({
+      ...a,
+      avg_transaction:
+        Number(a.transactions ?? 0) > 0
+          ? Number(a.revenue ?? 0) / Number(a.transactions ?? 1)
+          : 0,
+    }))
+    .sort((a, b) => Number(b.revenue ?? 0) - Number(a.revenue ?? 0));
+
+  const segmentScatterData = segmentSummary.map((s) => ({
+    segment_name: s.segment_name,
+    member_count: Number(s.member_count ?? 0),
+    avg_total_spend: Number(s.avg_total_spend ?? 0),
+    avg_visits: Number(s.avg_visits ?? 0),
+  }));
+
+  const amenityAdoptionReadable = amenityAdoption
+    .map((a) => ({
+      ...a,
+      adoption_score: Number(a.members_using ?? 0),
+    }))
+    .sort((a, b) => b.adoption_score - a.adoption_score);
+
+  const airportTransferReadable = airportTransferUsers
+    .map((m) => ({
+      ...m,
+      avg_transfer_spend:
+        Number(m.transfers ?? 0) > 0
+          ? Number(m.total_spend ?? 0) / Number(m.transfers ?? 1)
+          : 0,
+    }))
+    .sort((a, b) => Number(b.transfers ?? 0) - Number(a.transfers ?? 0));
 
   return (
     <div style={styles.root}>
@@ -989,69 +1129,295 @@ export default function Dashboard() {
         {/* ════════════════════ ML INSIGHTS ════════════════════ */}
         {activeTab === "ml" && (
           <div style={styles.tabContent}>
-            <div style={styles.card}>
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  padding: "80px 0",
-                  textAlign: "center",
-                }}
+            <SectionLabel>Customer Segments</SectionLabel>
+
+            <div style={styles.chartsGrid}>
+              <ChartCard
+                title="Segment size"
+                description="How many members fall into each ML-generated segment"
+                span3
               >
-                <div
-                  style={{
-                    width: 64,
-                    height: 64,
-                    borderRadius: 16,
-                    background: "#F5EFE6",
-                    border: "1px solid #E8DDD0",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    marginBottom: 20,
-                  }}
-                >
-                  <svg
-                    width="28"
-                    height="28"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="#C8976E"
-                    strokeWidth="1.5"
-                  >
-                    <path d="M12 2a4 4 0 0 1 4 4 4 4 0 0 1-4 4 4 4 0 0 1-4-4 4 4 0 0 1 4-4z" />
-                    <path d="M12 10v4M8 14h8M6 18h12M4 22h16" />
-                    <circle cx="6" cy="12" r="2" />
-                    <circle cx="18" cy="12" r="2" />
-                    <path d="M8 12H6M18 12h-6" />
-                  </svg>
+                <ResponsiveContainer>
+                  <BarChart data={segmentSummary}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
+                    <XAxis
+                      dataKey="segment_name"
+                      stroke="#A08070"
+                      fontSize={11}
+                    />
+                    <YAxis stroke="#A08070" fontSize={11} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Bar
+                      dataKey="member_count"
+                      fill="#C8976E"
+                      radius={[6, 6, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
+            </div>
+
+            <div style={styles.statsGrid}>
+              {segmentSummary.map((s, i) => (
+                <div key={s.segment_name ?? i} style={styles.statCard}>
+                  <div>
+                    <p style={styles.statLabel}>SEGMENT {i + 1}</p>
+                    <p
+                      style={{
+                        margin: "4px 0",
+                        fontWeight: 700,
+                        color: "#3D2B1F",
+                      }}
+                    >
+                      {s.segment_name ?? "Unnamed Segment"}
+                    </p>
+                    <p style={styles.statValue}>{s.member_count ?? 0}</p>
+                    <p style={styles.statHint}>members</p>
+                    <p style={styles.statHint}>
+                      Avg. spend $
+                      {Number(s.avg_total_spend ?? 0).toLocaleString()}
+                    </p>
+                    <p style={styles.statHint}>
+                      Avg. visits {Number(s.avg_visits ?? 0).toFixed(1)}
+                    </p>
+                    <p style={styles.statHint}>
+                      Active {s.active_count ?? 0} · Inactive{" "}
+                      {s.inactive_count ?? 0}
+                    </p>
+                  </div>
                 </div>
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: 17,
-                    fontWeight: 600,
-                    color: "#3D2B1F",
-                  }}
-                >
-                  ML Insights
-                </p>
-                <p
-                  style={{
-                    margin: "8px 0 0",
-                    fontSize: 13,
-                    color: "#9C7B65",
-                    fontFamily: "sans-serif",
-                    maxWidth: 380,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  Machine learning models and predictive analytics will appear
-                  here. Coming soon.
+              ))}
+            </div>
+
+            <SectionLabel>Member Lookup</SectionLabel>
+
+            <div style={styles.card}>
+              <div style={styles.cardHeader}>
+                <p style={styles.cardTitle}>Member lookup</p>
+                <p style={styles.cardDesc}>
+                  Search a member to see spend, visits, segment, activity
+                  status, and campaign
                 </p>
               </div>
+
+              <input
+                value={mlSearch}
+                onChange={(e) => setMlSearch(e.target.value)}
+                placeholder="Search by name, member #, segment, or campaign..."
+                style={{
+                  ...styles.searchInput,
+                  maxWidth: 520,
+                  marginBottom: 20,
+                }}
+              />
+
+              {!selectedMlMember ? (
+                <p style={styles.cardDesc}>
+                  Start typing a member's name to see their personalized
+                  profile.
+                </p>
+              ) : (
+                <div style={styles.statsGrid}>
+                  <StatCard
+                    icon={UserCheck}
+                    label="Member"
+                    value={
+                      selectedMlMember.member_full_name ??
+                      selectedMlMember.member_number
+                    }
+                    hint={selectedMlMember.member_type}
+                  />
+
+                  <StatCard
+                    icon={Sparkles}
+                    label="Segment"
+                    value={selectedMlMember.segment_name ?? "—"}
+                    hint={
+                      selectedMlMember.is_active
+                        ? "Active member"
+                        : "Inactive / at-risk"
+                    }
+                  />
+
+                  <StatCard
+                    icon={DollarSign}
+                    label="Total Spend"
+                    value={`$${Number(selectedMlMember.total_spend ?? 0).toLocaleString()}`}
+                    hint={`Avg. spend $${Number(selectedMlMember.avg_spend ?? 0).toLocaleString()}`}
+                  />
+
+                  <StatCard
+                    icon={BedDouble}
+                    label="Visits"
+                    value={selectedMlMember.visit_count ?? 0}
+                    hint={`Avg. stay ${Number(selectedMlMember.avg_stay ?? 0).toFixed(1)} nights`}
+                  />
+
+                  <StatCard
+                    icon={Clock}
+                    label="Recency"
+                    value={
+                      selectedMlMember.days_since_last_visit != null
+                        ? `${selectedMlMember.days_since_last_visit} days`
+                        : "—"
+                    }
+                    hint="Since last visit"
+                  />
+
+                  <StatCard
+                    icon={TrendingUp}
+                    label="Campaign"
+                    value={selectedMlMember.campaign ?? "—"}
+                    hint="Recommended marketing action"
+                  />
+                </div>
+              )}
+            </div>
+
+            <SectionLabel>General ML Insights</SectionLabel>
+
+            <div style={styles.chartsGrid}>
+              <ChartCard
+                title="Seasonal demand"
+                description="Which season brings the most member visits"
+              >
+                <ResponsiveContainer>
+                  <BarChart data={seasonalBySeason}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
+                    <XAxis dataKey="season" stroke="#A08070" fontSize={11} />
+                    <YAxis stroke="#A08070" fontSize={11} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Bar
+                      dataKey="visits"
+                      fill="#C8976E"
+                      radius={[6, 6, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
+
+              <ChartCard
+                title="Amenity spend ranking"
+                description="Clear ranking of where members spend the most money"
+              >
+                <ResponsiveContainer>
+                  <BarChart
+                    data={amenityRevenueReadable}
+                    layout="vertical"
+                    margin={{ left: 20 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#E8DDD0"
+                      horizontal={false}
+                    />
+                    <XAxis type="number" stroke="#A08070" fontSize={11} />
+                    <YAxis
+                      type="category"
+                      dataKey="amenity"
+                      stroke="#A08070"
+                      fontSize={11}
+                      width={110}
+                    />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Bar
+                      dataKey="revenue"
+                      fill="#D4AF2A"
+                      radius={[0, 6, 6, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
+
+              <ChartCard
+                title="Customer segment value"
+                description="Average spend compared with segment size"
+              >
+                <ResponsiveContainer>
+                  <BarChart data={segmentScatterData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
+                    <XAxis
+                      dataKey="segment_name"
+                      stroke="#A08070"
+                      fontSize={11}
+                    />
+                    <YAxis stroke="#A08070" fontSize={11} />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Bar
+                      dataKey="avg_total_spend"
+                      fill="#2D5F6E"
+                      radius={[6, 6, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
+
+              <ChartCard
+                title="Amenity adoption"
+                description="Which amenities are used by the most members"
+              >
+                <ResponsiveContainer>
+                  <BarChart
+                    data={amenityAdoptionReadable}
+                    layout="vertical"
+                    margin={{ left: 20 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#E8DDD0"
+                      horizontal={false}
+                    />
+                    <XAxis type="number" stroke="#A08070" fontSize={11} />
+                    <YAxis
+                      type="category"
+                      dataKey="amenity"
+                      stroke="#A08070"
+                      fontSize={11}
+                      width={110}
+                    />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Bar
+                      dataKey="members_using"
+                      fill="#5B9EAD"
+                      radius={[0, 6, 6, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
+
+              <ChartCard
+                title="Airport transfer power users"
+                description="Members ranked by transfer bookings"
+                span2
+              >
+                <ResponsiveContainer>
+                  <BarChart
+                    data={airportTransferReadable}
+                    layout="vertical"
+                    margin={{ left: 20 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="#E8DDD0"
+                      horizontal={false}
+                    />
+                    <XAxis type="number" stroke="#A08070" fontSize={11} />
+                    <YAxis
+                      type="category"
+                      dataKey="member_full_name"
+                      stroke="#A08070"
+                      fontSize={11}
+                      width={150}
+                    />
+                    <Tooltip contentStyle={TOOLTIP_STYLE} />
+                    <Bar
+                      dataKey="transfers"
+                      fill="#8B6B4A"
+                      radius={[0, 6, 6, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </ChartCard>
             </div>
           </div>
         )}

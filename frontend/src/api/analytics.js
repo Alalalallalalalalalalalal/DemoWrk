@@ -46,4 +46,28 @@ export const analyticsApi = {
   dependentsByAgeGroup: () => fetchData("/analytics/dependents-by-age-group"),
   dependentsPerMember: () => fetchData("/analytics/dependents-per-member"),
   memberDirectory: () => fetchData("/analytics/member-directory"),
+
+  // ML Analytics
+  memberSegments: () => fetchData("/analytics/ml/member-segments"),
+
+  segmentSummary: () => fetchData("/analytics/ml/segment-summary"),
+
+  amenityAdoption: () => fetchData("/analytics/ml/amenity-adoption"),
+
+  memberAmenityUsage: () => fetchData("/analytics/ml/member-amenity-usage"),
+
+  memberAmenitySegments: () =>
+    fetchData("/analytics/ml/member-amenity-segments"),
+
+  seasonalVisits: () => fetchData("/analytics/ml/seasonal-visits"),
+
+  amenityRevenue: () => fetchData("/analytics/ml/amenity-revenue"),
+
+  airportTransferUsers: (limit = 20) =>
+    fetchData(`/analytics/ml/airport-transfer-users?limit=${limit}`),
+
+  marketingTargets: () => fetchData("/analytics/ml/marketing-targets"),
+
+  marketingTargetsByCampaign: () =>
+    fetchData("/analytics/ml/marketing-targets-by-campaign"),
 };
