@@ -1,118 +1,545 @@
-import os
-import psycopg2
-import pandas as pd
-import numpy as np
+"""
+ml_insights.py
+--------------
+Builds and persists all ML-derived insight tables used by the analytics API.
 
+Tables written to PostgreSQL
+─────────────────────────────
+  member_segments        - one row per member: cluster, segment label, spend,
+                           visits, recency, favorite amenity, active/inactive,
+                           and campaign assignment.
+  member_amenity_usage   - per-member x per-amenity usage count + spend.
+  amenity_adoption       - how many distinct members used each amenity.
+  amenity_revenue        - total revenue + transaction count per amenity.
+  seasonal_visits        - aggregated visits + avg stay per calendar month.
+  airport_transfer_users - top members by ground-transport booking count.
+  marketing_targets      - member_number, segment_name, campaign (slim table
+                           for targeted marketing queries).
+
+Entry point
+───────────
+  Call  build_insights()  from a scheduler, pipeline, or CLI.
+  Each sub-function can also be called individually for incremental refreshes.
+  *****
+  To run in bash from your project root (DemoWrk/) run: python backend/machinelearning/ml_insights.py
+  To run in bash from the backend/ directory run: python machinelearning/ml_insights.py
+  
+"""
+
+import os
+import logging
+
+import numpy as np
+import pandas as pd
 from dotenv import load_dotenv
+from pathlib import Path
+from sqlalchemy import create_engine
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
-from sklearn.ensemble import IsolationForest
 
-load_dotenv()
+# ─────────────────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────────────────
 
-# ---------------------------
-# DB CONNECTION
-# ---------------------------
-conn = psycopg2.connect(
-    host=os.getenv("DB_HOST"),
-    port=os.getenv("DB_PORT"),
-    database=os.getenv("DB_NAME"),
-    user=os.getenv("DB_USER"),
-    password=os.getenv("DB_PASSWORD"),
+BASE_DIR = Path(__file__).resolve().parents[1]   # backend/
+load_dotenv(BASE_DIR / ".env")
+
+log = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)s  %(message)s",
+    datefmt="%H:%M:%S",
 )
 
-def query(sql):
-    return pd.read_sql(sql, conn)
+_engine = None
 
-print("\nLoading data... yes, this is the boring but important part.\n")
 
-# ---------------------------
-# LOAD CORE DATA
-# ---------------------------
-members = query("SELECT member_number, status, member_type FROM members")
-activity = query("SELECT member_number, amount FROM recent_activity WHERE amount IS NOT NULL")
-dependents = query("SELECT member_number FROM dependents")
+def get_engine():
+    """Lazily build the SQLAlchemy engine so import never raises."""
+    global _engine
+    if _engine is None:
+        required = ["DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT", "DB_NAME"]
+        missing = [k for k in required if not os.getenv(k)]
+        if missing:
+            raise EnvironmentError(f"Missing env vars: {missing}")
+        url = (
+            f"postgresql+psycopg2://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
+            f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+        )
+        _engine = create_engine(url)
+    return _engine
 
-# ---------------------------
-# FEATURE ENGINEERING
-# ---------------------------
 
-# Activity per member
-activity_agg = activity.groupby("member_number").agg(
-    tx_count=("amount", "count"),
-    total_spend=("amount", "sum"),
-    avg_spend=("amount", "mean"),
-).reset_index()
+def _query(sql: str) -> pd.DataFrame:
+    return pd.read_sql(sql, get_engine())
 
-# Dependent count per member
-dep_agg = dependents.groupby("member_number").size().reset_index(name="dep_count")
 
-# Merge everything
-df = members.merge(activity_agg, on="member_number", how="left")
-df = df.merge(dep_agg, on="member_number", how="left")
+def _save(df: pd.DataFrame, table: str) -> None:
+    df.to_sql(table, get_engine(), if_exists="replace", index=False)
+    log.info("Saved %s  (%d rows)", table, len(df))
 
-# Fill missing values
-df["tx_count"] = df["tx_count"].fillna(0)
-df["total_spend"] = df["total_spend"].fillna(0)
-df["avg_spend"] = df["avg_spend"].fillna(0)
-df["dep_count"] = df["dep_count"].fillna(0)
 
-print("\nBasic dataset built. Now we squeeze meaning out of it.\n")
+# ─────────────────────────────────────────────────────────
+# AMENITY CLASSIFICATION  (single canonical copy)
+# ─────────────────────────────────────────────────────────
 
-# ---------------------------
-# OUTLIER DETECTION (DEPENDENTS + SPENDING)
-# ---------------------------
-outlier_features = df[["tx_count", "total_spend", "dep_count"]]
+def classify_amenity(description: str) -> str:
+    """Map a free-text folio description to a named amenity bucket."""
+    if pd.isna(description):
+        return "Other"
 
-iso = IsolationForest(contamination=0.02, random_state=42)
-df["anomaly"] = iso.fit_predict(outlier_features)
+    desc = str(description).lower()
 
-anomalies = df[df["anomaly"] == -1]
+    if "spa" in desc or "massage" in desc or "facial" in desc:
+        return "Spa"
+    if "golf" in desc or "pro shop" in desc or "cart" in desc:
+        return "Golf"
+    if "grill" in desc:
+        return "Grill"
+    if "bar" in desc:
+        return "Bar"
+    if "restaurant" in desc or "dinner" in desc or "lunch" in desc or "breakfast" in desc:
+        return "Restaurant"
+    if "tennis" in desc:
+        return "Tennis"
+    if "boutique" in desc or "shop" in desc or "commissary" in desc:
+        return "Retail"
+    if "villa" in desc or "rental" in desc:
+        return "Villa Rental"
+    if "airport" in desc or "transfer" in desc or "transport" in desc:
+        return "Transportation"
+    if "membership" in desc or "dues" in desc or "fee" in desc:
+        return "Membership"
 
-print("\n--- ANOMALIES DETECTED ---")
-print(anomalies[["member_number", "tx_count", "total_spend", "dep_count"]].head(10))
+    return "Other"
 
-# ---------------------------
-# CLUSTERING (MEMBER SEGMENTS)
-# ---------------------------
-features = df[["tx_count", "total_spend", "dep_count"]]
 
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(features)
+# ─────────────────────────────────────────────────────────
+# DATA LOADERS
+# ─────────────────────────────────────────────────────────
 
-kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
-df["segment"] = kmeans.fit_predict(X_scaled)
+def _load_folios() -> pd.DataFrame:
+    df = _query("""
+        SELECT
+            COALESCE(member_number, main_member_number) AS member_id,
+            description,
+            amount,
+            transaction_date,
+            check_in_date,
+            check_out_date
+        FROM folios
+        WHERE COALESCE(member_number, main_member_number) IS NOT NULL
+    """)
+    df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0)
+    df["amenity"] = df["description"].apply(classify_amenity)
+    log.info("Loaded folios: %d rows", len(df))
+    return df
 
-print("\n--- SEGMENT DISTRIBUTION ---")
-print(df["segment"].value_counts())
 
-# ---------------------------
-# SEGMENT INTERPRETATION
-# ---------------------------
-summary = df.groupby("segment").agg({
-    "tx_count": "mean",
-    "total_spend": "mean",
-    "dep_count": "mean",
-    "member_number": "count"
-}).rename(columns={"member_number": "member_count"})
+def _load_rooms() -> pd.DataFrame:
+    df = _query("""
+        SELECT member_number, check_in_date, check_out_date
+        FROM rooms
+        WHERE check_in_date IS NOT NULL
+    """)
+    df["check_in_date"] = pd.to_datetime(df["check_in_date"], errors="coerce")
+    df["check_out_date"] = pd.to_datetime(df["check_out_date"], errors="coerce")
+    df["length_of_stay"] = (df["check_out_date"] - df["check_in_date"]).dt.days
+    log.info("Loaded rooms: %d rows", len(df))
+    return df
 
-print("\n--- SEGMENT PROFILES ---")
-print(summary)
 
-# ---------------------------
-# BASIC BUSINESS INSIGHTS
-# ---------------------------
-print("\n--- QUICK INSIGHTS ---")
+def _load_members() -> pd.DataFrame:
+    df = _query("""
+        SELECT member_number, status, member_type
+        FROM members
+    """)
+    log.info("Loaded members: %d rows", len(df))
+    return df
 
-inactive_rate = (df["status"].value_counts(normalize=True).get("Inactive", 0)) * 100
-print(f"Inactive rate: {inactive_rate:.2f}%")
 
-top_dependents = df.sort_values("dep_count", ascending=False).head(5)
-print("\nTop dependent-heavy members:")
-print(top_dependents[["member_number", "dep_count"]])
+# ─────────────────────────────────────────────────────────
+# 1. AMENITY USAGE PER MEMBER
+# ─────────────────────────────────────────────────────────
 
-top_spenders = df.sort_values("total_spend", ascending=False).head(5)
-print("\nTop spenders:")
-print(top_spenders[["member_number", "total_spend"]])
+def build_member_amenity_usage(folios: pd.DataFrame) -> pd.DataFrame:
+    """
+    How many times each member used each amenity and how much they spent.
+    Answers: "amenity use by user"
+    """
+    usage = (
+        folios
+        .groupby(["member_id", "amenity"])
+        .agg(
+            usage_count=("description", "count"),
+            total_spend=("amount", "sum"),
+        )
+        .reset_index()
+    )
+    _save(usage, "member_amenity_usage")
+    return usage
 
-print("\nDone. If this still looks messy, it’s not the code’s fault anymore.")
+
+# ─────────────────────────────────────────────────────────
+# 2. AMENITY ADOPTION  (distinct members per amenity)
+# ─────────────────────────────────────────────────────────
+
+def build_amenity_adoption(member_amenity_usage: pd.DataFrame) -> pd.DataFrame:
+    """
+    How many distinct members used each amenity at least once.
+    Answers: "how many members use each amenity"
+    """
+    adoption = (
+        member_amenity_usage
+        .groupby("amenity")
+        .agg(members_using=("member_id", "nunique"))
+        .reset_index()
+        .sort_values("members_using", ascending=False)
+    )
+    _save(adoption, "amenity_adoption")
+    return adoption
+
+
+# ─────────────────────────────────────────────────────────
+# 3. AMENITY REVENUE
+# ─────────────────────────────────────────────────────────
+
+def build_amenity_revenue(folios: pd.DataFrame) -> pd.DataFrame:
+    """
+    Total revenue and transaction count per amenity.
+    Answers: "total spend for amenities, which amenity making most money"
+    """
+    revenue = (
+        folios
+        .groupby("amenity")
+        .agg(
+            revenue=("amount", "sum"),
+            transactions=("amount", "count"),
+        )
+        .reset_index()
+        .sort_values("revenue", ascending=False)
+    )
+    _save(revenue, "amenity_revenue")
+    return revenue
+
+
+# ─────────────────────────────────────────────────────────
+# 4. SEASONAL VISITS
+# ─────────────────────────────────────────────────────────
+
+def build_seasonal_visits(rooms: pd.DataFrame) -> pd.DataFrame:
+    """
+    Aggregated check-in visits and average stay per calendar month.
+    Answers: "seasonal behavior using check in/out data"
+    """
+    seasonal = (
+        rooms
+        .dropna(subset=["check_in_date"])
+        .assign(month=lambda x: x["check_in_date"].dt.strftime("%Y-%m"))
+        .groupby("month")
+        .agg(
+            visits=("member_number", "count"),
+            avg_stay=("length_of_stay", "mean"),
+        )
+        .reset_index()
+        .sort_values("month")
+    )
+    seasonal["avg_stay"] = seasonal["avg_stay"].round(2)
+    _save(seasonal, "seasonal_visits")
+    return seasonal
+
+
+# ─────────────────────────────────────────────────────────
+# 5. AIRPORT TRANSFER TOP USERS
+# ─────────────────────────────────────────────────────────
+
+def build_airport_transfer_users(folios: pd.DataFrame) -> pd.DataFrame:
+    """
+    Members who book the most ground transportation, ranked by booking count.
+    Answers: "top airport transfer users"
+    """
+    transfers = (
+        folios[folios["amenity"] == "Transportation"]
+        .groupby("member_id")
+        .agg(
+            transfers=("amenity", "count"),
+            total_spend=("amount", "sum"),
+        )
+        .reset_index()
+        .sort_values("transfers", ascending=False)
+    )
+    _save(transfers, "airport_transfer_users")
+    return transfers
+
+
+# ─────────────────────────────────────────────────────────
+# 6. MEMBER SEGMENTS  (clustering + business labels)
+# ─────────────────────────────────────────────────────────
+
+def _build_feature_matrix(
+    members: pd.DataFrame,
+    rooms: pd.DataFrame,
+    folios: pd.DataFrame,
+    member_amenity_usage: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Build the per-member feature matrix used for clustering.
+
+    Features
+    ─────────
+    total_spend          - lifetime folio spend
+    avg_spend            - average transaction value
+    visit_count          - number of room stays
+    avg_stay             - average length of stay (nights)
+    days_since_last_visit- recency (9999 = never stayed)
+    amenity_diversity    - number of distinct amenity types used
+    <amenity>_visits     - visit count per amenity category (amenity mix)
+    """
+    # Visit / recency features from rooms
+    visit_features = (
+        rooms
+        .groupby("member_number")
+        .agg(
+            visit_count=("member_number", "count"),
+            avg_stay=("length_of_stay", "mean"),
+            last_visit=("check_out_date", "max"),
+        )
+        .reset_index()
+    )
+
+    # Spend features from folios
+    spend_features = (
+        folios
+        .groupby("member_id")
+        .agg(
+            total_spend=("amount", "sum"),
+            avg_spend=("amount", "mean"),
+        )
+        .reset_index()
+        .rename(columns={"member_id": "member_number"})
+    )
+
+    # Amenity diversity
+    amenity_diversity = (
+        folios
+        .groupby("member_id")
+        .agg(amenity_diversity=("amenity", "nunique"))
+        .reset_index()
+        .rename(columns={"member_id": "member_number"})
+    )
+
+    # Amenity-mix pivot (visit counts per category per member)
+    amenity_pivot = (
+        member_amenity_usage
+        .pivot_table(
+            index="member_id",
+            columns="amenity",
+            values="usage_count",
+            fill_value=0,
+        )
+        .reset_index()
+        .rename(columns={"member_id": "member_number"})
+    )
+    amenity_pivot.columns.name = None
+    amenity_cols = [c for c in amenity_pivot.columns if c != "member_number"]
+
+    # Favorite amenity (most-used category)
+    fav = (
+    member_amenity_usage.loc[
+        member_amenity_usage.groupby("member_id")["usage_count"].idxmax()
+    ][["member_id", "amenity"]]
+    .rename(columns={"amenity": "favorite_amenity"})
+    )
+
+    # Merge everything onto the members table
+    df = (
+        members
+        .merge(visit_features,   on="member_number", how="left")
+        .merge(spend_features,   on="member_number", how="left")
+        .merge(amenity_diversity, on="member_number", how="left")
+        .merge(amenity_pivot,    on="member_number", how="left")
+        .merge(fav,              on="member_number", how="left")
+    )
+
+    # Fill nulls
+    for col in ["visit_count", "avg_stay", "total_spend", "avg_spend", "amenity_diversity"] + amenity_cols:
+        df[col] = df.get(col, 0).fillna(0)
+
+    # Recency
+    today = pd.Timestamp.today().normalize()
+    df["days_since_last_visit"] = (today - df["last_visit"]).dt.days.fillna(9999)
+
+    # Active flag: visited in the last 365 days
+    df["is_active"] = df["days_since_last_visit"] <= 365
+
+    return df, amenity_cols
+
+
+def _assign_segment(row, p90_spend: float) -> str:
+    """
+    Priority-ordered business segment rules applied after clustering.
+
+    Segments
+    ────────
+    High Value Guest   - top 10 % by lifetime spend
+    At Risk            - no visit in > 365 days (inactive)
+    Corporate Traveler - transportation is their most-used amenity
+    Long Stay Guest    - avg stay ≥ 7 nights
+    Golf Enthusiast    - golf is their top amenity
+    Spa & Wellness     - spa is their top amenity
+    Regular Member     - everyone else
+    """
+    if row["total_spend"] >= p90_spend:
+        return "High Value Guest"
+    if not row["is_active"]:
+        return "At Risk"
+    if row.get("favorite_amenity") == "Transportation":
+        return "Corporate Traveler"
+    if row["avg_stay"] >= 7:
+        return "Long Stay Guest"
+    if row.get("favorite_amenity") == "Golf":
+        return "Golf Enthusiast"
+    if row.get("favorite_amenity") == "Spa":
+        return "Spa & Wellness"
+    return "Regular Member"
+
+
+def _assign_campaign(row) -> str:
+    """Map segment + favourite amenity to a targeted marketing action."""
+    seg = row["segment_name"]
+    fav = row.get("favorite_amenity", "")
+
+    if seg == "High Value Guest":
+        return "VIP Retention Campaign"
+    if seg == "At Risk":
+        return "Win-Back Campaign"
+    if seg == "Corporate Traveler":
+        return "Airport Transfer Package"
+    if seg == "Long Stay Guest":
+        return "Extended Stay Offer"
+    if seg == "Golf Enthusiast":
+        return "Golf Promotion"
+    if seg == "Spa & Wellness":
+        return "Spa Promotion"
+    if fav == "Restaurant" or fav == "Grill" or fav == "Bar":
+        return "Dining & Events Invite"
+    if fav == "Tennis":
+        return "Tennis Programme"
+    if fav == "Villa Rental":
+        return "Villa Exclusive Offer"
+    return "General Newsletter"
+
+
+def build_member_segments(
+    members: pd.DataFrame,
+    rooms: pd.DataFrame,
+    folios: pd.DataFrame,
+    member_amenity_usage: pd.DataFrame,
+    n_clusters: int = 5,
+) -> pd.DataFrame:
+    """
+    KMeans clustering on spending, visit frequency, recency and amenity mix.
+    Each cluster is then labelled with a business-readable segment name.
+    Answers: "customer segments … who's active/inactive, avg spend, stays"
+    """
+    feature_df, amenity_cols = _build_feature_matrix(members, rooms, folios, member_amenity_usage)
+
+    cluster_features = [
+        "total_spend",
+        "avg_spend",
+        "visit_count",
+        "avg_stay",
+        "days_since_last_visit",
+        "amenity_diversity",
+    ] + amenity_cols
+
+    X = feature_df[cluster_features].fillna(0)
+
+    if len(feature_df) >= n_clusters * 5:  # only cluster if we have enough members to form meaningful groups
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        feature_df["cluster_id"] = kmeans.fit_predict(X_scaled)
+    else:
+        feature_df["cluster_id"] = 0
+
+    p90_spend = feature_df["total_spend"].quantile(0.90)
+    feature_df["segment_name"] = feature_df.apply(
+        lambda r: _assign_segment(r, p90_spend), axis=1
+    )
+    feature_df["campaign"] = feature_df.apply(_assign_campaign, axis=1)
+
+    output_cols = [
+        "member_number",
+        "status",
+        "member_type",
+        "is_active",
+        "cluster_id",
+        "segment_name",
+        "total_spend",
+        "avg_spend",
+        "visit_count",
+        "avg_stay",
+        "days_since_last_visit",
+        "amenity_diversity",
+        "favorite_amenity",
+        "campaign",
+    ]
+    member_segments = feature_df[output_cols].copy()
+    member_segments["avg_stay"] = member_segments["avg_stay"].round(2)
+    member_segments["avg_spend"] = member_segments["avg_spend"].round(2)
+    member_segments["total_spend"] = member_segments["total_spend"].round(2)
+
+    _save(member_segments, "member_segments")
+    return member_segments
+
+
+# ─────────────────────────────────────────────────────────
+# 7. MARKETING TARGETS  (slim join table)
+# ─────────────────────────────────────────────────────────
+
+def build_marketing_targets(member_segments: pd.DataFrame) -> pd.DataFrame:
+    """
+    Slim table with just member_number, segment_name, and campaign.
+    Designed for quick targeted-marketing queries.
+    """
+    targets = member_segments[["member_number", "segment_name", "campaign"]].copy()
+    _save(targets, "marketing_targets")
+    return targets
+
+
+# ─────────────────────────────────────────────────────────
+# MAIN ENTRY POINT
+# ─────────────────────────────────────────────────────────
+
+def build_insights() -> None:
+    """
+    Run the full ML insight pipeline and write all tables to PostgreSQL.
+    Call this from the scheduler, pipeline.py, or directly via CLI.
+    """
+    log.info("=== ML Insights pipeline starting ===")
+
+    # Load raw data once
+    folios  = _load_folios()
+    rooms   = _load_rooms()
+    members = _load_members()
+
+    if folios.empty:
+        log.error("No folio data found - aborting insights pipeline.")
+        return
+
+    # Build derived tables (order matters — some feed into later steps)
+    member_amenity_usage = build_member_amenity_usage(folios)
+    build_amenity_adoption(member_amenity_usage)
+    build_amenity_revenue(folios)
+    build_seasonal_visits(rooms)
+    build_airport_transfer_users(folios)
+
+    member_segments = build_member_segments(members, rooms, folios, member_amenity_usage)
+    build_marketing_targets(member_segments)
+
+    log.info("=== ML Insights pipeline complete ===")
+
+
+if __name__ == "__main__":
+    build_insights()

@@ -490,3 +490,238 @@ def member_directory(db: Session = Depends(get_db)):
     """)).mappings().all()
 
     return [dict(row) for row in result]
+
+# ═══════════════════════════════════════════════════════════
+# ML INSIGHT ENDPOINTS - S.S
+# ═══════════════════════════════════════════════════════════
+# These read from tables that ml_insights.build_insights() writes.
+# The scheduler / pipeline should run build_insights() before these
+# endpoints are called.  All endpoints degrade gracefully (return [])
+# if the tables haven't been created yet.
+ 
+# ───────────────────────────────────────────────────────────
+# Customer Segments
+# ───────────────────────────────────────────────────────────
+ 
+@router.get("/ml/member-segments")
+def ml_member_segments(db: Session = Depends(get_db)):
+    """
+    Full per-member segment table.
+    Includes: cluster_id, segment_name, active/inactive flag, spend,
+    visits, avg stay, favourite amenity, and campaign assignment.
+    """
+    result = db.execute(text("""
+        SELECT
+            ms.member_number,
+            m.member_full_name,
+            ms.status,
+            ms.member_type,
+            ms.is_active,
+            ms.cluster_id,
+            ms.segment_name,
+            ms.total_spend,
+            ms.avg_spend,
+            ms.visit_count,
+            ms.avg_stay,
+            ms.days_since_last_visit,
+            ms.amenity_diversity,
+            ms.favorite_amenity,
+            ms.campaign
+        FROM member_segments ms
+        LEFT JOIN members m ON ms.member_number = m.member_number
+        ORDER BY ms.total_spend DESC NULLS LAST;
+    """)).mappings().all()
+    return [dict(row) for row in result]
+ 
+ 
+@router.get("/ml/segment-summary")
+def ml_segment_summary(db: Session = Depends(get_db)):
+    """
+    Aggregated count, average spend and average visits per segment.
+    Ideal for a summary chart or dashboard card.
+    """
+    result = db.execute(text("""
+        SELECT
+            segment_name,
+            COUNT(*)                        AS member_count,
+            ROUND(AVG(total_spend)::NUMERIC, 2)  AS avg_total_spend,
+            ROUND(AVG(visit_count)::NUMERIC, 2)  AS avg_visits,
+            ROUND(AVG(avg_stay)::NUMERIC, 2)     AS avg_stay_nights,
+            SUM(CASE WHEN is_active THEN 1 ELSE 0 END)  AS active_count,
+            SUM(CASE WHEN NOT is_active THEN 1 ELSE 0 END) AS inactive_count
+        FROM member_segments
+        GROUP BY segment_name
+        ORDER BY member_count DESC;
+    """)).mappings().all()
+    return [dict(row) for row in result]
+ 
+ 
+@router.get("/ml/cluster-summary")
+def ml_cluster_summary(db: Session = Depends(get_db)):
+    """
+    KMeans cluster breakdown — useful for exploring raw cluster behaviour.
+    """
+    result = db.execute(text("""
+        SELECT
+            cluster_id,
+            COUNT(*)                             AS member_count,
+            ROUND(AVG(total_spend)::NUMERIC, 2) AS avg_total_spend,
+            ROUND(AVG(visit_count)::NUMERIC, 2) AS avg_visits,
+            ROUND(AVG(avg_stay)::NUMERIC, 2)    AS avg_stay_nights,
+            MODE() WITHIN GROUP (ORDER BY favorite_amenity) AS dominant_amenity,
+            MODE() WITHIN GROUP (ORDER BY segment_name)     AS dominant_segment
+        FROM member_segments
+        GROUP BY cluster_id
+        ORDER BY cluster_id;
+    """)).mappings().all()
+    return [dict(row) for row in result]
+ 
+ 
+# ───────────────────────────────────────────────────────────
+# Amenity Usage / Adoption
+# ───────────────────────────────────────────────────────────
+ 
+@router.get("/ml/amenity-adoption")
+def ml_amenity_adoption(db: Session = Depends(get_db)):
+    """
+    How many distinct members used each amenity at least once.
+    """
+    result = db.execute(text("""
+        SELECT amenity, members_using
+        FROM amenity_adoption
+        ORDER BY members_using DESC;
+    """)).mappings().all()
+    return [dict(row) for row in result]
+ 
+ 
+@router.get("/ml/member-amenity-usage")
+def ml_member_amenity_usage(db: Session = Depends(get_db)):
+    """
+    Per-member × per-amenity usage count and spend.
+    Optionally filter by member_number via query param.
+    """
+    result = db.execute(text("""
+        SELECT
+            mau.member_id   AS member_number,
+            m.member_full_name,
+            mau.amenity,
+            mau.usage_count,
+            mau.total_spend
+        FROM member_amenity_usage mau
+        LEFT JOIN members m ON mau.member_id = m.member_number
+        ORDER BY mau.total_spend DESC;
+    """)).mappings().all()
+    return [dict(row) for row in result]
+ 
+ 
+# ───────────────────────────────────────────────────────────
+# Seasonal Behaviour
+# ───────────────────────────────────────────────────────────
+ 
+@router.get("/ml/seasonal-visits")
+def ml_seasonal_visits(db: Session = Depends(get_db)):
+    """
+    Aggregated check-in visits and average stay per calendar month
+    across all members.
+    """
+    result = db.execute(text("""
+        SELECT month, visits, avg_stay
+        FROM seasonal_visits
+        ORDER BY month;
+    """)).mappings().all()
+    return [dict(row) for row in result]
+ 
+ 
+# ───────────────────────────────────────────────────────────
+# Amenity Revenue
+# ───────────────────────────────────────────────────────────
+ 
+@router.get("/ml/amenity-revenue")
+def ml_amenity_revenue(db: Session = Depends(get_db)):
+    """
+    Total revenue and transaction count per amenity, ranked by revenue.
+    Answers: which amenity makes the most money.
+    """
+    result = db.execute(text("""
+        SELECT amenity, revenue, transactions
+        FROM amenity_revenue
+        ORDER BY revenue DESC;
+    """)).mappings().all()
+    return [
+        {
+            "amenity":      row["amenity"],
+            "revenue":      float(row["revenue"] or 0),
+            "transactions": int(row["transactions"] or 0),
+        }
+        for row in result
+    ]
+ 
+ 
+# ───────────────────────────────────────────────────────────
+# Airport / Ground Transfer Users
+# ───────────────────────────────────────────────────────────
+ 
+@router.get("/ml/airport-transfer-users")
+def ml_airport_transfer_users(db: Session = Depends(get_db), limit: int = 20):
+    """
+    Top members by ground-transportation booking count.
+    Default: top 20.  Pass ?limit=N to change.
+    """
+    result = db.execute(text("""
+        SELECT
+            atu.member_id  AS member_number,
+            m.member_full_name,
+            atu.transfers,
+            atu.total_spend
+        FROM airport_transfer_users atu
+        LEFT JOIN members m ON atu.member_id = m.member_number
+        ORDER BY atu.transfers DESC
+        LIMIT :limit;
+    """), {"limit": limit}).mappings().all()
+    return [
+        {
+            "member_number":    row["member_number"],
+            "member_full_name": row["member_full_name"],
+            "transfers":        int(row["transfers"] or 0),
+            "total_spend":      float(row["total_spend"] or 0),
+        }
+        for row in result
+    ]
+ 
+ 
+# ───────────────────────────────────────────────────────────
+# Targeted Marketing
+# ───────────────────────────────────────────────────────────
+ 
+@router.get("/ml/marketing-targets")
+def ml_marketing_targets(db: Session = Depends(get_db)):
+    """
+    Full marketing target list: member, segment, and assigned campaign.
+    """
+    result = db.execute(text("""
+        SELECT
+            mt.member_number,
+            m.member_full_name,
+            m.email,
+            mt.segment_name,
+            mt.campaign
+        FROM marketing_targets mt
+        LEFT JOIN members m ON mt.member_number = m.member_number
+        ORDER BY mt.segment_name, m.member_full_name;
+    """)).mappings().all()
+    return [dict(row) for row in result]
+ 
+ 
+@router.get("/ml/marketing-targets-by-campaign")
+def ml_marketing_targets_by_campaign(db: Session = Depends(get_db)):
+    """
+    Member count per campaign — useful for planning send volumes.
+    """
+    result = db.execute(text("""
+        SELECT campaign, COUNT(*) AS member_count
+        FROM marketing_targets
+        GROUP BY campaign
+        ORDER BY member_count DESC;
+    """)).mappings().all()
+    return [{"campaign": row["campaign"], "member_count": row["member_count"]} for row in result]
+ 
