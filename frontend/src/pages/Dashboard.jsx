@@ -24,10 +24,19 @@ import {
   MapPin,
   TrendingUp,
   Clock,
+  LayoutDashboard,
+  Users,
+  BookOpen,
+  ChevronRight,
 } from "lucide-react";
 
 import { analyticsApi } from "../api/analytics";
-import { styles, TOOLTIP_STYLE, COLORS } from "./dashboardStyles";
+import {
+  styles as baseStyles,
+  TOOLTIP_STYLE,
+  COLORS,
+  S,
+} from "./Dashboardstyles";
 import {
   StatCard,
   ChartCard,
@@ -35,22 +44,28 @@ import {
   PieLegendCard,
   RoomHighlightCard,
   DirectoryRow,
-} from "./DashboardComponents";
+} from "./Dashboardcomponents";
+import {
+  SeasonDetailPanel,
+  AmenityDetailPanel,
+  MarketingTargetsPanel,
+} from "./MlDetailPanel";
 
-const TAB_LABELS = {
-  overview: "Overview",
-  demographics: "Demographics",
-  visits: "Visits & Rooms",
-  finance: "Finance",
-  directory: "Directory",
-  ml: "ML Insights",
-};
+/* ─── Sidebar config ─────────────────────────────────────────── */
+const TABS = [
+  { id: "overview", label: "Overview", Icon: LayoutDashboard },
+  { id: "demographics", label: "Demographics", Icon: Users },
+  { id: "visits", label: "Visits & Rooms", Icon: BedDouble },
+  { id: "finance", label: "Finance", Icon: DollarSign },
+  { id: "directory", label: "Directory", Icon: BookOpen },
+  { id: "ml", label: "ML Insights", Icon: Sparkles },
+];
 
 /* ─── Main Dashboard ─────────────────────────────────────────── */
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("overview");
 
-  // Members
+  // ---------- all your existing state ----------
   const [membersByCountry, setMembersByCountry] = useState([]);
   const [membersByState, setMembersByState] = useState([]);
   const [membersByGender, setMembersByGender] = useState([]);
@@ -60,187 +75,96 @@ export default function Dashboard() {
   const [membersByMaritalStatus, setMembersByMaritalStatus] = useState([]);
   const [newMembersPerYear, setNewMembersPerYear] = useState([]);
   const [averageTenure, setAverageTenure] = useState(null);
-
-  // Bookings / rooms
   const [bookingsByRoomType, setBookingsByRoomType] = useState([]);
   const [bookingsByMonth, setBookingsByMonth] = useState([]);
   const [averageLengthOfStay, setAverageLengthOfStay] = useState(null);
   const [mostUsedRoomTypes, setMostUsedRoomTypes] = useState([]);
   const [leastUsedRoomTypes, setLeastUsedRoomTypes] = useState([]);
-
-  // Live
   const [liveInHouseCount, setLiveInHouseCount] = useState(null);
   const [liveInHouseRoster, setLiveInHouseRoster] = useState([]);
-
-  // Spend
   const [spendByMonth, setSpendByMonth] = useState([]);
   const [totalRecentActivitySpend, setTotalRecentActivitySpend] =
     useState(null);
   const [topSpendDescriptions, setTopSpendDescriptions] = useState([]);
-
-  // Finance
   const [totalAmountDue, setTotalAmountDue] = useState(null);
   const [amountDueByPeriod, setAmountDueByPeriod] = useState([]);
-
-  // Dependents
   const [totalDependents, setTotalDependents] = useState(null);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
   const [dependentsPerMember, setDependentsPerMember] = useState([]);
-
-  // Directory
   const [directoryMembers, setDirectoryMembers] = useState([]);
   const [directorySearch, setDirectorySearch] = useState("");
 
-  // ML / Segmentation
-
-  const [memberSegments, setMemberSegments] = useState([]);
-  const [segmentSummary, setSegmentSummary] = useState([]);
-  const [amenityAdoption, setAmenityAdoption] = useState([]);
-  const [seasonalVisits, setSeasonalVisits] = useState([]);
-  const [amenityRevenue, setAmenityRevenue] = useState([]);
-  const [airportTransferUsers, setAirportTransferUsers] = useState([]);
+  // ML Insights now loads from one master backend response, only when the ML tab opens.
+  const [mlInsights, setMlInsights] = useState(null);
+  const [mlLoading, setMlLoading] = useState(false);
+  const [mlError, setMlError] = useState(null);
   const [mlSearch, setMlSearch] = useState("");
-  const [memberAmenityUsage, setMemberAmenityUsage] = useState([]);
+  const [seasonDetail, setSeasonDetail] = useState(null);
+  const [seasonDetailRows, setSeasonDetailRows] = useState([]);
+  const [amenityDetail, setAmenityDetail] = useState(null);
+  const [showEmailModal, setShowEmailModal] = useState(false);
 
   useEffect(() => {
-    analyticsApi
-      .membersByCountry()
-      .then(setMembersByCountry)
-      .catch(() => {});
-    analyticsApi
-      .membersByState()
-      .then(setMembersByState)
-      .catch(() => {});
-    analyticsApi
-      .membersByGender()
-      .then(setMembersByGender)
-      .catch(() => {});
-    analyticsApi
-      .membersByAgeGroup()
-      .then(setMembersByAgeGroup)
-      .catch(() => {});
-    analyticsApi
-      .membersByType()
-      .then(setMembersByType)
-      .catch(() => {});
-    analyticsApi
-      .membersByStatus()
-      .then(setMembersByStatus)
-      .catch(() => {});
-    analyticsApi
-      .membersByMaritalStatus()
-      .then(setMembersByMaritalStatus)
-      .catch(() => {});
-    analyticsApi
-      .newMembersPerYear()
-      .then(setNewMembersPerYear)
-      .catch(() => {});
-    analyticsApi
-      .averageTenure()
-      .then(setAverageTenure)
-      .catch(() => {});
-
-    analyticsApi
-      .bookingsByRoomType()
-      .then(setBookingsByRoomType)
-      .catch(() => {});
-    analyticsApi
-      .bookingsByMonth()
-      .then(setBookingsByMonth)
-      .catch(() => {});
-    analyticsApi
-      .averageLengthOfStay()
-      .then(setAverageLengthOfStay)
-      .catch(() => {});
-    analyticsApi
-      .mostUsedRoomTypes()
-      .then(setMostUsedRoomTypes)
-      .catch(() => {});
-    analyticsApi
-      .leastUsedRoomTypes()
-      .then(setLeastUsedRoomTypes)
-      .catch(() => {});
-
-    analyticsApi
-      .liveInHouseCount()
-      .then(setLiveInHouseCount)
-      .catch(() => {});
-    analyticsApi
-      .liveInHouseRoster()
-      .then(setLiveInHouseRoster)
-      .catch(() => {});
-
-    analyticsApi
-      .spendByMonth()
-      .then(setSpendByMonth)
-      .catch(() => {});
-    analyticsApi
-      .totalRecentActivitySpend()
-      .then(setTotalRecentActivitySpend)
-      .catch(() => {});
-    analyticsApi
-      .topSpendDescriptions()
-      .then(setTopSpendDescriptions)
-      .catch(() => {});
-
-    analyticsApi
-      .totalAmountDue()
-      .then(setTotalAmountDue)
-      .catch(() => {});
-    analyticsApi
-      .amountDueByPeriod()
-      .then(setAmountDueByPeriod)
-      .catch(() => {});
-
-    analyticsApi
-      .totalDependents()
-      .then(setTotalDependents)
-      .catch(() => {});
-    analyticsApi
-      .dependentsByAgeGroup()
-      .then(setDependentsByAgeGroup)
-      .catch(() => {});
-    analyticsApi
-      .dependentsPerMember()
-      .then(setDependentsPerMember)
-      .catch(() => {});
-
-    analyticsApi
-      .memberDirectory()
-      .then(setDirectoryMembers)
-      .catch(() => {});
-
-    analyticsApi
-      .memberSegments()
-      .then(setMemberSegments)
-      .catch(() => {});
-    analyticsApi
-      .segmentSummary()
-      .then(setSegmentSummary)
-      .catch(() => {});
-    analyticsApi
-      .amenityAdoption()
-      .then(setAmenityAdoption)
-      .catch(() => {});
-    analyticsApi
-      .seasonalVisits()
-      .then(setSeasonalVisits)
-      .catch(() => {});
-    analyticsApi
-      .amenityRevenue()
-      .then(setAmenityRevenue)
-      .catch(() => {});
-    analyticsApi
-      .airportTransferUsers()
-      .then(setAirportTransferUsers)
-      .catch(() => {});
-    analyticsApi
-      .memberAmenityUsage()
-      .then(setMemberAmenityUsage)
-      .catch(() => {});
+    const safe = (fn, set) =>
+      fn()
+        .then(set)
+        .catch(() => {});
+    safe(analyticsApi.membersByCountry, setMembersByCountry);
+    safe(analyticsApi.membersByState, setMembersByState);
+    safe(analyticsApi.membersByGender, setMembersByGender);
+    safe(analyticsApi.membersByAgeGroup, setMembersByAgeGroup);
+    safe(analyticsApi.membersByType, setMembersByType);
+    safe(analyticsApi.membersByStatus, setMembersByStatus);
+    safe(analyticsApi.membersByMaritalStatus, setMembersByMaritalStatus);
+    safe(analyticsApi.newMembersPerYear, setNewMembersPerYear);
+    safe(analyticsApi.averageTenure, setAverageTenure);
+    safe(analyticsApi.bookingsByRoomType, setBookingsByRoomType);
+    safe(analyticsApi.bookingsByMonth, setBookingsByMonth);
+    safe(analyticsApi.averageLengthOfStay, setAverageLengthOfStay);
+    safe(analyticsApi.mostUsedRoomTypes, setMostUsedRoomTypes);
+    safe(analyticsApi.leastUsedRoomTypes, setLeastUsedRoomTypes);
+    safe(analyticsApi.liveInHouseCount, setLiveInHouseCount);
+    safe(analyticsApi.liveInHouseRoster, setLiveInHouseRoster);
+    safe(analyticsApi.spendByMonth, setSpendByMonth);
+    safe(analyticsApi.totalRecentActivitySpend, setTotalRecentActivitySpend);
+    safe(analyticsApi.topSpendDescriptions, setTopSpendDescriptions);
+    safe(analyticsApi.totalAmountDue, setTotalAmountDue);
+    safe(analyticsApi.amountDueByPeriod, setAmountDueByPeriod);
+    safe(analyticsApi.totalDependents, setTotalDependents);
+    safe(analyticsApi.dependentsByAgeGroup, setDependentsByAgeGroup);
+    safe(analyticsApi.dependentsPerMember, setDependentsPerMember);
+    safe(analyticsApi.memberDirectory, setDirectoryMembers);
   }, []);
 
+  useEffect(() => {
+    if (activeTab !== "ml" || mlInsights || mlLoading) return;
+
+    setMlLoading(true);
+    setMlError(null);
+
+    analyticsApi
+      .mlInsights()
+      .then(setMlInsights)
+      .catch((error) => {
+        console.error("Failed to load ML insights", error);
+        setMlError("Unable to load ML insights right now.");
+      })
+      .finally(() => setMlLoading(false));
+  }, [activeTab, mlInsights, mlLoading]);
+
+  // ---------- derived values (identical to original) ----------
   const totalMembers = membersByType.reduce((a, b) => a + (b.total || 0), 0);
+
+  const memberSegments = mlInsights?.memberSegments ?? [];
+  const segmentSummary = mlInsights?.segmentSummary ?? [];
+  const amenityAdoption = mlInsights?.amenityAdoption ?? [];
+  const amenitySegments = mlInsights?.amenitySegments ?? [];
+  const seasonalVisits = mlInsights?.seasonalVisits ?? [];
+  const amenityRevenue = mlInsights?.amenityRevenue ?? [];
+  const airportTransferUsers = mlInsights?.airportTransferUsers ?? [];
+  const memberAmenityUsage = mlInsights?.memberAmenityUsage ?? [];
+  const marketingTargetsByCampaign =
+    mlInsights?.marketingTargetsByCampaign ?? [];
 
   const filteredDirectory = directoryMembers.filter((m) => {
     const q = directorySearch.toLowerCase();
@@ -261,7 +185,6 @@ export default function Dashboard() {
   const selectedMlMember = memberSegments.find((m) => {
     const q = mlSearch.toLowerCase();
     if (!q) return false;
-
     return [
       m.member_full_name,
       m.member_number,
@@ -280,13 +203,9 @@ export default function Dashboard() {
         .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0))
     : [];
 
-  const topAmenity = selectedMemberAmenityUsage[0];
-
   const seasonOrder = ["Winter", "Spring", "Summer", "Autumn"];
-
   const getSeason = (monthValue) => {
     const month = Number(String(monthValue).split("-")[1]);
-
     if ([1, 2, 3].includes(month)) return "Spring";
     if ([4, 5, 6, 7].includes(month)) return "Summer";
     if ([8].includes(month)) return "Late Summer";
@@ -297,20 +216,11 @@ export default function Dashboard() {
   const seasonalBySeason = Object.values(
     seasonalVisits.reduce((acc, row) => {
       const season = getSeason(row.month);
-
-      if (!acc[season]) {
-        acc[season] = {
-          season,
-          visits: 0,
-          totalStay: 0,
-          months: 0,
-        };
-      }
-
+      if (!acc[season])
+        acc[season] = { season, visits: 0, totalStay: 0, months: 0 };
       acc[season].visits += Number(row.visits ?? 0);
       acc[season].totalStay += Number(row.avg_stay ?? 0);
       acc[season].months += 1;
-
       return acc;
     }, {}),
   )
@@ -340,11 +250,31 @@ export default function Dashboard() {
   }));
 
   const amenityAdoptionReadable = amenityAdoption
-    .map((a) => ({
-      ...a,
-      adoption_score: Number(a.members_using ?? 0),
-    }))
+    .map((a) => ({ ...a, adoption_score: Number(a.members_using ?? 0) }))
     .sort((a, b) => b.adoption_score - a.adoption_score);
+
+  const amenitySegmentsReadable = amenitySegments
+    .map((row) => ({
+      ...row,
+      segment_label:
+        row.amenity_segment ??
+        row.segment_name ??
+        row.amenity_segment_name ??
+        row.cluster_name ??
+        "Unassigned",
+      member_count_value: Number(row.member_count ?? row.members ?? 0),
+      total_amenity_visits_value: Number(
+        row.total_amenity_visits ?? row.amenity_visits ?? row.total_visits ?? 0,
+      ),
+      total_spend_value: Number(
+        row.total_spend ?? row.total_amenity_spend ?? row.amenity_spend ?? 0,
+      ),
+    }))
+    .sort(
+      (a, b) =>
+        Number(b.total_amenity_visits_value ?? 0) -
+        Number(a.total_amenity_visits_value ?? 0),
+    );
 
   const airportTransferReadable = airportTransferUsers
     .map((m) => ({
@@ -356,26 +286,50 @@ export default function Dashboard() {
     }))
     .sort((a, b) => Number(b.transfers ?? 0) - Number(a.transfers ?? 0));
 
-  return (
-    <div style={styles.root}>
-      <main style={styles.main}>
-        {/* ── Tab nav ── */}
-        <div style={styles.tabRow}>
-          {Object.keys(TAB_LABELS).map((t) => (
-            <button
-              key={t}
-              onClick={() => setActiveTab(t)}
-              style={{
-                ...styles.tab,
-                ...(activeTab === t ? styles.tabActive : styles.tabInactive),
-              }}
-            >
-              {TAB_LABELS[t]}
-            </button>
-          ))}
-        </div>
+  const activeTabInfo = TABS.find((t) => t.id === activeTab);
 
-        {/* ════════════════════ OVERVIEW ════════════════════ */}
+  /* ── use the original styles for inner content ── */
+  const styles = baseStyles;
+
+  return (
+    <div style={S.shell}>
+      {/* ── Vertical Sidebar ── */}
+      <aside style={S.sidebar}>
+        <nav>
+          {TABS.map(({ id, label, Icon }) => {
+            const active = activeTab === id;
+            return (
+              <div
+                key={id}
+                style={S.navItem(active)}
+                onClick={() => setActiveTab(id)}
+              >
+                <Icon size={16} style={S.navIcon(active)} />
+                <span style={S.navLabel(active)}>{label}</span>
+              </div>
+            );
+          })}
+        </nav>
+      </aside>
+
+      {/* ── Main content ── */}
+      <main style={S.content}>
+        <p style={S.pageTitle}>{activeTabInfo?.label}</p>
+        <p style={S.pageSub}>
+          {activeTab === "overview" &&
+            "High-level member, booking and spend summary"}
+          {activeTab === "demographics" &&
+            "Age, gender, location and household data"}
+          {activeTab === "visits" &&
+            "Room performance, booking trends and live roster"}
+          {activeTab === "finance" &&
+            "Outstanding balances and spend breakdown"}
+          {activeTab === "directory" && "Searchable member and guest records"}
+          {activeTab === "ml" &&
+            "Segmentation, amenity insights and campaign recommendations"}
+        </p>
+
+        {/* ════════ OVERVIEW ════════ */}
         {activeTab === "overview" && (
           <div style={styles.tabContent}>
             <div style={styles.statsGrid}>
@@ -520,7 +474,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ════════════════════ DEMOGRAPHICS ════════════════════ */}
+        {/* ════════ DEMOGRAPHICS ════════ */}
         {activeTab === "demographics" && (
           <div style={styles.tabContent}>
             <SectionLabel>Age / Gender / Status</SectionLabel>
@@ -690,7 +644,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ════════════════════ VISITS & ROOMS ════════════════════ */}
+        {/* ════════ VISITS & ROOMS ════════ */}
         {activeTab === "visits" && (
           <div style={styles.tabContent}>
             <div style={styles.statsGrid}>
@@ -848,7 +802,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ════════════════════ FINANCE ════════════════════ */}
+        {/* ════════ FINANCE ════════ */}
         {activeTab === "finance" && (
           <div style={styles.tabContent}>
             <div style={styles.statsGrid}>
@@ -1005,7 +959,7 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ════════════════════ DIRECTORY ════════════════════ */}
+        {/* ════════ DIRECTORY ════════ */}
         {activeTab === "directory" && (
           <div style={styles.tabContent}>
             <div style={styles.card}>
@@ -1057,7 +1011,6 @@ export default function Dashboard() {
                   />
                 </div>
               </div>
-
               <div
                 style={{
                   overflowX: "auto",
@@ -1126,80 +1079,236 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ════════════════════ ML INSIGHTS ════════════════════ */}
+        {/* ════════ ML INSIGHTS ════════ */}
         {activeTab === "ml" && (
           <div style={styles.tabContent}>
-            <SectionLabel>Customer Segments</SectionLabel>
+            {/* ── Season detail slide-over ── */}
+            {seasonDetail && (
+              <SeasonDetailPanel
+                season={seasonDetail}
+                rows={seasonDetailRows}
+                memberAmenityUsage={memberAmenityUsage}
+                onClose={() => {
+                  setSeasonDetail(null);
+                  setSeasonDetailRows([]);
+                }}
+              />
+            )}
 
-            <div style={styles.chartsGrid}>
-              <ChartCard
-                title="Segment size"
-                description="How many members fall into each ML-generated segment"
-                span3
+            {/* ── Amenity detail slide-over ── */}
+            {amenityDetail && (
+              <AmenityDetailPanel
+                amenity={amenityDetail}
+                memberAmenityUsage={memberAmenityUsage}
+                memberSegments={memberSegments}
+                onClose={() => setAmenityDetail(null)}
+              />
+            )}
+
+            {/* ── Email promotion modal placeholder ── */}
+            {showEmailModal && (
+              <div
+                style={{
+                  position: "fixed",
+                  inset: 0,
+                  background: "rgba(30,18,10,0.55)",
+                  zIndex: 2000,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                onClick={() => setShowEmailModal(false)}
               >
-                <ResponsiveContainer>
-                  <BarChart data={segmentSummary}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
-                    <XAxis
-                      dataKey="segment_name"
-                      stroke="#A08070"
-                      fontSize={11}
-                    />
-                    <YAxis stroke="#A08070" fontSize={11} />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
-                    <Bar
-                      dataKey="member_count"
-                      fill="#C8976E"
-                      radius={[6, 6, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartCard>
-            </div>
+                <div
+                  style={{
+                    background: "#FDFAF6",
+                    borderRadius: 14,
+                    padding: "32px 36px",
+                    width: "min(480px,90vw)",
+                    boxShadow: "0 8px 40px rgba(0,0,0,0.18)",
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <p
+                    style={{
+                      margin: "0 0 8px",
+                      fontSize: 17,
+                      fontWeight: 700,
+                      color: "#3D2B1F",
+                      fontFamily: "sans-serif",
+                    }}
+                  >
+                    Add Email Promotion
+                  </p>
+                  <p
+                    style={{
+                      margin: "0 0 20px",
+                      fontSize: 12,
+                      color: "#A08070",
+                      fontFamily: "sans-serif",
+                    }}
+                  >
+                    This feature is coming soon. You'll be able to compose and
+                    schedule targeted campaigns from here.
+                  </p>
+                  <button
+                    style={{
+                      padding: "9px 20px",
+                      borderRadius: 8,
+                      border: "none",
+                      background: "#C8976E",
+                      color: "#fff",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      fontFamily: "sans-serif",
+                      cursor: "pointer",
+                    }}
+                    onClick={() => setShowEmailModal(false)}
+                  >
+                    Got it
+                  </button>
+                </div>
+              </div>
+            )}
 
-            <div style={styles.statsGrid}>
-              {segmentSummary.map((s, i) => (
-                <div key={s.segment_name ?? i} style={styles.statCard}>
-                  <div>
-                    <p style={styles.statLabel}>SEGMENT {i + 1}</p>
+            {/* ════ Customer Segments ════ */}
+            <SectionLabel>Customer Segments</SectionLabel>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+                gap: 14,
+                marginBottom: 28,
+              }}
+            >
+              {segmentSummary.map((s, i) => {
+                const SEGMENT_COLORS = [
+                  "#C8976E",
+                  "#5B9EAD",
+                  "#C4A24D",
+                  "#7B5EA7",
+                  "#2D8A5F",
+                  "#C45B5B",
+                ];
+                const color = SEGMENT_COLORS[i % SEGMENT_COLORS.length];
+                return (
+                  <div
+                    key={s.segment_name ?? i}
+                    style={{
+                      background: "#FDFAF6",
+                      border: `1px solid #EDE5D8`,
+                      borderTop: `3px solid ${color}`,
+                      borderRadius: 12,
+                      padding: "16px 18px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                    }}
+                  >
                     <p
                       style={{
-                        margin: "4px 0",
+                        margin: 0,
+                        fontSize: 10,
                         fontWeight: 700,
-                        color: "#3D2B1F",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.09em",
+                        color,
+                        fontFamily: "sans-serif",
                       }}
                     >
-                      {s.segment_name ?? "Unnamed Segment"}
+                      Segment {i + 1}
                     </p>
-                    <p style={styles.statValue}>{s.member_count ?? 0}</p>
-                    <p style={styles.statHint}>members</p>
-                    <p style={styles.statHint}>
-                      Avg. spend $
-                      {Number(s.avg_total_spend ?? 0).toLocaleString()}
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: 14,
+                        fontWeight: 700,
+                        color: "#3D2B1F",
+                        fontFamily: "sans-serif",
+                        lineHeight: 1.3,
+                      }}
+                    >
+                      {s.segment_name ?? "Unnamed"}
                     </p>
-                    <p style={styles.statHint}>
-                      Avg. visits {Number(s.avg_visits ?? 0).toFixed(1)}
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: 26,
+                        fontWeight: 700,
+                        color: "#3D2B1F",
+                        fontFamily: "sans-serif",
+                        lineHeight: 1,
+                      }}
+                    >
+                      {s.member_count ?? 0}
                     </p>
-                    <p style={styles.statHint}>
-                      Active {s.active_count ?? 0} · Inactive{" "}
-                      {s.inactive_count ?? 0}
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: 11,
+                        color: "#A08070",
+                        fontFamily: "sans-serif",
+                      }}
+                    >
+                      members
                     </p>
+                    <div
+                      style={{
+                        height: 1,
+                        background: "#EDE5D8",
+                        margin: "4px 0",
+                      }}
+                    />
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 3,
+                      }}
+                    >
+                      <p
+                        style={{
+                          margin: 0,
+                          fontSize: 11,
+                          color: "#5A3E2B",
+                          fontFamily: "sans-serif",
+                        }}
+                      >
+                        Avg spend{" "}
+                        <strong>
+                          ${Number(s.avg_total_spend ?? 0).toLocaleString()}
+                        </strong>
+                      </p>
+                      <p
+                        style={{
+                          margin: 0,
+                          fontSize: 11,
+                          color: "#5A3E2B",
+                          fontFamily: "sans-serif",
+                        }}
+                      >
+                        Avg visits{" "}
+                        <strong>{Number(s.avg_visits ?? 0).toFixed(1)}</strong>
+                      </p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
+            {/* ════ Member Lookup ════ */}
             <SectionLabel>Member Lookup</SectionLabel>
-
             <div style={styles.card}>
-              <div style={styles.cardHeader}>
-                <p style={styles.cardTitle}>Member lookup</p>
-                <p style={styles.cardDesc}>
-                  Search a member to see spend, visits, segment, activity
-                  status, and campaign
-                </p>
+              <div
+                style={{
+                  ...styles.cardHeader,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <p style={{ ...styles.cardTitle, margin: 0 }}>Member lookup</p>
               </div>
-
               <input
                 value={mlSearch}
                 onChange={(e) => setMlSearch(e.target.value)}
@@ -1210,79 +1319,93 @@ export default function Dashboard() {
                   marginBottom: 20,
                 }}
               />
-
               {!selectedMlMember ? (
                 <p style={styles.cardDesc}>
                   Start typing a member's name to see their personalized
                   profile.
                 </p>
               ) : (
-                <div style={styles.statsGrid}>
-                  <StatCard
-                    icon={UserCheck}
-                    label="Member"
-                    value={
-                      selectedMlMember.member_full_name ??
-                      selectedMlMember.member_number
-                    }
-                    hint={selectedMlMember.member_type}
-                  />
-
-                  <StatCard
-                    icon={Sparkles}
-                    label="Segment"
-                    value={selectedMlMember.segment_name ?? "—"}
-                    hint={
-                      selectedMlMember.is_active
-                        ? "Active member"
-                        : "Inactive / at-risk"
-                    }
-                  />
-
-                  <StatCard
-                    icon={DollarSign}
-                    label="Total Spend"
-                    value={`$${Number(selectedMlMember.total_spend ?? 0).toLocaleString()}`}
-                    hint={`Avg. spend $${Number(selectedMlMember.avg_spend ?? 0).toLocaleString()}`}
-                  />
-
-                  <StatCard
-                    icon={BedDouble}
-                    label="Visits"
-                    value={selectedMlMember.visit_count ?? 0}
-                    hint={`Avg. stay ${Number(selectedMlMember.avg_stay ?? 0).toFixed(1)} nights`}
-                  />
-
-                  <StatCard
-                    icon={Clock}
-                    label="Recency"
-                    value={
-                      selectedMlMember.days_since_last_visit != null
-                        ? `${selectedMlMember.days_since_last_visit} days`
-                        : "—"
-                    }
-                    hint="Since last visit"
-                  />
-
-                  <StatCard
-                    icon={TrendingUp}
-                    label="Campaign"
-                    value={selectedMlMember.campaign ?? "—"}
-                    hint="Recommended marketing action"
-                  />
-                </div>
+                (() => {
+                  const favAmenity = selectedMemberAmenityUsage[0];
+                  return (
+                    <div style={styles.statsGrid}>
+                      <StatCard
+                        icon={UserCheck}
+                        label="Member"
+                        value={
+                          selectedMlMember.member_full_name ??
+                          selectedMlMember.member_number
+                        }
+                        hint={selectedMlMember.member_type}
+                      />
+                      <StatCard
+                        icon={Sparkles}
+                        label="Segment"
+                        value={selectedMlMember.segment_name ?? "—"}
+                        hint={
+                          selectedMlMember.is_active
+                            ? "Active member"
+                            : "Inactive / at-risk"
+                        }
+                      />
+                      <StatCard
+                        icon={DollarSign}
+                        label="Total Spend"
+                        value={`$${Number(selectedMlMember.total_spend ?? 0).toLocaleString()}`}
+                        hint={`Avg. spend $${Number(selectedMlMember.avg_spend ?? 0).toLocaleString()}`}
+                      />
+                      <StatCard
+                        icon={BedDouble}
+                        label="Visits"
+                        value={selectedMlMember.visit_count ?? 0}
+                        hint={`Avg. stay ${Number(selectedMlMember.avg_stay ?? 0).toFixed(1)} nights`}
+                      />
+                      <StatCard
+                        icon={Clock}
+                        label="Recency"
+                        value={
+                          selectedMlMember.days_since_last_visit != null
+                            ? `${selectedMlMember.days_since_last_visit} days`
+                            : "—"
+                        }
+                        hint="Since last visit"
+                      />
+                      <StatCard
+                        icon={TrendingUp}
+                        label="Campaign"
+                        value={selectedMlMember.campaign ?? "—"}
+                        hint="Recommended marketing action"
+                      />
+                      <StatCard
+                        icon={Sparkles}
+                        label="Favourite Amenity"
+                        value={favAmenity?.amenity ?? "—"}
+                        hint={
+                          favAmenity
+                            ? `${favAmenity.usage_count} uses · $${Number(favAmenity.total_spend ?? 0).toLocaleString()} spent`
+                            : "No amenity data"
+                        }
+                      />
+                    </div>
+                  );
+                })()
               )}
             </div>
 
+            {/* ════ General ML Insights ════ */}
             <SectionLabel>General ML Insights</SectionLabel>
 
+            {/* Row 1: Seasonal + Segment value */}
             <div style={styles.chartsGrid}>
               <ChartCard
                 title="Seasonal demand"
-                description="Which season brings the most member visits"
+                description="Click a bar to drill into who visits each season"
               >
                 <ResponsiveContainer>
-                  <BarChart data={seasonalBySeason}>
+                  <BarChart
+                    data={seasonalBySeason}
+                    style={{ cursor: "pointer" }}
+                  >
                     <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
                     <XAxis dataKey="season" stroke="#A08070" fontSize={11} />
                     <YAxis stroke="#A08070" fontSize={11} />
@@ -1291,39 +1414,17 @@ export default function Dashboard() {
                       dataKey="visits"
                       fill="#C8976E"
                       radius={[6, 6, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartCard>
-
-              <ChartCard
-                title="Amenity spend ranking"
-                description="Clear ranking of where members spend the most money"
-              >
-                <ResponsiveContainer>
-                  <BarChart
-                    data={amenityRevenueReadable}
-                    layout="vertical"
-                    margin={{ left: 20 }}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke="#E8DDD0"
-                      horizontal={false}
-                    />
-                    <XAxis type="number" stroke="#A08070" fontSize={11} />
-                    <YAxis
-                      type="category"
-                      dataKey="amenity"
-                      stroke="#A08070"
-                      fontSize={11}
-                      width={110}
-                    />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
-                    <Bar
-                      dataKey="revenue"
-                      fill="#D4AF2A"
-                      radius={[0, 6, 6, 0]}
+                      cursor="pointer"
+                      onClick={(data) => {
+                        if (!data?.season) return;
+                        analyticsApi
+                          .seasonalVisitDetails(data.season)
+                          .then((rows) => {
+                            setSeasonDetailRows(rows);
+                            setSeasonDetail(data.season);
+                          })
+                          .catch(() => {});
+                      }}
                     />
                   </BarChart>
                 </ResponsiveContainer>
@@ -1331,7 +1432,7 @@ export default function Dashboard() {
 
               <ChartCard
                 title="Customer segment value"
-                description="Average spend compared with segment size"
+                description="Average spend per segment"
               >
                 <ResponsiveContainer>
                   <BarChart data={segmentScatterData}>
@@ -1351,74 +1452,169 @@ export default function Dashboard() {
                   </BarChart>
                 </ResponsiveContainer>
               </ChartCard>
-
-              <ChartCard
-                title="Amenity adoption"
-                description="Which amenities are used by the most members"
-              >
-                <ResponsiveContainer>
-                  <BarChart
-                    data={amenityAdoptionReadable}
-                    layout="vertical"
-                    margin={{ left: 20 }}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke="#E8DDD0"
-                      horizontal={false}
-                    />
-                    <XAxis type="number" stroke="#A08070" fontSize={11} />
-                    <YAxis
-                      type="category"
-                      dataKey="amenity"
-                      stroke="#A08070"
-                      fontSize={11}
-                      width={110}
-                    />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
-                    <Bar
-                      dataKey="members_using"
-                      fill="#5B9EAD"
-                      radius={[0, 6, 6, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartCard>
-
-              <ChartCard
-                title="Airport transfer power users"
-                description="Members ranked by transfer bookings"
-                span2
-              >
-                <ResponsiveContainer>
-                  <BarChart
-                    data={airportTransferReadable}
-                    layout="vertical"
-                    margin={{ left: 20 }}
-                  >
-                    <CartesianGrid
-                      strokeDasharray="3 3"
-                      stroke="#E8DDD0"
-                      horizontal={false}
-                    />
-                    <XAxis type="number" stroke="#A08070" fontSize={11} />
-                    <YAxis
-                      type="category"
-                      dataKey="member_full_name"
-                      stroke="#A08070"
-                      fontSize={11}
-                      width={150}
-                    />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
-                    <Bar
-                      dataKey="transfers"
-                      fill="#8B6B4A"
-                      radius={[0, 6, 6, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartCard>
             </div>
+
+            {/* Row 2: Amenity adoption + Amenity spend — side by side, full label height */}
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 16,
+                marginBottom: 20,
+              }}
+            >
+              {/* Amenity adoption */}
+              <div
+                style={{
+                  background: "#FDFAF6",
+                  border: "1px solid #EDE5D8",
+                  borderRadius: 14,
+                  padding: "18px 20px 14px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: "#3D2B1F",
+                      fontFamily: "sans-serif",
+                    }}
+                  >
+                    Amenity adoption
+                  </p>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "#A08070",
+                      fontFamily: "sans-serif",
+                    }}
+                  >
+                    · click bar to see members
+                  </span>
+                </div>
+                <div
+                  style={{
+                    height: Math.max(260, amenityAdoptionReadable.length * 32),
+                  }}
+                >
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={amenityAdoptionReadable}
+                      layout="vertical"
+                      margin={{ left: 8, right: 16, top: 4, bottom: 4 }}
+                    >
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke="#E8DDD0"
+                        horizontal={false}
+                      />
+                      <XAxis type="number" stroke="#A08070" fontSize={11} />
+                      <YAxis
+                        type="category"
+                        dataKey="amenity"
+                        stroke="#A08070"
+                        fontSize={11}
+                        width={130}
+                        tick={{ fill: "#5A3E2B" }}
+                      />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} />
+                      <Bar
+                        dataKey="members_using"
+                        fill="#5B9EAD"
+                        radius={[0, 6, 6, 0]}
+                        cursor="pointer"
+                        onClick={(data) => {
+                          if (data?.amenity) setAmenityDetail(data.amenity);
+                        }}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Amenity spend */}
+              <div
+                style={{
+                  background: "#FDFAF6",
+                  border: "1px solid #EDE5D8",
+                  borderRadius: 14,
+                  padding: "18px 20px 14px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: "#3D2B1F",
+                      fontFamily: "sans-serif",
+                    }}
+                  >
+                    Amenity spend ranking
+                  </p>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "#A08070",
+                      fontFamily: "sans-serif",
+                    }}
+                  >
+                    · revenue by amenity
+                  </span>
+                </div>
+                <div
+                  style={{
+                    height: Math.max(260, amenityRevenueReadable.length * 32),
+                  }}
+                >
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={amenityRevenueReadable}
+                      layout="vertical"
+                      margin={{ left: 8, right: 16, top: 4, bottom: 4 }}
+                    >
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke="#E8DDD0"
+                        horizontal={false}
+                      />
+                      <XAxis type="number" stroke="#A08070" fontSize={11} />
+                      <YAxis
+                        type="category"
+                        dataKey="amenity"
+                        stroke="#A08070"
+                        fontSize={11}
+                        width={130}
+                        tick={{ fill: "#5A3E2B" }}
+                      />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} />
+                      <Bar
+                        dataKey="revenue"
+                        fill="#D4AF2A"
+                        radius={[0, 6, 6, 0]}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+
+            {/* ════ Targeted Marketing ════ */}
+            <SectionLabel>Targeted Marketing</SectionLabel>
+            <MarketingTargetsPanel
+              memberSegments={memberSegments}
+              memberAmenityUsage={memberAmenityUsage}
+              onAddPromotion={() => setShowEmailModal(true)}
+            />
           </div>
         )}
       </main>

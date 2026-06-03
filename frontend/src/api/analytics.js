@@ -1,3 +1,4 @@
+// frontend/src/api/analytics.js
 const API_BASE_URL = "http://127.0.0.1:8000";
 
 async function fetchData(endpoint) {
@@ -70,4 +71,27 @@ export const analyticsApi = {
 
   marketingTargetsByCampaign: () =>
     fetchData("/analytics/ml/marketing-targets-by-campaign"),
+
+  amenityMemberDetails: (amenity, limit = 100) =>
+    fetchData(
+      `/analytics/ml/amenity-member-details?amenity=${encodeURIComponent(
+        amenity,
+      )}&limit=${limit}`,
+    ),
+
+  memberAmenityHistory: (memberNumber) =>
+    fetchData(
+      `/analytics/ml/member-amenity-history?member_number=${encodeURIComponent(
+        memberNumber,
+      )}`,
+    ),
+
+  mlInsights: () => fetchData("/analytics/ml/insights"),
+
+  seasonalVisitDetails: (season, limit = 50) =>
+    fetchData(
+      `/analytics/ml/seasonal-visit-details?season=${encodeURIComponent(
+        season,
+      )}&limit=${limit}`,
+    ),
 };
