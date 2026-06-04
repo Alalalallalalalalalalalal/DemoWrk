@@ -1,15 +1,107 @@
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
-import { Star, Hash, MapPin } from "lucide-react";
+import { Star, Hash, MapPin, Info } from "lucide-react";
+import { useState, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { styles, COLORS, TOOLTIP_STYLE } from "./dashboardStyles";
+
+/* ─── InfoTip ────────────────────────────────────────────────── */
+export function InfoTip({ text }) {
+  const [visible, setVisible] = useState(false);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const iconRef = useRef(null);
+
+  const show = useCallback(() => {
+    if (!iconRef.current) return;
+    const rect = iconRef.current.getBoundingClientRect();
+    setPos({
+      x: rect.left + rect.width / 2 + window.scrollX,
+      y: rect.top + window.scrollY,
+    });
+    setVisible(true);
+  }, []);
+
+  const hide = useCallback(() => setVisible(false), []);
+
+  if (!text) return null;
+
+  return (
+    <>
+      <span
+        ref={iconRef}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          cursor: "default",
+          color: visible ? "#C8976E" : "#B09880",
+          transition: "color 0.15s",
+          flexShrink: 0,
+        }}
+      >
+        <Info size={13} />
+      </span>
+      {visible &&
+        createPortal(
+          <div
+            style={{
+              position: "absolute",
+              top: pos.y - 8,
+              left: pos.x,
+              transform: "translate(-50%, -100%)",
+              background: "#3D2B1F",
+              color: "#F5EEE6",
+              fontSize: 11,
+              fontFamily: "sans-serif",
+              lineHeight: 1.5,
+              padding: "6px 10px",
+              borderRadius: 6,
+              whiteSpace: "normal",
+              width: "max-content",
+              maxWidth: 200,
+              textAlign: "center",
+              zIndex: 99999,
+              pointerEvents: "none",
+            }}
+          >
+            {text}
+            <span
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: "50%",
+                transform: "translateX(-50%)",
+                width: 0,
+                height: 0,
+                borderLeft: "5px solid transparent",
+                borderRight: "5px solid transparent",
+                borderTop: "5px solid #3D2B1F",
+              }}
+            />
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
 
 /* ─── StatCard ───────────────────────────────────────────────── */
 export function StatCard({ icon: Icon, label, value, hint }) {
   return (
     <div style={styles.statCard}>
       <div style={{ minWidth: 0, flex: 1, marginRight: 12 }}>
-        <p style={styles.statLabel}>{label}</p>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+            marginBottom: 2,
+          }}
+        >
+          <p style={{ ...styles.statLabel, margin: 0 }}>{label}</p>
+          <InfoTip text={hint} />
+        </div>
         <p style={styles.statValue}>{value}</p>
-        {hint && <p style={styles.statHint}>{hint}</p>}
       </div>
       <div style={{ ...styles.statIcon, flexShrink: 0 }}>
         <Icon size={18} color="#C8976E" />
@@ -28,9 +120,16 @@ export function ChartCard({ title, description, children, span2, span3 }) {
         ...(span3 ? styles.span3 : {}),
       }}
     >
-      <div style={styles.cardHeader}>
-        <p style={styles.cardTitle}>{title}</p>
-        {description && <p style={styles.cardDesc}>{description}</p>}
+      <div
+        style={{
+          ...styles.cardHeader,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <p style={{ ...styles.cardTitle, margin: 0 }}>{title}</p>
+        <InfoTip text={description} />
       </div>
       <div style={{ height: 260 }}>{children}</div>
     </div>
@@ -52,9 +151,16 @@ export function SectionLabel({ children }) {
 export function PieLegendCard({ title, description, data, dataKey, nameKey }) {
   return (
     <div style={styles.card}>
-      <div style={styles.cardHeader}>
-        <p style={styles.cardTitle}>{title}</p>
-        {description && <p style={styles.cardDesc}>{description}</p>}
+      <div
+        style={{
+          ...styles.cardHeader,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <p style={{ ...styles.cardTitle, margin: 0 }}>{title}</p>
+        <InfoTip text={description} />
       </div>
       <div
         style={{ display: "flex", alignItems: "center", gap: 16, height: 260 }}
@@ -139,9 +245,16 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey }) {
 export function RoomHighlightCard({ most, least }) {
   return (
     <div style={styles.card}>
-      <div style={styles.cardHeader}>
-        <p style={styles.cardTitle}>Room Highlights</p>
-        <p style={styles.cardDesc}>Most &amp; least used room types</p>
+      <div
+        style={{
+          ...styles.cardHeader,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+        }}
+      >
+        <p style={{ ...styles.cardTitle, margin: 0 }}>Room Highlights</p>
+        <InfoTip text="Most & least used room types" />
       </div>
       <div
         style={{
@@ -238,7 +351,6 @@ export function DirectoryRow({ m, i }) {
 
   return (
     <tr style={{ background: i % 2 === 0 ? "transparent" : "#FAF6F0" }}>
-      {/* Member */}
       <td style={styles.td}>
         <div style={{ fontWeight: 700, color: "#3D2B1F", fontSize: 13 }}>
           {m.member_name ?? "—"}
@@ -248,7 +360,6 @@ export function DirectoryRow({ m, i }) {
           {m.email ? ` · ${m.email}` : ""}
         </div>
       </td>
-      {/* Type */}
       <td style={styles.td}>
         <span
           style={{
@@ -264,7 +375,6 @@ export function DirectoryRow({ m, i }) {
           {m.member_type ?? "—"}
         </span>
       </td>
-      {/* Status */}
       <td style={styles.td}>
         <span
           style={{
@@ -287,7 +397,6 @@ export function DirectoryRow({ m, i }) {
           {m.status ?? "—"}
         </span>
       </td>
-      {/* In-house */}
       <td style={styles.td}>
         {isInHouse ? (
           <span
@@ -308,13 +417,11 @@ export function DirectoryRow({ m, i }) {
           <span style={{ color: "#C4B0A0" }}>—</span>
         )}
       </td>
-      {/* Age / Gender */}
       <td style={styles.td}>
         <span style={{ fontSize: 13, color: "#5A3E2B" }}>
           {m.age ?? "—"} · {m.gender ?? "—"}
         </span>
       </td>
-      {/* Location */}
       <td style={styles.td}>
         <div
           style={{
@@ -333,7 +440,6 @@ export function DirectoryRow({ m, i }) {
           {m.country ?? ""}
         </div>
       </td>
-      {/* Occupation */}
       <td style={styles.td}>
         <div style={{ fontSize: 13, color: "#5A3E2B" }}>
           {m.occupation ?? "—"}
@@ -342,7 +448,6 @@ export function DirectoryRow({ m, i }) {
           {m.employer ?? ""}
         </div>
       </td>
-      {/* Tenure */}
       <td
         style={{
           ...styles.td,
@@ -352,7 +457,6 @@ export function DirectoryRow({ m, i }) {
       >
         {m.tenure_years != null ? `${m.tenure_years}y` : "—"}
       </td>
-      {/* Dependents */}
       <td
         style={{
           ...styles.td,
@@ -362,7 +466,6 @@ export function DirectoryRow({ m, i }) {
       >
         {m.dependents ?? "—"}
       </td>
-      {/* Balance */}
       <td
         style={{
           ...styles.td,

@@ -1,3 +1,4 @@
+// frontend/src/api/analytics.js
 const API_BASE_URL = "http://127.0.0.1:8000";
 
 async function fetchData(endpoint) {
@@ -46,4 +47,51 @@ export const analyticsApi = {
   dependentsByAgeGroup: () => fetchData("/analytics/dependents-by-age-group"),
   dependentsPerMember: () => fetchData("/analytics/dependents-per-member"),
   memberDirectory: () => fetchData("/analytics/member-directory"),
+
+  // ML Analytics
+  memberSegments: () => fetchData("/analytics/ml/member-segments"),
+
+  segmentSummary: () => fetchData("/analytics/ml/segment-summary"),
+
+  amenityAdoption: () => fetchData("/analytics/ml/amenity-adoption"),
+
+  memberAmenityUsage: () => fetchData("/analytics/ml/member-amenity-usage"),
+
+  memberAmenitySegments: () =>
+    fetchData("/analytics/ml/member-amenity-segments"),
+
+  seasonalVisits: () => fetchData("/analytics/ml/seasonal-visits"),
+
+  amenityRevenue: () => fetchData("/analytics/ml/amenity-revenue"),
+
+  airportTransferUsers: (limit = 20) =>
+    fetchData(`/analytics/ml/airport-transfer-users?limit=${limit}`),
+
+  marketingTargets: () => fetchData("/analytics/ml/marketing-targets"),
+
+  marketingTargetsByCampaign: () =>
+    fetchData("/analytics/ml/marketing-targets-by-individual-campaign"),
+
+  amenityMemberDetails: (amenity, limit = 100) =>
+    fetchData(
+      `/analytics/ml/amenity-member-details?amenity=${encodeURIComponent(
+        amenity,
+      )}&limit=${limit}`,
+    ),
+
+  memberAmenityHistory: (memberNumber) =>
+    fetchData(
+      `/analytics/ml/member-amenity-history?member_number=${encodeURIComponent(
+        memberNumber,
+      )}`,
+    ),
+
+  mlInsights: () => fetchData("/analytics/ml/insights"),
+
+  seasonalVisitDetails: (season, limit = 50) =>
+    fetchData(
+      `/analytics/ml/seasonal-visit-details?season=${encodeURIComponent(
+        season,
+      )}&limit=${limit}`,
+    ),
 };
