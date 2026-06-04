@@ -1,4 +1,3 @@
-
 import os
 import csv
 import re
@@ -32,6 +31,16 @@ DB_CONFIG = {
     "database": os.getenv("DB_NAME"),
     "user":     os.getenv("DB_USER"),
     "password": os.getenv("DB_PASSWORD"),
+    # ── Supabase session-pool keepalive settings ──────────────────
+    # Session pooler (port 5432 on pooler.supabase.com) reuses a
+    # single server connection per client session, so we keep it
+    # alive and reconnect automatically if it drops.
+    "keepalives":            1,
+    "keepalives_idle":       30,
+    "keepalives_interval":   10,
+    "keepalives_count":      5,
+    "connect_timeout":       30,
+    "options":               "-c statement_timeout=0",   # no timeout on long bulk loads
 }
 
 # Metadata columns added by scraper — excluded from DB inserts
@@ -556,6 +565,7 @@ def upsert(conn, table, rows, conflict_col, dry_run=False):
     """
     Insert rows into table. On conflict, update the existing row.
     rows: list of dicts with identical keys.
+    Batches all rows in a single execute_values call (page_size=1000).
     """
     if not rows:
         return 0
@@ -578,11 +588,11 @@ def upsert(conn, table, rows, conflict_col, dry_run=False):
 
     try:
         with conn.cursor() as cur:
-            execute_values(cur, sql, values)
-        conn.commit()
+            # page_size=1000 sends up to 1000 rows per round-trip instead of 100
+            execute_values(cur, sql, values, page_size=1000)
+        # NOTE: caller is responsible for commit — do NOT commit here
         return len(rows)
     except Exception:
-        conn.rollback()
         raise
 
 
@@ -610,11 +620,10 @@ def upsert_multi(conn, table, rows, conflict_cols, dry_run=False):
 
     try:
         with conn.cursor() as cur:
-            execute_values(cur, sql, values)
-        conn.commit()
+            execute_values(cur, sql, values, page_size=1000)
+        # NOTE: caller is responsible for commit — do NOT commit here
         return len(rows)
     except Exception:
-        conn.rollback()
         raise
 
 
@@ -630,13 +639,17 @@ def load_profile(conn, member_number, filepath, dry_run=False):
         log.warning(f"  Could not read {filepath}: {e}")
         return
 
+    # ── Collect all rows first, then upsert once per table ───────
+    member_rows   = []
+    address_rows  = []
+    phone_rows    = []
+
     for _, row in df.iterrows():
         mn = clean_str(row.get("Member Number")) or member_number
         full_name_source = row.get("Member Full Name") or row.get("Member Name")
         first_name, middle_name, last_name = split_name(full_name_source)
 
-        # ── members ──────────────────────────────────────
-        member = {
+        member_rows.append({
             "member_number":    mn,
             "member_name":      clean_name(row.get("Member Name")),
             "member_full_name": clean_name(row.get("Member Full Name")),
@@ -662,10 +675,8 @@ def load_profile(conn, member_number, filepath, dry_run=False):
             "bill_to_member":   clean_str(row.get("Bill To Member"), 50),
             "fico_score":       clean_int(row.get("FICO Score")),
             "email":            clean_email(row.get("Email")),
-        }
-        upsert(conn, "members", [member], "member_number", dry_run)
+        })
 
-        # ── member_addresses ─────────────────────────────
         addr = {
             "member_number": mn,
             "address_line1": clean_address_part(row.get("Address Line1"), 255),
@@ -676,16 +687,14 @@ def load_profile(conn, member_number, filepath, dry_run=False):
             "country":       clean_address_part(row.get("Country"), 100),
         }
         if any(v for k, v in addr.items() if k != "member_number"):
-            upsert(conn, "member_addresses", [addr], "member_number", dry_run)
+            address_rows.append(addr)
 
-        # ── member_phones ────────────────────────────────
         phone_map = {
             "home":     row.get("Home Phone"),
             "business": row.get("Business Phone"),
             "cell":     row.get("Cell Phone"),
             "fax":      row.get("Fax Phone"),
         }
-        phone_rows = []
         for ptype, pval in phone_map.items():
             num = clean_phone(pval)
             if num:
@@ -694,9 +703,16 @@ def load_profile(conn, member_number, filepath, dry_run=False):
                     "phone_type":    ptype,
                     "phone_number":  num,
                 })
-        if phone_rows:
-            upsert_multi(conn, "member_phones", phone_rows,
-                        ["member_number", "phone_type"], dry_run)
+
+    # ── Single upsert per table ───────────────────────────────────
+    if member_rows:
+        upsert(conn, "members", member_rows, "member_number", dry_run)
+    if address_rows:
+        upsert(conn, "member_addresses", address_rows, "member_number", dry_run)
+    if phone_rows:
+        upsert_multi(conn, "member_phones", phone_rows,
+                     ["member_number", "phone_type"], dry_run)
+
 
 def load_dependents(conn, member_number, filepath, dry_run=False):
     """Load _dependents.csv into dependents, dependent_addresses, dependent_phones."""
@@ -706,6 +722,10 @@ def load_dependents(conn, member_number, filepath, dry_run=False):
         log.warning(f"  Could not read {filepath}: {e}")
         return
 
+    dep_rows     = []
+    address_rows = []
+    phone_rows   = []
+
     for _, row in df.iterrows():
         dn = clean_str(row.get("Dependant Number"))
         if not dn:
@@ -714,8 +734,7 @@ def load_dependents(conn, member_number, filepath, dry_run=False):
         dep_name = row.get("Dependant Name")
         first_name, middle_name, last_name = split_name(dep_name)
 
-        # ── dependents ───────────────────────────────────
-        dep = {
+        dep_rows.append({
             "dependent_number": dn,
             "member_number":    clean_str(row.get("Member Number")) or member_number,
             "dependent_name":   clean_name(dep_name),
@@ -729,17 +748,14 @@ def load_dependents(conn, member_number, filepath, dry_run=False):
             "date_of_death":    clean_date(row.get("Dependant Date of Death")),
             "activation_date":  clean_date(row.get("Dependant Member Activation")),
             "deactivation_date": clean_date(row.get("Dependant Member Deactivation")),
-        
             "since_date":       clean_date(row.get("Dependant Member Since")),
             "billing_cycle":    clean_str(row.get("Dependant Billing Cycle"), 50),
             "bill_to_member":   clean_str(row.get("Dependant Bill To Member"), 50),
             "fico_score":       clean_int(row.get("Dependant FICO Score")),
             "email":            clean_email(row.get("Dependant Email")),
             "status":           clean_status(row.get("Dependant Status")),
-        }
-        upsert(conn, "dependents", [dep], "dependent_number", dry_run)
+        })
 
-        # ── dependent_addresses ──────────────────────────
         addr = {
             "dependent_number": dn,
             "address_line1":    clean_address_part(row.get("Dependant Address Line1"), 255),
@@ -750,16 +766,14 @@ def load_dependents(conn, member_number, filepath, dry_run=False):
             "country":          clean_address_part(row.get("Dependant Country"), 100),
         }
         if any(v for k, v in addr.items() if k != "dependent_number"):
-            upsert(conn, "dependent_addresses", [addr], "dependent_number", dry_run)
+            address_rows.append(addr)
 
-        # ── dependent_phones ─────────────────────────────
         phone_map = {
             "home":     row.get("Dependant Home Phone"),
             "business": row.get("Dependant Business Phone"),
             "cell":     row.get("Dependant Cell Phone"),
             "fax":      row.get("Dependant Fax Phone"),
         }
-        phone_rows = []
         for ptype, pval in phone_map.items():
             num = clean_phone(pval)
             if num:
@@ -768,9 +782,16 @@ def load_dependents(conn, member_number, filepath, dry_run=False):
                     "phone_type":       ptype,
                     "phone_number":     num,
                 })
-        if phone_rows:
-            upsert_multi(conn, "dependent_phones", phone_rows,
-                         ["dependent_number", "phone_type"], dry_run)
+
+    # ── Single upsert per table ───────────────────────────────────
+    if dep_rows:
+        upsert(conn, "dependents", dep_rows, "dependent_number", dry_run)
+    if address_rows:
+        upsert(conn, "dependent_addresses", address_rows, "dependent_number", dry_run)
+    if phone_rows:
+        upsert_multi(conn, "dependent_phones", phone_rows,
+                     ["dependent_number", "phone_type"], dry_run)
+
 
 def load_rooms(conn, member_number, filepath, dry_run=False):
     """Load _rooms.csv into rooms table."""
@@ -809,7 +830,6 @@ def load_recent_activity(conn, member_number, filepath, dry_run=False):
         log.warning(f"  Could not read {filepath}: {e}")
         return
 
-    # Drop unnamed index column if present
     df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
 
     rows = []
@@ -870,7 +890,6 @@ def load_services(conn, member_number, filepath, dry_run=False):
 
     rows = []
     for _, row in df.iterrows():
-        # Services CSV has col_0 as the service name
         svc = clean_str(row.get("col_0") or row.get("Service") or row.get("service_name"))
         if not svc or svc.lower() == "no matching records found":
             continue
@@ -893,7 +912,6 @@ def load_interests(conn, member_number, filepath, dry_run=False):
         log.warning(f"  Could not read {filepath}: {e}")
         return
 
-    # Drop scraper meta columns
     df = df.drop(columns=[c for c in SCRAPER_META_COLS if c in df.columns],
                  errors="ignore")
     df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
@@ -916,14 +934,11 @@ def load_interests(conn, member_number, filepath, dry_run=False):
         log.info(f"  interests: {len(rows)} rows")
 
 
-
 def normalize_folio_row(row, journal_folder=None, source_file=None):
     """Normalize one Playwright folio transaction row to the folios table shape."""
     member_guest_name = get_first(row, "Member/Guest Name", "Guest Name")
     main_member_number = clean_str(get_first(row, "Main Member #", "Main Member Number"), 50)
 
-    # Folder naming rule for non-guest folios: journal/{main_member_number}/,
-    # where main_member_number is the first token of Member/Guest Name when not supplied.
     if not main_member_number:
         main_member_number = first_token(member_guest_name) or clean_str(journal_folder, 50)
 
@@ -988,7 +1003,6 @@ def load_folio_file(conn, filepath, journal_folder=None, dry_run=False):
     for _, row in df.iterrows():
         out = normalize_folio_row(row, journal_folder, filepath)
 
-        # Skip blank/detail-less rows safely.
         if not any([
             out["transaction_date"], out["description"], out["amount"],
             out["folio_num"], out["folio_name"], out["reservation_folio_id"],
@@ -1065,7 +1079,6 @@ def load_journal_folios(conn, journal_folder=JOURNAL_FOLDER, dry_run=False):
         if os.path.exists(guest_table):
             load_reservation_guests(conn, folder_name, guest_table, dry_run)
 
-        # Load any folio CSV in this person folder, but do not treat the guests table as transactions.
         for filepath in sorted(glob.glob(os.path.join(person_dir, "*.csv"))):
             base = os.path.basename(filepath).lower()
             if base.endswith("_guests.csv"):
@@ -1115,10 +1128,9 @@ def load_folios(conn, filepath=FOLIO_REPORT_FILE, dry_run=False):
 
 
 # ─────────────────────────────────────────────
-# PER-MEMBER LOADER
+# PER-MEMBER LOADER  — one commit per member
 # ─────────────────────────────────────────────
 
-# Maps CSV suffix to loader function
 LOADERS = {
     "profile":         load_profile,
     "dependents":      load_dependents,
@@ -1131,9 +1143,11 @@ LOADERS = {
 
 
 def load_member(conn, member_folder_path, dry_run=False):
-    """Load all CSVs in a member journal folder."""
+    """
+    Load all CSVs in a member journal folder.
+    All upserts for this member share one transaction — commit once at the end.
+    """
     folder_name = os.path.basename(member_folder_path)
-    # member_number is the folder name (strip _ID suffix for generic labels)
     member_number = folder_name
 
     log.info(f"Loading {folder_name}...")
@@ -1149,6 +1163,10 @@ def load_member(conn, member_folder_path, dry_run=False):
         else:
             log.debug(f"  No {suffix} file for {folder_name}")
 
+    # ── Single commit for the entire member ──────────────────────
+    if not dry_run:
+        conn.commit()
+
 
 # ─────────────────────────────────────────────
 # DATA QUALITY REPORT
@@ -1156,7 +1174,6 @@ def load_member(conn, member_folder_path, dry_run=False):
 
 def data_quality_report(conn):
     """Print simple data quality checks after loading."""
-    # If any earlier insert failed, clear the failed transaction state first.
     try:
         conn.rollback()
     except Exception:
@@ -1229,19 +1246,17 @@ def main():
     print(f"Dry run:   {args.dry_run}")
     print()
 
-    # Connect
     try:
         conn = get_connection()
-        log.info("Connected to PostgreSQL.")
+        conn.autocommit = False
+        log.info("Connected to PostgreSQL (Supabase session pool).")
     except Exception as e:
         log.error(f"Could not connect to PostgreSQL: {e}")
-        log.error("Check your .env file — DB_HOST, DB_NAME, DB_USER, DB_PASSWORD")
+        log.error("Check your .env — DB_HOST should be the Supabase session pooler host (port 5432)")
         return
 
-    # Create / recreate tables
     create_tables(conn, recreate=args.recreate_tables)
 
-    # Find member folders
     if args.member:
         folders = [os.path.join(JOURNAL_FOLDER, args.member)]
         if not os.path.isdir(folders[0]):
@@ -1269,6 +1284,8 @@ def main():
 
     try:
         load_folios(conn, FOLIO_REPORT_FILE, dry_run=args.dry_run)
+        if not args.dry_run:
+            conn.commit()
     except Exception as e:
         conn.rollback()
         log.error(f"Failed loading folio report: {e}")

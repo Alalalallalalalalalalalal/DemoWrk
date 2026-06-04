@@ -30,7 +30,7 @@ playwright/.auth/
 # Scraping data outputs
 data/
 *.csv
-*.json
+
 *.png
 screenshots/
 #Never commit this
@@ -49,7 +49,7 @@ reports/
 screenshots/
 member_id_map.csv
 explore_structure.json
-*.json
+
 
 
 # Byte-compiled / optimized / DLL files
@@ -290,4 +290,3 @@ reports/
 screenshots/
 member_id_map.csv
 explore_structure.json
-*.json
