@@ -700,19 +700,31 @@ def ml_marketing_targets(db: Session = Depends(get_db)):
     return [dict(row) for row in result]
  
  
-@router.get("/ml/marketing-targets-by-campaign")
-def ml_marketing_targets_by_campaign(db: Session = Depends(get_db)):
-    """
-    Member count per campaign — useful for planning send volumes.
-    """
+# @router.get("/ml/marketing-targets-by-campaign")
+# def ml_marketing_targets_by_campaign(db: Session = Depends(get_db)):
+#     """
+#     Member count per campaign — useful for planning send volumes.
+#     """
+#     result = db.execute(text("""
+#         SELECT campaign, COUNT(*) AS member_count
+#         FROM marketing_targets
+#         GROUP BY campaign
+#         ORDER BY member_count DESC;
+#     """)).mappings().all()
+#     return [{"campaign": row["campaign"], "member_count": row["member_count"]} for row in result]
+
+@router.get("/ml/marketing-targets-by-individual-campaign")
+def ml_marketing_targets_by_individual_campaign(db: Session = Depends(get_db)):
     result = db.execute(text("""
-        SELECT campaign, COUNT(*) AS member_count
-        FROM marketing_targets
-        GROUP BY campaign
+        SELECT
+            TRIM(campaign_tag) AS campaign,
+            COUNT(*) AS member_count
+        FROM marketing_targets,
+        LATERAL unnest(string_to_array(campaign, ' | ')) AS campaign_tag
+        GROUP BY campaign_tag
         ORDER BY member_count DESC;
     """)).mappings().all()
     return [{"campaign": row["campaign"], "member_count": row["member_count"]} for row in result]
-
 
 # insights and season
 

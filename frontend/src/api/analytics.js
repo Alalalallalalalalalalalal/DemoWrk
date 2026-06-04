@@ -70,7 +70,7 @@ export const analyticsApi = {
   marketingTargets: () => fetchData("/analytics/ml/marketing-targets"),
 
   marketingTargetsByCampaign: () =>
-    fetchData("/analytics/ml/marketing-targets-by-campaign"),
+    fetchData("/analytics/ml/marketing-targets-by-individual-campaign"),
 
   amenityMemberDetails: (amenity, limit = 100) =>
     fetchData(

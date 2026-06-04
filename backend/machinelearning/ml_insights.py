@@ -451,47 +451,119 @@ def _assign_segment(row, p90_spend: float) -> str:
         return "Spa & Wellness"
     return "Regular Member"
 
+# ─────────────────────────────────────────────────────────
+# SEASONAL VISITOR DETECTION
+# ─────────────────────────────────────────────────────────
 
-def _assign_campaign(row) -> str:
-    """Map segment + favourite amenity to a targeted marketing action."""
-    seg = row["segment_name"]
-    fav = row.get("favorite_amenity", "")
+SEASON_MONTHS = {
+    "Spring": {1, 2, 3},
+    "Summer": {4, 5, 6, 7},
+    "Late Summer": {8},
+    "Autumn": {9, 10},
+    "Winter": {11, 12},
+}
 
-    if seg == "High Value Guest":
-        return "VIP Retention Campaign"
-    if seg == "At Risk":
-        return "Win-Back Campaign"
-    if seg == "Corporate Traveler":
-        return "Airport Transfer Package"
-    if seg == "Long Stay Guest":
-        return "Extended Stay Offer"
-    if seg == "Golf Enthusiast":
-        return "Golf Promotion"
-    if seg == "Spa & Wellness":
-        return "Spa Promotion"
-    if fav == "Restaurant" or fav == "Grill" or fav == "Bar":
-        return "Dining & Events Invite"
-    if fav == "Tennis":
-        return "Tennis Programme"
-    if fav == "Villa Rental":
-        return "Villa Exclusive Offer"
-    return "General Newsletter"
+def _build_season_visitors(rooms: pd.DataFrame) -> dict[str, set]:
+    """
+    Returns a dict of season_name -> set of member_numbers who visited
+    in that season at least twice.
+
+    Mirrors the season_months mapping used in /ml/seasonal-visit-details
+    so the campaign tags are consistent with the analytics endpoint.
+    """
+    season_sets: dict[str, set] = {}
+
+    for season, months in SEASON_MONTHS.items():
+        visitors = (
+            rooms[rooms["check_in_date"].dt.month.isin(months)]
+            .groupby("member_number")
+            .size()
+            .reset_index(name="visits")
+        )
+        season_sets[season] = set(
+            visitors[visitors["visits"] >= 2]["member_number"].astype(str)
+        )
+        log.info(
+            "Season '%s' visitors (≥2 stays): %d", season, len(season_sets[season])
+        )
+
+    return season_sets
+
+
+# Full amenity -> campaign lookup (covers every bucket from classify_amenity)
+AMENITY_CAMPAIGNS = {
+    "Spa":            "Spa Promotion",
+    "Golf":           "Golf Promotion",
+    "Grill":          "Dining & Events Invite",
+    "Bar":            "Dining & Events Invite",
+    "Restaurant":     "Dining & Events Invite",
+    "Tennis":         "Tennis Programme",
+    "Retail":         "Retail & Boutique Offer",
+    "Villa Rental":   "Villa Exclusive Offer",
+    "Transportation": "Airport Transfer Package",
+    "Membership":     "Membership Renewal Reminder",
+    "Other":          None,   # no sub-campaign for uncategorised spend
+}
+
+# Every season gets its own campaign tag
+SEASON_CAMPAIGNS = {
+    "Spring":      "Spring Season Offer",
+    "Summer":      "Summer Season Offer",
+    "Late Summer": "Late Summer Season Offer",
+    "Autumn":      "Autumn Season Offer",
+    "Winter":      "Winter Season Offer",
+}
+
+
+def _assign_campaign(row, season_visitors: dict[str, set]) -> str:
+    """
+    Returns a pipe-separated string of all applicable campaigns.
+
+    Layer 1 — segment campaign   (always exactly one)
+    Layer 2 — amenity campaign   (one per favorite amenity, deduped)
+    Layer 3 — seasonal campaigns (one per season the member visits ≥2×)
+    """
+    seg    = row["segment_name"]
+    fav    = row.get("favorite_amenity", "")
+    member = str(row["member_number"])
+
+    parts: list[str] = []
+
+    # ── Layer 1: segment ──────────────────────────────────
+    segment_camp = {
+        "High Value Guest":  "VIP Retention Campaign",
+        "At Risk":           "Win-Back Campaign",
+        "Corporate Traveler":"Airport Transfer Package",
+        "Long Stay Guest":   "Extended Stay Offer",
+        "Golf Enthusiast":   "Golf Promotion",
+        "Spa & Wellness":    "Spa Promotion",
+    }.get(seg, "General Newsletter")
+
+    parts.append(segment_camp)
+
+    # ── Layer 2: amenity sub-campaign ─────────────────────
+    # Fires for every member, so a High Value spa lover also
+    # gets "Spa Promotion" (deduped if segment already added it).
+    amenity_camp = AMENITY_CAMPAIGNS.get(fav)
+    if amenity_camp and amenity_camp not in parts:
+        parts.append(amenity_camp)
+
+    # ── Layer 3: seasonal campaigns ───────────────────────
+    # A member who visits heavily in both Summer and Winter
+    # gets both tags — useful for year-round engagement.
+    for season, camp in SEASON_CAMPAIGNS.items():
+        if member in season_visitors.get(season, set()):
+            parts.append(camp)
+
+    return " | ".join(parts)
 
 
 def build_member_segments(
-    members: pd.DataFrame,
-    rooms: pd.DataFrame,
-    folios: pd.DataFrame,
-    member_amenity_usage: pd.DataFrame,
-    n_clusters: int = 5,
-) -> pd.DataFrame:
-    """
-    KMeans clustering on spending, visit frequency, recency and amenity mix.
-    Each cluster is then labelled with a business-readable segment name.
-    Answers: "customer segments … who's active/inactive, avg spend, stays"
-    """
-    feature_df, amenity_cols = _build_feature_matrix(members, rooms, folios, member_amenity_usage)
-
+    members, rooms, folios, member_amenity_usage, n_clusters=5
+):
+    feature_df, amenity_cols = _build_feature_matrix(
+        members, rooms, folios, member_amenity_usage
+    )
     cluster_features = [
         "total_spend",
         "avg_spend",
@@ -520,7 +592,12 @@ def build_member_segments(
     feature_df["segment_name"] = feature_df.apply(
         lambda r: _assign_segment(r, p90_spend), axis=1
     )
-    feature_df["campaign"] = feature_df.apply(_assign_campaign, axis=1)
+
+    season_visitors = _build_season_visitors(rooms)
+
+    feature_df["campaign"] = feature_df.apply(
+        lambda r: _assign_campaign(r, season_visitors), axis=1
+    )
 
     # cluster_id stays in feature_df for internal use but is not written to
     # member_segments — on a dataset that is ~98 % zero-activity members the
