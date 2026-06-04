@@ -12,7 +12,7 @@ frontend/.env
 
 # Node / React
 frontend/node_modules/
-frontend/dist/
+
 frontend/.vite/
 
 # OS / editor
@@ -64,7 +64,7 @@ __pycache__/
 .Python
 build/
 develop-eggs/
-dist/
+
 downloads/
 eggs/
 .eggs/

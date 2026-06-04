@@ -2,7 +2,7 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { Star, Hash, MapPin, Info } from "lucide-react";
 import { useState, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { styles, COLORS, TOOLTIP_STYLE } from "./dashboardStyles";
+import { styles, COLORS, TOOLTIP_STYLE } from "./Dashboardstyles";
 
 /* ─── InfoTip ────────────────────────────────────────────────── */
 export function InfoTip({ text }) {
