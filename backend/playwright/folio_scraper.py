@@ -67,6 +67,7 @@ LISTING_COLUMNS = [
     "Check-Out Date",
     "Room #",
     "Room Rate",
+    "Bedroom Count",
     "Reservation Status",
 ]
 
@@ -138,6 +139,14 @@ def get_conf_code(row):
         if v:
             return v
     return "UNKNOWN"
+
+def extract_bedroom_count(room_rate):
+    if not room_rate:
+        return None
+    match = re.search(r'(\d+)\s*BR', room_rate, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return 1
 
 def save_csv(filepath, rows):
     """Write rows to filepath, always overwriting any existing file."""
@@ -524,7 +533,7 @@ def scrape_tab_folios(folio_frame, conf_code, folio_to_guest,
     return results
 
 def scrape_all_folio_tabs(folio_frame, conf_code, folio_to_guest,
-                          main_member_num, listing_meta, prefix=""):
+                            main_member_num, listing_meta, prefix=""):
     """Iterate all tab groups via getTab('N'). Returns {folder: {folio_num: [rows]}}"""
     results    = {}
     num_groups = count_tab_groups(folio_frame, prefix)
@@ -550,6 +559,7 @@ def scrape_reservation(page, reservation_row, prefix=""):
     conf_code      = get_conf_code(reservation_row)
     conf_href      = reservation_row.get("_conf_href", "")
     main_member_num = reservation_row.get("Member #", "")
+    room_rate = reservation_row.get("Room Rate", "")
     if not main_member_num:
         raw = reservation_row.get("Member/Guest Name", "") or reservation_row.get("_member_name", "")
         main_member_num, _ = split_member_guest(raw)
@@ -557,6 +567,7 @@ def scrape_reservation(page, reservation_row, prefix=""):
     # Listing metadata to attach to every folio row
     listing_meta = {col: reservation_row.get(col, "") for col in LISTING_COLUMNS}
     listing_meta["Main Member #"] = main_member_num
+    listing_meta["Bedroom Count"] = extract_bedroom_count(room_rate)
 
     saved_files = {}
     pr(prefix, f"=== Reservation: {conf_code} | {reservation_row.get('Member/Guest Name', '')} ===")
