@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.postgres.analytics import router as analytics_router
+from postgres.analytics import router as analytics_router
 
 app = FastAPI()
 
