@@ -233,14 +233,9 @@ export default function Dashboard() {
 
   const sortValue = (val) => {
     if (val == null) return "";
-
-    // number detection
     if (!isNaN(val) && val !== "") return Number(val);
-
-    // date detection
     const date = Date.parse(val);
     if (!isNaN(date)) return date;
-
     return String(val).toLowerCase();
   };
 
@@ -269,6 +264,9 @@ export default function Dashboard() {
 
     return filteredRows.slice(start, end);
   })();
+
+  const totalPages =
+  rowLimit === "all" ? 1 : Math.ceil(filteredRows.length / rowLimit);
 
   return (
     <div style={S.shell}>
@@ -1049,23 +1047,26 @@ export default function Dashboard() {
                           overflowY: "auto",
                         }}
                       >
-                        {tableRows?.length > 0 &&
-                          Object.keys(tableRows[0]).map((col) => (
-                            <div
-                              key={col}
-                              onClick={() => {
-                                setSelectedColumn(col);
-                                setColumnPickerOpen(false);
-                              }}
-                              style={{
-                                padding: "8px 12px",
-                                cursor: "pointer",
-                                fontSize: 12,
-                              }}
-                            >
-                              {col}
-                            </div>
-                          ))}
+                        {tableRows.length > 0 && (
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            {Object.keys(tableRows[0]).map((col) => (
+                              <label key={col} style={{ fontSize: 12 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={visibleColumns.includes(col)}
+                                  onChange={() => {
+                                    setVisibleColumns((prev) =>
+                                      prev.includes(col)
+                                        ? prev.filter((c) => c !== col)
+                                        : [...prev, col]
+                                    );
+                                  }}
+                                />
+                                {col}
+                              </label>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1090,7 +1091,25 @@ export default function Dashboard() {
                   </select>
                 </div>
               </div>
+              {totalPages > 1 && (
+                <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+                  <button disabled={page === 1} onClick={() => setPage(page - 1)}>
+                    Prev
+                  </button>
 
+                  <span>
+                    Page {page} of {totalPages}
+                  </span>
+
+                  <button
+                    disabled={page === totalPages}
+                    onClick={() => setPage(page + 1)}
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+              
               {selectedTable && (
                 <div
                   style={{
@@ -1103,7 +1122,7 @@ export default function Dashboard() {
                     <thead style={{ background: "#FAF6F0" }}>
                       <tr>
                         {filteredRows.length > 0 &&
-                          Object.keys(filteredRows[0]).map((column) => (
+                          visibleColumns.map((column) => (
                             <th key={column} style={styles.th}>
                               {column}
                             </th>
@@ -1112,11 +1131,11 @@ export default function Dashboard() {
                     </thead>
 
                     <tbody>
-                      {filteredRows.map((row, index) => (
+                      {paginatedRows.map((row, index) => (
                         <tr key={index}>
-                          {Object.values(row).map((value, i) => (
-                            <td key={i} style={styles.td}>
-                              {String(value ?? "")}
+                          {visibleColumns.map((column) => (
+                            <td key={column} style={styles.td}>
+                              {String(row[column] ?? "")}
                             </td>
                           ))}
                         </tr>
