@@ -17,7 +17,6 @@ import {
   BedDouble,
   Sparkles,
   Activity,
-  CircleDot,
   DollarSign,
   CalendarClock,
   Baby,
@@ -27,7 +26,6 @@ import {
   LayoutDashboard,
   Users,
   BookOpen,
-  ChevronRight,
 } from "lucide-react";
 
 import { analyticsApi } from "../api/analytics";
@@ -43,7 +41,6 @@ import {
   SectionLabel,
   PieLegendCard,
   RoomHighlightCard,
-  DirectoryRow,
 } from "./Dashboardcomponents";
 import {
   SeasonDetailPanel,
@@ -92,6 +89,7 @@ export default function Dashboard() {
   const [totalDependents, setTotalDependents] = useState(null);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
   const [dependentsPerMember, setDependentsPerMember] = useState([]);
+  const [directoryMembers, setDirectoryMembers] = useState([]);
   const [availableTables, setAvailableTables] = useState([]);
   const [selectedTable, setSelectedTable] = useState("");
   const [tableRows, setTableRows] = useState([]);
@@ -99,7 +97,6 @@ export default function Dashboard() {
   const [sortOrder, setSortOrder] = useState("asc"); // asc | desc
   const [rowLimit, setRowLimit] = useState("25"); // all | 25 | 100
   const [selectedColumn, setSelectedColumn] = useState("");
-  const [visibleColumns, setVisibleColumns] = useState([]);
   const [page, setPage] = useState(1);
 
   // ML Insights now loads from one master backend response, only when the ML tab opens.
@@ -114,35 +111,38 @@ export default function Dashboard() {
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
 
   useEffect(() => {
-    const safe = (fn, set) =>
-      fn()
-        .then(set)
-        .catch(() => {});
-    safe(analyticsApi.membersByCountry, setMembersByCountry);
-    safe(analyticsApi.membersByState, setMembersByState);
-    safe(analyticsApi.membersByGender, setMembersByGender);
-    safe(analyticsApi.membersByAgeGroup, setMembersByAgeGroup);
-    safe(analyticsApi.membersByType, setMembersByType);
-    safe(analyticsApi.membersByStatus, setMembersByStatus);
-    safe(analyticsApi.membersByMaritalStatus, setMembersByMaritalStatus);
-    safe(analyticsApi.newMembersPerYear, setNewMembersPerYear);
-    safe(analyticsApi.averageTenure, setAverageTenure);
-    safe(analyticsApi.bookingsByRoomType, setBookingsByRoomType);
-    safe(analyticsApi.bookingsByMonth, setBookingsByMonth);
-    safe(analyticsApi.averageLengthOfStay, setAverageLengthOfStay);
-    safe(analyticsApi.mostUsedRoomTypes, setMostUsedRoomTypes);
-    safe(analyticsApi.leastUsedRoomTypes, setLeastUsedRoomTypes);
-    safe(analyticsApi.liveInHouseCount, setLiveInHouseCount);
-    safe(analyticsApi.liveInHouseRoster, setLiveInHouseRoster);
-    safe(analyticsApi.spendByMonth, setSpendByMonth);
-    safe(analyticsApi.totalRecentActivitySpend, setTotalRecentActivitySpend);
-    safe(analyticsApi.topSpendDescriptions, setTopSpendDescriptions);
-    safe(analyticsApi.totalAmountDue, setTotalAmountDue);
-    safe(analyticsApi.amountDueByPeriod, setAmountDueByPeriod);
-    safe(analyticsApi.totalDependents, setTotalDependents);
-    safe(analyticsApi.dependentsByAgeGroup, setDependentsByAgeGroup);
-    safe(analyticsApi.dependentsPerMember, setDependentsPerMember);
-    safe(analyticsApi.getTables, setAvailableTables);
+    analyticsApi
+      .dashboardSummary()
+      .then((data) => {
+        setMembersByCountry(data.membersByCountry ?? []);
+        setMembersByState(data.membersByState ?? []);
+        setMembersByGender(data.membersByGender ?? []);
+        setMembersByAgeGroup(data.membersByAgeGroup ?? []);
+        setMembersByType(data.membersByType ?? []);
+        setMembersByStatus(data.membersByStatus ?? []);
+        setMembersByMaritalStatus(data.membersByMaritalStatus ?? []);
+        setNewMembersPerYear(data.newMembersPerYear ?? []);
+        setAverageTenure(data.averageTenure ?? null);
+        setBookingsByRoomType(data.bookingsByRoomType ?? []);
+        setBookingsByMonth(data.bookingsByMonth ?? []);
+        setAverageLengthOfStay(data.averageLengthOfStay ?? null);
+        setMostUsedRoomTypes(data.mostUsedRoomTypes ?? []);
+        setLeastUsedRoomTypes(data.leastUsedRoomTypes ?? []);
+        setLiveInHouseCount(data.liveInHouseCount ?? null);
+        setLiveInHouseRoster(data.liveInHouseRoster ?? []);
+        setSpendByMonth(data.spendByMonth ?? []);
+        setTotalRecentActivitySpend(data.totalRecentActivitySpend ?? null);
+        setTopSpendDescriptions(data.topSpendDescriptions ?? []);
+        setTotalAmountDue(data.totalAmountDue ?? null);
+        setAmountDueByPeriod(data.amountDueByPeriod ?? []);
+        setTotalDependents(data.totalDependents ?? null);
+        setDependentsByAgeGroup(data.dependentsByAgeGroup ?? []);
+        setDependentsPerMember(data.dependentsPerMember ?? []);
+        setDirectoryMembers(data.directoryMembers ?? []);
+      })
+      .catch(console.error);
+
+    analyticsApi.getTables().then(setAvailableTables).catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -166,15 +166,6 @@ export default function Dashboard() {
 
     analyticsApi
       .getTableData(selectedTable)
-      .then(setTableRows)
-      .catch(console.error);
-  }, [selectedTable]);
-
-  useEffect(() => {
-    if (!selectedTable) return;
-
-    analyticsApi
-      .getTableData(selectedTable)
       .then((data) => {
         setTableRows(data);
 
@@ -187,12 +178,6 @@ export default function Dashboard() {
   }, [selectedTable]);
 
   useEffect(() => {
-    if (!tableRows.length) return;
-
-    setVisibleColumns(Object.keys(tableRows[0]));
-  }, [tableRows]);
-
-  useEffect(() => {
     setPage(1);
   }, [tableSearch, selectedColumn, selectedTable]);
 
@@ -202,13 +187,9 @@ export default function Dashboard() {
   const memberSegments = mlInsights?.memberSegments ?? [];
   const segmentSummary = mlInsights?.segmentSummary ?? [];
   const amenityAdoption = mlInsights?.amenityAdoption ?? [];
-  const amenitySegments = mlInsights?.amenitySegments ?? [];
   const seasonalVisits = mlInsights?.seasonalVisits ?? [];
   const amenityRevenue = mlInsights?.amenityRevenue ?? [];
-  const airportTransferUsers = mlInsights?.airportTransferUsers ?? [];
   const memberAmenityUsage = mlInsights?.memberAmenityUsage ?? [];
-  const marketingTargetsByCampaign =
-    mlInsights?.marketingTargetsByCampaign ?? [];
 
   const selectedMlMember = memberSegments.find((m) => {
     const q = mlSearch.toLowerCase();
@@ -231,35 +212,6 @@ export default function Dashboard() {
         .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0))
     : [];
 
-  const seasonOrder = ["Winter", "Spring", "Summer", "Autumn"];
-  const getSeason = (monthValue) => {
-    const month = Number(String(monthValue).split("-")[1]);
-    if ([1, 2, 3].includes(month)) return "Spring";
-    if ([4, 5, 6, 7].includes(month)) return "Summer";
-    if ([8].includes(month)) return "Late Summer";
-    if ([9, 10].includes(month)) return "Autumn";
-    return "Winter";
-  };
-
-  const seasonalBySeason = Object.values(
-    seasonalVisits.reduce((acc, row) => {
-      const season = getSeason(row.month);
-      if (!acc[season])
-        acc[season] = { season, visits: 0, totalStay: 0, months: 0 };
-      acc[season].visits += Number(row.visits ?? 0);
-      acc[season].totalStay += Number(row.avg_stay ?? 0);
-      acc[season].months += 1;
-      return acc;
-    }, {}),
-  )
-    .map((s) => ({
-      ...s,
-      avg_stay: s.months ? Number((s.totalStay / s.months).toFixed(1)) : 0,
-    }))
-    .sort(
-      (a, b) => seasonOrder.indexOf(a.season) - seasonOrder.indexOf(b.season),
-    );
-
   const amenityRevenueReadable = amenityRevenue
     .map((a) => ({
       ...a,
@@ -270,49 +222,9 @@ export default function Dashboard() {
     }))
     .sort((a, b) => Number(b.revenue ?? 0) - Number(a.revenue ?? 0));
 
-  const segmentScatterData = segmentSummary.map((s) => ({
-    segment_name: s.segment_name,
-    member_count: Number(s.member_count ?? 0),
-    avg_total_spend: Number(s.avg_total_spend ?? 0),
-    avg_visits: Number(s.avg_visits ?? 0),
-  }));
-
   const amenityAdoptionReadable = amenityAdoption
     .map((a) => ({ ...a, adoption_score: Number(a.members_using ?? 0) }))
     .sort((a, b) => b.adoption_score - a.adoption_score);
-
-  const amenitySegmentsReadable = amenitySegments
-    .map((row) => ({
-      ...row,
-      segment_label:
-        row.amenity_segment ??
-        row.segment_name ??
-        row.amenity_segment_name ??
-        row.cluster_name ??
-        "Unassigned",
-      member_count_value: Number(row.member_count ?? row.members ?? 0),
-      total_amenity_visits_value: Number(
-        row.total_amenity_visits ?? row.amenity_visits ?? row.total_visits ?? 0,
-      ),
-      total_spend_value: Number(
-        row.total_spend ?? row.total_amenity_spend ?? row.amenity_spend ?? 0,
-      ),
-    }))
-    .sort(
-      (a, b) =>
-        Number(b.total_amenity_visits_value ?? 0) -
-        Number(a.total_amenity_visits_value ?? 0),
-    );
-
-  const airportTransferReadable = airportTransferUsers
-    .map((m) => ({
-      ...m,
-      avg_transfer_spend:
-        Number(m.transfers ?? 0) > 0
-          ? Number(m.total_spend ?? 0) / Number(m.transfers ?? 1)
-          : 0,
-    }))
-    .sort((a, b) => Number(b.transfers ?? 0) - Number(a.transfers ?? 0));
 
   const activeTabInfo = TABS.find((t) => t.id === activeTab);
 
@@ -1220,6 +1132,18 @@ export default function Dashboard() {
         {/* ════════ ML INSIGHTS ════════ */}
         {activeTab === "ml" && (
           <div style={styles.tabContent}>
+            {mlError && (
+              <p
+                style={{
+                  color: "#C45B5B",
+                  fontSize: 12,
+                  fontFamily: "sans-serif",
+                }}
+              >
+                {mlError}
+              </p>
+            )}
+
             {/* ── Season detail slide-over ── */}
             {seasonDetail && (
               <SeasonDetailPanel
@@ -1535,7 +1459,9 @@ export default function Dashboard() {
 
             {/* Row 1: Seasonal + Segment value */}
             <div style={styles.chartsGrid}>
-              <div style={{ width: "200%", minHeight: 360 }}>
+              <div
+                style={{ width: "100%", minHeight: 360, gridColumn: "1 / -1" }}
+              >
                 <SeasonFilterBar
                   seasonalVisits={seasonalVisits}
                   onSeasonClick={(seasonName, group) => {
@@ -1555,29 +1481,6 @@ export default function Dashboard() {
                   }}
                 />
               </div>
-
-              {/* <ChartCard
-                title="Customer segment value"
-                description="Average spend per segment"
-              >
-                <ResponsiveContainer>
-                  <BarChart data={segmentScatterData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
-                    <XAxis
-                      dataKey="segment_name"
-                      stroke="#A08070"
-                      fontSize={11}
-                    />
-                    <YAxis stroke="#A08070" fontSize={11} />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
-                    <Bar
-                      dataKey="avg_total_spend"
-                      fill="#2D5F6E"
-                      radius={[6, 6, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </ChartCard> */}
             </div>
 
             {/* Row 2: Amenity adoption + Amenity spend — side by side, full label height */}
