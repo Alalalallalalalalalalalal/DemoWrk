@@ -1,4 +1,4 @@
-// dashboard.jsx
+// frontend/src/pages/dashboard.jsx
 
 import { useEffect, useState } from "react";
 import {
@@ -50,6 +50,7 @@ import {
   AmenityDetailPanel,
   MarketingTargetsPanel,
 } from "./MlDetailPanel";
+import SeasonFilterBar from "./SeasonFilterBar";
 
 /* ─── Sidebar config ─────────────────────────────────────────── */
 const TABS = [
@@ -1402,31 +1403,23 @@ export default function Dashboard() {
                 description="Click a bar to drill into who visits each season"
               >
                 <ResponsiveContainer>
-                  <BarChart
-                    data={seasonalBySeason}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
-                    <XAxis dataKey="season" stroke="#A08070" fontSize={11} />
-                    <YAxis stroke="#A08070" fontSize={11} />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
-                    <Bar
-                      dataKey="visits"
-                      fill="#C8976E"
-                      radius={[6, 6, 0, 0]}
-                      cursor="pointer"
-                      onClick={(data) => {
-                        if (!data?.season) return;
-                        analyticsApi
-                          .seasonalVisitDetails(data.season)
-                          .then((rows) => {
-                            setSeasonDetailRows(rows);
-                            setSeasonDetail(data.season);
-                          })
-                          .catch(() => {});
-                      }}
-                    />
-                  </BarChart>
+                  <SeasonFilterBar
+                    seasonalVisits={seasonalVisits}
+                    onSeasonClick={(seasonName, group) => {
+                      // map custom groups to their month ranges for the drill-down
+                      const season = group?.seasons?.find(
+                        (s) => s.season_name === seasonName,
+                      );
+                      if (!season) return;
+                      analyticsApi
+                        .seasonalVisitDetails(seasonName)
+                        .then((rows) => {
+                          setSeasonDetailRows(rows);
+                          setSeasonDetail(seasonName);
+                        })
+                        .catch(() => {});
+                    }}
+                  />
                 </ResponsiveContainer>
               </ChartCard>
 

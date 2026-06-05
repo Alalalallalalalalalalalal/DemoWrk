@@ -1,3 +1,5 @@
+// /frontend/src/pages/MlDetailPanel.jsx
+
 import { X, ArrowLeft, User, MapPin, Calendar, Tag, Mail } from "lucide-react";
 import { useState } from "react";
 

@@ -1,5 +1,5 @@
 # backend/postgres/analytics.py
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -846,3 +846,75 @@ def ml_seasonal_visit_details(season: str, db: Session = Depends(get_db)):
         ORDER BY r.check_in_date DESC;
     """)).mappings().all()
     return [dict(row) for row in result]
+
+
+@router.get("/ml/season-groups")
+def get_season_groups(db: Session = Depends(get_db)):
+    """Returns all season filter groups with their seasons."""
+    result = db.execute(text("""
+        SELECT sg.id, sg.group_name, sg.group_type,
+               s.id AS season_id, s.season_name, s.start_month,
+               s.start_day, s.end_month, s.end_day, s.is_active
+        FROM season_groups sg
+        JOIN seasons s ON s.group_id = sg.id
+        ORDER BY sg.group_type, sg.id, s.start_month, s.start_day;
+    """)).mappings().all()
+    groups = {}
+    for row in result:
+        gid = row["id"]
+        if gid not in groups:
+            groups[gid] = {"id": gid, "group_name": row["group_name"],
+                           "group_type": row["group_type"], "seasons": []}
+        groups[gid]["seasons"].append({
+            "id": row["season_id"], "season_name": row["season_name"],
+            "start_month": row["start_month"], "start_day": row["start_day"],
+            "end_month": row["end_month"], "end_day": row["end_day"],
+            "is_active": row["is_active"],
+        })
+    return list(groups.values())
+
+
+@router.post("/ml/season-groups")
+def create_season_group(body: dict, db: Session = Depends(get_db)):
+    row = db.execute(text("""
+        INSERT INTO season_groups (group_name, group_type)
+        VALUES (:name, 'custom') RETURNING id;
+    """), {"name": body["group_name"]}).mappings().first()
+    db.commit()
+    return {"id": row["id"], "group_name": body["group_name"], "group_type": "custom", "seasons": []}
+
+
+@router.patch("/ml/seasons/{season_id}")
+def update_season(season_id: int, body: dict, db: Session = Depends(get_db)):
+    db.execute(text("""
+        UPDATE seasons SET
+            season_name = COALESCE(:name, season_name),
+            start_month = COALESCE(:start_month, start_month),
+            start_day   = COALESCE(:start_day, start_day),
+            end_month   = COALESCE(:end_month, end_month),
+            end_day     = COALESCE(:end_day, end_day),
+            is_active   = COALESCE(:is_active, is_active)
+        WHERE id = :id;
+    """), {
+        "id": season_id,
+        "name":        body.get("season_name"),
+        "start_month": body.get("start_month"),
+        "start_day":   body.get("start_day"),
+        "end_month":   body.get("end_month"),
+        "end_day":     body.get("end_day"),
+        "is_active":   body.get("is_active"),
+    })
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/ml/seasons")
+def add_season_to_group(body: dict, db: Session = Depends(get_db)):
+    row = db.execute(text("""
+        INSERT INTO seasons
+            (season_name, start_month, start_day, end_month, end_day, is_active, group_id)
+        VALUES (:name, :start_month, :start_day, :end_month, :end_day, TRUE, :group_id)
+        RETURNING id;
+    """), body).mappings().first()
+    db.commit()
+    return {"id": row["id"], **body}

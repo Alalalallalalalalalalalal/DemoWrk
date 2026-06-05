@@ -94,4 +94,28 @@ export const analyticsApi = {
         season,
       )}&limit=${limit}`,
     ),
+
+  // Season groups CRUD
+  seasonGroups: () => fetchData("/analytics/ml/season-groups"),
+
+  createSeasonGroup: (body) =>
+    fetch(`${API_BASE_URL}/analytics/ml/season-groups`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => r.json()),
+
+  updateSeason: (seasonId, body) =>
+    fetch(`${API_BASE_URL}/analytics/ml/seasons/${seasonId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => r.json()),
+
+  addSeason: (body) =>
+    fetch(`${API_BASE_URL}/analytics/ml/seasons`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => r.json()),
 };

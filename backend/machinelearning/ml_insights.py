@@ -1,5 +1,5 @@
 """
-ml_insights.py
+backend/machinelearning/ml_insights.py
 --------------
 Builds and persists all ML-derived insight tables used by the analytics API.
 
@@ -15,7 +15,8 @@ Tables written to PostgreSQL
   marketing_targets      – member_number, segment_name, campaign.
 
 Merged from specfic_tb.py, table names unchanged:
-  seasons                – editable recurring season definitions.
+  season_groups          – group definitions for Business/Simple/Custom seasons.
+  seasons                – editable recurring season definitions, linked to a group.
   amenity_spend          – per-member spend and visit counts per amenity type.
   member_seasons         – per-member seasonal visit summary.
 """
@@ -532,9 +533,26 @@ DEFAULT_SEASONS = [
     ("Festive", 12, 19, 1, 3),
 ]
 
+SIMPLE_SEASONS = [
+    ("Spring", 1, 1, 3, 31),
+    ("Summer", 4, 1, 7, 31),
+    ("Late Summer", 8, 1, 8, 31),
+    ("Autumn", 9, 1, 10, 31),
+    ("Winter", 11, 1, 12, 31),
+]
+
 SPECIFIC_DDL = """
+CREATE TABLE IF NOT EXISTS season_groups (
+    id          SERIAL PRIMARY KEY,
+    group_name  VARCHAR(100) NOT NULL UNIQUE,
+    group_type  VARCHAR(20)  NOT NULL DEFAULT 'custom'
+                CHECK (group_type IN ('business', 'simple', 'custom')),
+    created_at  TIMESTAMP DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS seasons (
     id              SERIAL PRIMARY KEY,
+    group_id        INTEGER REFERENCES season_groups(id) ON DELETE SET NULL,
     season_name     VARCHAR(100) NOT NULL,
     start_month     INTEGER      NOT NULL CHECK (start_month BETWEEN 1 AND 12),
     start_day       INTEGER      NOT NULL CHECK (start_day BETWEEN 1 AND 31),
@@ -543,7 +561,7 @@ CREATE TABLE IF NOT EXISTS seasons (
     is_active       BOOLEAN      NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMP DEFAULT NOW(),
     updated_at      TIMESTAMP DEFAULT NOW(),
-    UNIQUE (season_name, start_month, start_day, end_month, end_day)
+    UNIQUE (group_id, season_name, start_month, start_day, end_month, end_day)
 );
 
 CREATE TABLE IF NOT EXISTS amenity_spend (
@@ -571,7 +589,7 @@ CREATE TABLE IF NOT EXISTS member_seasons (
 );
 """
 
-DROP_SPECIFIC_ANALYTICS = "DROP TABLE IF EXISTS amenity_spend, member_seasons, seasons CASCADE;"
+DROP_SPECIFIC_ANALYTICS = "DROP TABLE IF EXISTS amenity_spend, member_seasons, seasons, season_groups CASCADE;"
 
 
 def create_specific_tables(conn, recreate: bool = False) -> None:
@@ -579,40 +597,124 @@ def create_specific_tables(conn, recreate: bool = False) -> None:
         if recreate:
             log.info("Dropping specific analytics tables...")
             cur.execute(DROP_SPECIFIC_ANALYTICS)
+
         log.info("Creating specific analytics tables if not exist...")
         cur.execute(SPECIFIC_DDL)
+
+        # Migration-safe upgrades for databases that already had a seasons table.
+        cur.execute("""
+            ALTER TABLE seasons
+            ADD COLUMN IF NOT EXISTS group_id INTEGER
+        """)
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint
+                    WHERE conname = 'seasons_group_id_fkey'
+                ) THEN
+                    ALTER TABLE seasons
+                    ADD CONSTRAINT seasons_group_id_fkey
+                    FOREIGN KEY (group_id)
+                    REFERENCES season_groups(id)
+                    ON DELETE SET NULL;
+                END IF;
+            END $$;
+        """)
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS seasons_group_definition_unique_idx
+            ON seasons (group_id, season_name, start_month, start_day, end_month, end_day)
+        """)
     conn.commit()
 
 
-def seed_seasons(conn, dry_run: bool = False) -> None:
-    values = [(name, sm, sd, em, ed, True) for name, sm, sd, em, ed in DEFAULT_SEASONS]
+def _get_or_create_season_group(conn, group_name: str, group_type: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO season_groups (group_name, group_type)
+            VALUES (%s, %s)
+            ON CONFLICT (group_name) DO UPDATE SET
+                group_type = EXCLUDED.group_type
+            RETURNING id
+            """,
+            (group_name, group_type),
+        )
+        row = cur.fetchone()
+    return int(row[0])
+
+
+def _seed_group_seasons(conn, group_id: int, seasons: list[tuple], dry_run: bool = False) -> int:
+    values = [(group_id, name, sm, sd, em, ed, True) for name, sm, sd, em, ed in seasons]
     if dry_run:
-        log.info("[DRY RUN] Would seed %d recurring season rows", len(values))
-        return
+        return len(values)
 
     with conn.cursor() as cur:
         execute_values(
             cur,
             """
             INSERT INTO seasons
-                (season_name, start_month, start_day, end_month, end_day, is_active)
+                (group_id, season_name, start_month, start_day, end_month, end_day, is_active)
             VALUES %s
-            ON CONFLICT (season_name, start_month, start_day, end_month, end_day) DO NOTHING
+            ON CONFLICT (group_id, season_name, start_month, start_day, end_month, end_day) DO NOTHING
             """,
             values,
         )
-    conn.commit()
-    log.info("Seeded recurring seasons table, skipping existing definitions")
+    return len(values)
 
 
-def load_active_seasons(conn) -> list[tuple]:
+def seed_seasons(conn, dry_run: bool = False) -> None:
+    if dry_run:
+        log.info(
+            "[DRY RUN] Would seed season groups plus %d business and %d simple season rows",
+            len(DEFAULT_SEASONS),
+            len(SIMPLE_SEASONS),
+        )
+        return
+
+    business_group_id = _get_or_create_season_group(conn, "Business Seasons", "business")
+    simple_group_id = _get_or_create_season_group(conn, "Simple Seasons", "simple")
+
+    # Any seasons from the old schema become Business Seasons.
     with conn.cursor() as cur:
-        cur.execute("""
-            SELECT id, season_name, start_month, start_day, end_month, end_day
-            FROM seasons
-            WHERE is_active = TRUE
-            ORDER BY start_month, start_day
-        """)
+        cur.execute(
+            """
+            UPDATE seasons
+            SET group_id = %s
+            WHERE group_id IS NULL
+            """,
+            (business_group_id,),
+        )
+
+    business_count = _seed_group_seasons(conn, business_group_id, DEFAULT_SEASONS)
+    simple_count = _seed_group_seasons(conn, simple_group_id, SIMPLE_SEASONS)
+
+    conn.commit()
+    log.info(
+        "Seeded season groups. Business=%d rows, Simple=%d rows; existing definitions skipped",
+        business_count,
+        simple_count,
+    )
+
+
+def load_active_seasons(conn, group_type: str = "business") -> list[tuple]:
+    """
+    Used by member_seasons. Defaults to Business Seasons so overlapping Simple/Custom
+    groups do not double-count the same visit in this backend summary table.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT s.id, s.season_name, s.start_month, s.start_day, s.end_month, s.end_day
+            FROM seasons s
+            JOIN season_groups sg ON sg.id = s.group_id
+            WHERE s.is_active = TRUE
+              AND sg.group_type = %s
+            ORDER BY s.start_month, s.start_day
+            """,
+            (group_type,),
+        )
         return cur.fetchall()
 
 

@@ -1,3 +1,4 @@
+// /frontend/src/pages/Dashboardcomponents.jsx
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { Star, Hash, MapPin, Info } from "lucide-react";
 import { useState, useRef, useCallback } from "react";
