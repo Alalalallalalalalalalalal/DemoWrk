@@ -181,30 +181,18 @@ CREATE TABLE IF NOT EXISTS folios (
 
     -- Reservation/person context
     conf_code              VARCHAR(100),
-    main_member_number     VARCHAR(50),
     member_number          VARCHAR(50),
     guest_name             VARCHAR(255),
     check_in_date          DATE,
     check_out_date         DATE,
     room_number            VARCHAR(50),
-    room_rate              VARCHAR(255),
+    villa_name             VARCHAR(255), 
+    bedroom_count          INTEGER, 
     reservation_status     VARCHAR(100),
 
     -- Folder/source audit columns
     journal_folder         VARCHAR(255),
     source_file            TEXT,
-
-    -- Legacy summary/report columns, kept so old folio_report.csv imports still work
-    group_name             VARCHAR(255),
-    member_guest_name      VARCHAR(255),
-    credit_limit           NUMERIC(12, 2),
-    folio_owner            VARCHAR(255),
-    reservation_total      NUMERIC(12, 2),
-    total_charges          NUMERIC(12, 2),
-    total_payments         NUMERIC(12, 2),
-    folio_balance          NUMERIC(12, 2),
-    conf_href              TEXT,
-    member_name            VARCHAR(255),
 
     created_at             TIMESTAMP DEFAULT NOW(),
     updated_at             TIMESTAMP DEFAULT NOW()
@@ -212,7 +200,6 @@ CREATE TABLE IF NOT EXISTS folios (
 
 CREATE TABLE IF NOT EXISTS reservation_guests (
     guest_key              VARCHAR(64) PRIMARY KEY,
-    main_member_number     VARCHAR(50),
     conf_code              VARCHAR(100),
     member_number          VARCHAR(50),
     guest_name             VARCHAR(255),
@@ -542,6 +529,13 @@ def split_name(val):
 
     return first, middle, last
 
+def keep_sample(key, sample_rate):
+    if sample_rate >= 1:
+        return True
+    h = int(hashlib.sha256(str(key).encode()).hexdigest(), 16)
+    return (h % 10000) < int(sample_rate * 10000)
+
+
 # ─────────────────────────────────────────────
 # DATABASE
 # ─────────────────────────────────────────────
@@ -557,8 +551,56 @@ def create_tables(conn, recreate=False):
             cur.execute(DROP_ALL)
         log.info("Creating tables if not exist...")
         cur.execute(DDL)
+
+        # Folios/reservation guests may include guest/member numbers that are not
+        # present in members yet, so these tables intentionally do not enforce
+        # a foreign key to members. Drop the old FK if it exists from a previous run.
+        cur.execute("""
+            ALTER TABLE IF EXISTS reservation_guests
+            DROP CONSTRAINT IF EXISTS reservation_guests_member_number_fkey
+        """)
     conn.commit()
     log.info("Tables ready.")
+
+
+def filter_rows_to_existing_members(conn, rows, label, member_field="member_number"):
+    """Keep only rows whose member_number exists in members.
+
+    This prevents --folios-only loads from failing when journal/folio CSVs
+    contain guest/member numbers that were not loaded into the members table.
+    """
+    if not rows:
+        return rows
+
+    member_numbers = sorted({
+        clean_str(row.get(member_field), 50)
+        for row in rows
+        if clean_str(row.get(member_field), 50)
+    })
+
+    if not member_numbers:
+        log.warning(f"  {label}: skipped {len(rows)} rows because no member_number was present")
+        return []
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT member_number FROM members WHERE member_number = ANY(%s)",
+            (member_numbers,),
+        )
+        existing = {r[0] for r in cur.fetchall()}
+
+    kept = [
+        row for row in rows
+        if clean_str(row.get(member_field), 50) in existing
+    ]
+
+    skipped = len(rows) - len(kept)
+    if skipped:
+        log.warning(
+            f"  {label}: skipped {skipped} rows because member_number was not in members"
+        )
+
+    return kept
 
 
 def upsert(conn, table, rows, conflict_col, dry_run=False):
@@ -936,11 +978,15 @@ def load_interests(conn, member_number, filepath, dry_run=False):
 
 def normalize_folio_row(row, journal_folder=None, source_file=None):
     """Normalize one Playwright folio transaction row to the folios table shape."""
-    member_guest_name = get_first(row, "Member/Guest Name", "Guest Name")
-    main_member_number = clean_str(get_first(row, "Main Member #", "Main Member Number"), 50)
 
-    if not main_member_number:
-        main_member_number = first_token(member_guest_name) or clean_str(journal_folder, 50)
+    # Resolve member_number — only use explicit member columns, then journal
+    # folder name as a fallback. Do not infer member_number from guest name or conf code values.
+    member_number = clean_str(
+        get_first(row, "Main Member #", "Member #", "Member Number", "Main Member Number"),
+        50,
+    )
+    if not member_number:
+        member_number = clean_str(journal_folder, 50)
 
     conf_code = clean_str(get_first(row, "Conf. Code", "Confirmation Code"), 100)
     folio_num = clean_str(get_first(row, "_folio_num", "Folio", "Folio #", "Folio Num"), 100)
@@ -949,9 +995,8 @@ def normalize_folio_row(row, journal_folder=None, source_file=None):
     description = clean_str(get_first(row, "Description"), 500)
     transaction_date = clean_date(get_first(row, "Date", "Transaction Date"))
     amount = clean_amount(get_first(row, "Amount"))
-    member_number = clean_str(get_first(row, "Member #", "Member Number"), 50)
     guest_name = clean_name(get_first(row, "Guest Name", "Member/Guest Name"))
-
+    
     return {
         "folio_key": make_folio_key(
             source_file, journal_folder, conf_code, reservation_folio_id,
@@ -966,26 +1011,16 @@ def normalize_folio_row(row, journal_folder=None, source_file=None):
         "balance_due": clean_amount(get_first(row, "_balance_due", "Balance Due")),
         "reservation_folio_id": reservation_folio_id,
         "conf_code": conf_code,
-        "main_member_number": main_member_number,
         "member_number": member_number,
         "guest_name": guest_name,
         "check_in_date": clean_date(get_first(row, "Check-In Date", "Check In Date")),
         "check_out_date": clean_date(get_first(row, "Check-Out Date", "Check Out Date")),
         "room_number": clean_str(get_first(row, "Room #", "Room Number"), 50),
-        "room_rate": clean_str(row.get("Room Rate"), 255),
+        "villa_name": clean_str(get_first(row, "Villa Name"), 255),
+        "bedroom_count": clean_int(get_first(row, "Bedroom Count")),
         "reservation_status": clean_category(get_first(row, "Reservation Status"), 100),
         "journal_folder": clean_str(journal_folder, 255),
-        "source_file": clean_str(source_file),
-        "group_name": clean_name(get_first(row, "Group Name")),
-        "member_guest_name": clean_name(member_guest_name),
-        "credit_limit": clean_amount(row.get("Credit Limit")),
-        "folio_owner": clean_str(get_first(row, "Folio Owner"), 255),
-        "reservation_total": clean_amount(get_first(row, "Reservation Total")),
-        "total_charges": clean_amount(get_first(row, "Total Charges")),
-        "total_payments": clean_amount(get_first(row, "Total Payments")),
-        "folio_balance": clean_amount(get_first(row, "Folio Balance")),
-        "conf_href": clean_str(get_first(row, "_conf_href")),
-        "member_name": clean_name(get_first(row, "_member_name")),
+        "source_file": clean_str(source_file),        
     }
 
 
@@ -1045,7 +1080,6 @@ def load_reservation_guests(conn, main_member_number, filepath, dry_run=False):
 
         rows.append({
             "guest_key": make_folio_key(main_member_number, conf_code, member_number, guest_name, folio),
-            "main_member_number": clean_str(main_member_number, 50),
             "conf_code": conf_code,
             "member_number": member_number,
             "guest_name": guest_name,
@@ -1114,7 +1148,7 @@ def load_folios(conn, filepath=FOLIO_REPORT_FILE, dry_run=False):
     rows = []
     for _, row in df.iterrows():
         out = normalize_folio_row(row, None, filepath)
-        if not any([out["conf_code"], out["folio_name"], out["folio_owner"], out["member_guest_name"]]):
+        if not any([out["conf_code"], out["folio_name"]]):
             continue
         rows.append(out)
 
@@ -1226,24 +1260,29 @@ def data_quality_report(conn):
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
-
 def main():
     parser = argparse.ArgumentParser(description="Load member journal CSVs into PostgreSQL.")
-    parser.add_argument("--member",          type=str,  default=None,
+    parser.add_argument("--member", type=str, default=None,
                         help="Load a single member folder (e.g. 1C)")
-    parser.add_argument("--dry-run",         action="store_true",
+    parser.add_argument("--dry-run", action="store_true",
                         help="Test run — no data written to DB")
     parser.add_argument("--recreate-tables", action="store_true",
                         help="Drop and recreate all tables before loading")
+    parser.add_argument("--sample-rate", type=float, default=1.0,
+                        help="Load deterministic sample, e.g. 0.10 for 10%")
+    parser.add_argument("--folios-only", action="store_true",
+                        help="Only load folios/reservation guests, skip member profile data")
     args = parser.parse_args()
 
     print("=" * 60)
     print("Member ETL Loader")
     print("=" * 60)
-    print(f"Database:  {DB_CONFIG['database']} @ {DB_CONFIG['host']}")
-    print(f"Journal:   {JOURNAL_FOLDER}")
-    print(f"Folios:    {FOLIO_REPORT_FILE}")
-    print(f"Dry run:   {args.dry_run}")
+    print(f"Database:     {DB_CONFIG['database']} @ {DB_CONFIG['host']}")
+    print(f"Journal:      {JOURNAL_FOLDER}")
+    print(f"Folios:       {FOLIO_REPORT_FILE}")
+    print(f"Dry run:      {args.dry_run}")
+    print(f"Sample rate:  {args.sample_rate}")
+    print(f"Folios only:  {args.folios_only}")
     print()
 
     try:
@@ -1252,43 +1291,57 @@ def main():
         log.info("Connected to PostgreSQL (Supabase session pool).")
     except Exception as e:
         log.error(f"Could not connect to PostgreSQL: {e}")
-        log.error("Check your .env — DB_HOST should be the Supabase session pooler host (port 5432)")
         return
 
     create_tables(conn, recreate=args.recreate_tables)
 
-    if args.member:
-        folders = [os.path.join(JOURNAL_FOLDER, args.member)]
-        if not os.path.isdir(folders[0]):
-            log.error(f"Folder not found: {folders[0]}")
-            conn.close()
-            return
-    else:
-        folders = sorted([
-            f.path for f in os.scandir(JOURNAL_FOLDER)
-            if f.is_dir()
-        ])
-
-    print(f"Members to load: {len(folders)}\n")
-
     success, failed = [], []
 
-    for folder in folders:
-        try:
-            load_member(conn, folder, dry_run=args.dry_run)
-            success.append(os.path.basename(folder))
-        except Exception as e:
-            conn.rollback()
-            log.error(f"Failed {os.path.basename(folder)}: {e}")
-            failed.append(os.path.basename(folder))
+    if not args.folios_only:
+        if args.member:
+            folders = [os.path.join(JOURNAL_FOLDER, args.member)]
+            if not os.path.isdir(folders[0]):
+                log.error(f"Folder not found: {folders[0]}")
+                conn.close()
+                return
+        else:
+            folders = sorted([
+                f.path for f in os.scandir(JOURNAL_FOLDER)
+                if f.is_dir()
+            ])
+
+        total_before_sample = len(folders)
+
+        if args.sample_rate < 1.0:
+            folders = [
+                f for f in folders
+                if keep_sample(os.path.basename(f), args.sample_rate)
+            ]
+
+        print(f"Members available: {total_before_sample}")
+        print(f"Members to load:   {len(folders)}\n")
+
+        for folder in folders:
+            try:
+                load_member(conn, folder, dry_run=args.dry_run)
+                success.append(os.path.basename(folder))
+            except Exception as e:
+                conn.rollback()
+                log.error(f"Failed {os.path.basename(folder)}: {e}")
+                failed.append(os.path.basename(folder))
+    else:
+        log.info("Skipping member/profile load because --folios-only was used.")
 
     try:
-        load_folios(conn, FOLIO_REPORT_FILE, dry_run=args.dry_run)
-        if not args.dry_run:
-            conn.commit()
+        if args.sample_rate >= 1.0 or args.folios_only:
+            load_folios(conn, FOLIO_REPORT_FILE, dry_run=args.dry_run)
+            if not args.dry_run:
+                conn.commit()
+        else:
+            log.info("Skipping full folio load during sampled member run.")
     except Exception as e:
         conn.rollback()
-        log.error(f"Failed loading folio report: {e}")
+        log.error(f"Failed loading folios: {e}")
 
     if not args.dry_run:
         data_quality_report(conn)
@@ -1299,8 +1352,8 @@ def main():
     print("=" * 60)
     print("ETL Complete")
     print("=" * 60)
-    print(f"  Loaded:  {len(success)}")
-    print(f"  Failed:  {len(failed)}")
+    print(f"  Loaded members:  {len(success)}")
+    print(f"  Failed members:  {len(failed)}")
     if failed:
         print(f"  Failed members: {failed}")
 
