@@ -1,7 +1,7 @@
 // /frontend/src/pages/MlDetailPanel.jsx
 
 import { X, ArrowLeft, User, MapPin, Calendar, Tag, Mail } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 /* ─────────────────────────────────────────────
    Shared table styles
@@ -142,6 +142,34 @@ const T = {
   },
 };
 
+const MONTH_NAMES = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const DAY_OPTIONS = Array.from({ length: 31 }, (_, i) => i + 1);
+
+function getDateParts(value) {
+  if (!value) return {};
+  const match = String(value).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!match) return {};
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3]),
+  };
+}
+
 const CAMPAIGN_COLORS = {
   "Win-Back": "#C8976E",
   "Loyalty Reward": "#2D8A5F",
@@ -170,6 +198,21 @@ export function SeasonDetailPanel({
   onClose,
 }) {
   const [search, setSearch] = useState("");
+  const [dateFilter, setDateFilter] = useState({
+    year: "",
+    month: "",
+    day: "",
+  });
+
+  const years = useMemo(() => {
+    return Array.from(
+      new Set(
+        (rows || [])
+          .map((r) => getDateParts(r.check_in_date).year)
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => b - a);
+  }, [rows]);
 
   const amenityMap = {};
   (memberAmenityUsage || []).forEach((a) => {
@@ -178,7 +221,19 @@ export function SeasonDetailPanel({
     amenityMap[key].push(a.amenity);
   });
 
-  const filtered = rows.filter((r) => {
+  const filtered = (rows || []).filter((r) => {
+    const parts = getDateParts(r.check_in_date);
+
+    if (dateFilter.year && parts.year !== Number(dateFilter.year)) {
+      return false;
+    }
+    if (dateFilter.month && parts.month !== Number(dateFilter.month)) {
+      return false;
+    }
+    if (dateFilter.day && parts.day !== Number(dateFilter.day)) {
+      return false;
+    }
+
     if (!search) return true;
     const q = search.toLowerCase();
     return [r.member_full_name, r.member_number, r.country, r.member_type].some(
@@ -209,6 +264,69 @@ export function SeasonDetailPanel({
               placeholder="Search name, country, type…"
               style={T.filterInput}
             />
+
+            <select
+              value={dateFilter.year}
+              onChange={(e) =>
+                setDateFilter((f) => ({ ...f, year: e.target.value }))
+              }
+              style={{ ...T.filterInput, width: 110 }}
+            >
+              <option value="">Any year</option>
+              {years.map((year) => (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={dateFilter.month}
+              onChange={(e) =>
+                setDateFilter((f) => ({ ...f, month: e.target.value }))
+              }
+              style={{ ...T.filterInput, width: 120 }}
+            >
+              <option value="">Any month</option>
+              {MONTH_NAMES.map((month, index) => (
+                <option key={month} value={index + 1}>
+                  {month}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={dateFilter.day}
+              onChange={(e) =>
+                setDateFilter((f) => ({ ...f, day: e.target.value }))
+              }
+              style={{ ...T.filterInput, width: 100 }}
+            >
+              <option value="">Any day</option>
+              {DAY_OPTIONS.map((day) => (
+                <option key={day} value={day}>
+                  {day}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              style={{
+                padding: "7px 12px",
+                border: "1px solid #DDD0C4",
+                borderRadius: 8,
+                background: "#FDFAF6",
+                color: "#7A6050",
+                fontSize: 12,
+                fontFamily: "sans-serif",
+                cursor: "pointer",
+              }}
+              onClick={() => setDateFilter({ year: "", month: "", day: "" })}
+            >
+              Clear dates
+            </button>
+
             <span style={T.count}>{filtered.length} records</span>
           </div>
           <div

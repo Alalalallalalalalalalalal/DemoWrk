@@ -26,6 +26,14 @@ const MONTH_NAMES = [
   "Dec",
 ];
 
+const DAY_OPTIONS = Array.from({ length: 31 }, (_, i) => i + 1);
+
+function formatSeasonRange(season) {
+  return `${MONTH_NAMES[season.start_month - 1]} ${season.start_day}–${
+    MONTH_NAMES[season.end_month - 1]
+  } ${season.end_day}`;
+}
+
 function monthsInRange(startMonth, startDay, endMonth, endDay) {
   const months = new Set();
   // wrap-around ranges (e.g. Dec→Jan)
@@ -87,7 +95,13 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
   useEffect(() => {
     analyticsApi
       .seasonGroups()
-      .then(setGroups)
+      .then((data) => {
+        const visibleGroups = (data ?? []).filter(
+          (group) => group.group_type !== "simple",
+        );
+        setGroups(visibleGroups);
+        setActiveGroupIdx(0);
+      })
       .catch(() => {});
   }, []);
 
@@ -298,7 +312,6 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
         <p style={S.title}>Seasonal demand</p>
         <span style={S.note}>· click a bar to drill in</span>
       </div>
-
       {/* Group tabs */}
       <div style={S.tabRow}>
         {groups.map((g, i) => (
@@ -349,7 +362,7 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
             <div key={s.id} style={S.chip(s.is_active)}>
               <span>{s.season_name}</span>
               <span style={{ fontSize: 10, color: "#A08070", fontWeight: 400 }}>
-                {MONTH_NAMES[s.start_month - 1]}–{MONTH_NAMES[s.end_month - 1]}
+                {formatSeasonRange(s)}
               </span>
               <span style={{ display: "flex", gap: 2, marginLeft: 2 }}>
                 <button
@@ -380,7 +393,7 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
               </span>
             </div>
           ))}
-          {activeGroup.group_type === "custom" && (
+          {activeGroup.group_type !== "simple" && (
             <button
               style={{ ...S.addGroupBtn, fontSize: 11, padding: "3px 10px" }}
               onClick={() => {
@@ -434,6 +447,22 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
                 </option>
               ))}
             </select>
+            <select
+              style={S.select}
+              value={editForm.start_day ?? 1}
+              onChange={(e) =>
+                setEditForm((f) => ({
+                  ...f,
+                  start_day: Number(e.target.value),
+                }))
+              }
+            >
+              {DAY_OPTIONS.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
             <span
               style={{ fontSize: 11, color: "#A08070", alignSelf: "center" }}
             >
@@ -455,6 +484,22 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
                 </option>
               ))}
             </select>
+            <select
+              style={S.select}
+              value={editForm.end_day ?? 31}
+              onChange={(e) =>
+                setEditForm((f) => ({
+                  ...f,
+                  end_day: Number(e.target.value),
+                }))
+              }
+            >
+              {DAY_OPTIONS.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button style={S.saveBtn} onClick={saveEdit}>
@@ -467,7 +512,7 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
         </div>
       )}
 
-      {/* Add season panel (custom groups only) */}
+      {/* Add season panel (business/custom groups) */}
       {showAddSeason && (
         <div style={S.panel}>
           <p
@@ -506,6 +551,22 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
                 </option>
               ))}
             </select>
+            <select
+              style={S.select}
+              value={newSeason.start_day}
+              onChange={(e) =>
+                setNewSeason((s) => ({
+                  ...s,
+                  start_day: Number(e.target.value),
+                }))
+              }
+            >
+              {DAY_OPTIONS.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
             <span
               style={{ fontSize: 11, color: "#A08070", alignSelf: "center" }}
             >
@@ -524,6 +585,22 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
               {MONTH_NAMES.map((m, i) => (
                 <option key={m} value={i + 1}>
                   {m}
+                </option>
+              ))}
+            </select>
+            <select
+              style={S.select}
+              value={newSeason.end_day}
+              onChange={(e) =>
+                setNewSeason((s) => ({
+                  ...s,
+                  end_day: Number(e.target.value),
+                }))
+              }
+            >
+              {DAY_OPTIONS.map((d) => (
+                <option key={d} value={d}>
+                  {d}
                 </option>
               ))}
             </select>
@@ -587,7 +664,9 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
               onClick={(data) =>
                 data?.season &&
                 onSeasonClick &&
-                onSeasonClick(data.season, activeGroup)
+                onSeasonClick(data.season, activeGroup, {
+                  season_id: data.season_id ?? null,
+                })
               }
             />
           </BarChart>

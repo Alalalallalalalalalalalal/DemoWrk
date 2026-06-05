@@ -533,20 +533,12 @@ DEFAULT_SEASONS = [
     ("Festive", 12, 19, 1, 3),
 ]
 
-SIMPLE_SEASONS = [
-    ("Spring", 1, 1, 3, 31),
-    ("Summer", 4, 1, 7, 31),
-    ("Late Summer", 8, 1, 8, 31),
-    ("Autumn", 9, 1, 10, 31),
-    ("Winter", 11, 1, 12, 31),
-]
-
 SPECIFIC_DDL = """
 CREATE TABLE IF NOT EXISTS season_groups (
     id          SERIAL PRIMARY KEY,
     group_name  VARCHAR(100) NOT NULL UNIQUE,
     group_type  VARCHAR(20)  NOT NULL DEFAULT 'custom'
-                CHECK (group_type IN ('business', 'simple', 'custom')),
+                CHECK (group_type IN ('business', 'custom')),
     created_at  TIMESTAMP DEFAULT NOW()
 );
 
@@ -667,17 +659,35 @@ def _seed_group_seasons(conn, group_id: int, seasons: list[tuple], dry_run: bool
 def seed_seasons(conn, dry_run: bool = False) -> None:
     if dry_run:
         log.info(
-            "[DRY RUN] Would seed season groups plus %d business and %d simple season rows",
+            "[DRY RUN] Would seed Business Seasons plus %d business season rows; Simple Seasons removed",
             len(DEFAULT_SEASONS),
-            len(SIMPLE_SEASONS),
         )
         return
 
     business_group_id = _get_or_create_season_group(conn, "Business Seasons", "business")
-    simple_group_id = _get_or_create_season_group(conn, "Simple Seasons", "simple")
 
-    # Any seasons from the old schema become Business Seasons.
+    # Remove the old Simple Seasons group and its seasons if it exists.
     with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM seasons
+            WHERE group_id IN (
+                SELECT id
+                FROM season_groups
+                WHERE group_type = 'simple'
+                   OR group_name = 'Simple Seasons'
+            )
+            """
+        )
+        cur.execute(
+            """
+            DELETE FROM season_groups
+            WHERE group_type = 'simple'
+               OR group_name = 'Simple Seasons'
+            """
+        )
+
+        # Any seasons from the old schema become Business Seasons.
         cur.execute(
             """
             UPDATE seasons
@@ -688,13 +698,11 @@ def seed_seasons(conn, dry_run: bool = False) -> None:
         )
 
     business_count = _seed_group_seasons(conn, business_group_id, DEFAULT_SEASONS)
-    simple_count = _seed_group_seasons(conn, simple_group_id, SIMPLE_SEASONS)
 
     conn.commit()
     log.info(
-        "Seeded season groups. Business=%d rows, Simple=%d rows; existing definitions skipped",
+        "Seeded Business Seasons=%d rows; Simple Seasons removed; existing definitions skipped",
         business_count,
-        simple_count,
     )
 
 
