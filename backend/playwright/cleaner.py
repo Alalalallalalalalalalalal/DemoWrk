@@ -186,7 +186,8 @@ CREATE TABLE IF NOT EXISTS folios (
     check_in_date          DATE,
     check_out_date         DATE,
     room_number            VARCHAR(50),
-    room_rate              VARCHAR(255),
+    villa_name             VARCHAR(255), 
+    bedroom_count          INTEGER, 
     reservation_status     VARCHAR(100),
 
     -- Folder/source audit columns
@@ -945,7 +946,7 @@ def normalize_folio_row(row, journal_folder=None, source_file=None):
     transaction_date = clean_date(get_first(row, "Date", "Transaction Date"))
     amount = clean_amount(get_first(row, "Amount"))
     guest_name = clean_name(get_first(row, "Guest Name", "Member/Guest Name"))
-
+    
     return {
         "folio_key": make_folio_key(
             source_file, journal_folder, conf_code, reservation_folio_id,
@@ -965,10 +966,11 @@ def normalize_folio_row(row, journal_folder=None, source_file=None):
         "check_in_date": clean_date(get_first(row, "Check-In Date", "Check In Date")),
         "check_out_date": clean_date(get_first(row, "Check-Out Date", "Check Out Date")),
         "room_number": clean_str(get_first(row, "Room #", "Room Number"), 50),
-        "room_rate": clean_str(row.get("Room Rate"), 255),
+        "villa_name": clean_str(get_first(row, "Villa Name"), 255),
+        "bedroom_count": clean_int(get_first(row, "Bedroom Count")),
         "reservation_status": clean_category(get_first(row, "Reservation Status"), 100),
         "journal_folder": clean_str(journal_folder, 255),
-        "source_file": clean_str(source_file),
+        "source_file": clean_str(source_file),        
     }
 
 
