@@ -155,8 +155,10 @@ def extract_room_unit(room_no):
         return ""
     parts = room_no.split("-", 1)
     if len(parts) == 2:
-        return parts[1].strip()
-    return room_no.strip()
+        room = parts[0].strip()
+        unit = parts[1].strip()
+        return unit, room
+    return "", room_no.strip()
 
 def save_csv(filepath, rows):
     """Write rows to filepath, always overwriting any existing file."""
@@ -591,15 +593,20 @@ def scrape_reservation(page, reservation_row, prefix=""):
     room_rate = reservation_row.get("Room Rate", "")
     room_name, bedroom_count = parse_room_rate(room_rate)
     room_no = reservation_row.get("Room #", "")
-    room_unit = extract_room_unit(room_no)
+    room_unit, room = extract_room_unit(room_no)
     if not main_member_num:
         raw = reservation_row.get("Member/Guest Name", "") or reservation_row.get("_member_name", "")
         main_member_num, _ = split_member_guest(raw)
 
+    # fallback if extract_room_unit didn't actually split properly
+    if "-" not in room_no:
+        room = room_name
+        room_unit = ""
+
     # Listing metadata to attach to every folio row
     listing_meta = {col: reservation_row.get(col, "") for col in LISTING_COLUMNS}
     listing_meta["Main Member #"] = main_member_num
-    listing_meta["Villa Name"] = room_name
+    listing_meta["Villa Name"] = room
     listing_meta["Bedroom Count"] = bedroom_count
     listing_meta["Room #"] = room_unit
 
