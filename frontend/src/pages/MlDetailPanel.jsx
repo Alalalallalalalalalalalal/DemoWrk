@@ -17,16 +17,16 @@ const T = {
     justifyContent: "flex-end",
   },
   panel: {
-    width: "min(860px, 95vw)",
+    width: "min(1180px, 98vw)",
     height: "100vh",
     background: "#FDFAF6",
     display: "flex",
     flexDirection: "column",
     boxShadow: "-8px 0 40px rgba(0,0,0,0.18)",
-    overflowY: "auto",
+    overflow: "hidden",
   },
   header: {
-    padding: "22px 28px 18px",
+    padding: "24px 34px 20px",
     borderBottom: "1px solid #EDE5D8",
     display: "flex",
     alignItems: "flex-start",
@@ -39,7 +39,7 @@ const T = {
   },
   title: {
     margin: 0,
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: 700,
     color: "#3D2B1F",
     fontFamily: "sans-serif",
@@ -54,8 +54,8 @@ const T = {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    width: 32,
-    height: 32,
+    width: 38,
+    height: 38,
     borderRadius: "50%",
     border: "1px solid #EDE5D8",
     background: "transparent",
@@ -63,27 +63,30 @@ const T = {
     color: "#7A5C45",
     flexShrink: 0,
   },
-  body: { padding: "20px 28px 40px" },
+  body: { padding: "22px 34px 42px", overflowY: "auto", flex: 1, minHeight: 0 },
   table: {
     width: "100%",
     borderCollapse: "collapse",
     fontFamily: "sans-serif",
-    fontSize: 12,
+    fontSize: 13,
   },
   th: {
-    padding: "9px 12px",
+    padding: "12px 14px",
     background: "#F4EDE4",
     color: "#7A5C45",
     fontWeight: 700,
     textAlign: "left",
-    fontSize: 10,
+    fontSize: 11,
     textTransform: "uppercase",
     letterSpacing: "0.07em",
     borderBottom: "1px solid #EDE5D8",
     whiteSpace: "nowrap",
+    position: "sticky",
+    top: 0,
+    zIndex: 2,
   },
   td: {
-    padding: "9px 12px",
+    padding: "12px 14px",
     borderBottom: "1px solid #F0E8DE",
     color: "#3D2B1F",
     verticalAlign: "top",
@@ -117,7 +120,7 @@ const T = {
     background: "#FDFAF6",
     color: "#3D2B1F",
     outline: "none",
-    width: 220,
+    width: 260,
   },
   count: {
     fontSize: 12,
@@ -331,7 +334,8 @@ export function SeasonDetailPanel({
           </div>
           <div
             style={{
-              overflowX: "auto",
+              overflow: "auto",
+              maxHeight: "calc(100vh - 250px)",
               borderRadius: 10,
               border: "1px solid #EDE5D8",
             }}
@@ -496,7 +500,8 @@ export function AmenityDetailPanel({
           </div>
           <div
             style={{
-              overflowX: "auto",
+              overflow: "auto",
+              maxHeight: "calc(100vh - 250px)",
               borderRadius: 10,
               border: "1px solid #EDE5D8",
             }}
@@ -785,7 +790,7 @@ export function MarketingTargetsPanel({
           border: "1px solid #EDE5D8",
         }}
       >
-        <div style={{ maxHeight: 500, overflowY: "auto" }}>
+        <div style={{ maxHeight: "70vh", overflowY: "auto" }}>
           <table style={{ ...T.table, minWidth: 780 }}>
             <thead
               style={{

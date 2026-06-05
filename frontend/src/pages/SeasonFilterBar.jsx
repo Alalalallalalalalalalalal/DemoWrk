@@ -105,6 +105,8 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
       .catch(() => {});
   }, []);
 
+  const [showGraphKey, setShowGraphKey] = useState(false);
+
   const activeGroup = groups[activeGroupIdx];
   const chartData = activeGroup
     ? aggregateByGroup(seasonalVisits, activeGroup.seasons)
@@ -304,13 +306,69 @@ export default function SeasonFilterBar({ seasonalVisits, onSeasonClick }) {
       cursor: "pointer",
       fontFamily: "sans-serif",
     },
+    infoWrap: { position: "relative", display: "inline-flex" },
+    infoBtn: {
+      width: 18,
+      height: 18,
+      borderRadius: "50%",
+      border: "1px solid #DDD0C4",
+      background: "#FDFAF6",
+      color: "#7A6050",
+      fontSize: 11,
+      fontWeight: 700,
+      cursor: "help",
+    },
+    infoCard: {
+      position: "absolute",
+      top: 24,
+      left: 0,
+      zIndex: 5,
+      width: 260,
+      padding: "10px 12px",
+      borderRadius: 10,
+      background: "#FFFDF9",
+      border: "1px solid #EDE5D8",
+      boxShadow: "0 8px 22px rgba(61, 43, 31, 0.12)",
+      color: "#5A3E2B",
+      fontSize: 11,
+      lineHeight: 1.45,
+      fontFamily: "sans-serif",
+    },
   };
 
   return (
     <div style={S.wrap}>
       <div style={S.header}>
         <p style={S.title}>Seasonal demand</p>
-        <span style={S.note}>· click a bar to drill in</span>
+
+        <span
+          style={S.infoWrap}
+          onMouseEnter={() => setShowGraphKey(true)}
+          onMouseLeave={() => setShowGraphKey(false)}
+        >
+          <button
+            type="button"
+            style={S.infoBtn}
+            aria-label="Graph key"
+            onFocus={() => setShowGraphKey(true)}
+            onBlur={() => setShowGraphKey(false)}
+          >
+            i
+          </button>
+
+          {showGraphKey && (
+            <div style={S.infoCard}>
+              <strong>Graph key</strong>
+              <br />
+              <strong>X-axis:</strong> season name.
+              <br />
+              <strong>Y-axis:</strong> total visits.
+              <br />
+              <strong>Click a bar:</strong> opens the drill-down table for that
+              season using the selected year, month, or day filters.
+            </div>
+          )}
+        </span>
       </div>
       {/* Group tabs */}
       <div style={S.tabRow}>
