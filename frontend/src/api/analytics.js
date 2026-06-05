@@ -63,4 +63,7 @@ export const analyticsApi = {
         column,
       )}&value=${encodeURIComponent(value)}`,
     ),
+
+  // Member segments
+  memberSegments: () => fetchData("/analytics/ml/member-segments"),
 };

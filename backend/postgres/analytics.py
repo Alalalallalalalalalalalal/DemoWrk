@@ -1323,3 +1323,30 @@ def search_table(
     ).mappings().all()
 
     return [dict(row) for row in result]
+
+#-----------------------------#
+# Endpoints for Segmentation
+#-----------------------------#
+@router.get("/ml/member-segments")
+def member_segments(db: Session = Depends(get_db)):
+
+    spenders = db.execute(text("""
+        SELECT *
+        FROM segment_spenders
+    """)).mappings().all()
+
+    visitors = db.execute(text("""
+        SELECT *
+        FROM segment_visitors
+    """)).mappings().all()
+
+    amenities = db.execute(text("""
+        SELECT *
+        FROM segment_amenities
+    """)).mappings().all()
+
+    return {
+        "spenders": [dict(r) for r in spenders],
+        "visitors": [dict(r) for r in visitors],
+        "amenities": [dict(r) for r in amenities]
+    }
