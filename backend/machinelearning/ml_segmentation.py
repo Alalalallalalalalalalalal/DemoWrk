@@ -57,7 +57,7 @@ print("Loading folio data...")
 
 folios = query("""
     SELECT
-        COALESCE(member_number, main_member_number) AS member_id,
+        member_number AS member_id,
         transaction_date,
         description,
         amount,
@@ -65,7 +65,7 @@ folios = query("""
         check_out_date
     FROM folios
     WHERE description IS NOT NULL
-      AND COALESCE(member_number, main_member_number) IS NOT NULL
+      AND member_number IS NOT NULL
 """)
 
 print(f"Loaded {len(folios)} folio rows")

@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS folios (
 
     -- Reservation/person context
     conf_code              VARCHAR(100),
-    member_number          VARCHAR(50) REFERENCES members(member_number) ON DELETE SET CASCADE,
+    member_number          VARCHAR(50),
     guest_name             VARCHAR(255),
     check_in_date          DATE,
     check_out_date         DATE,
@@ -201,7 +201,7 @@ CREATE TABLE IF NOT EXISTS folios (
 CREATE TABLE IF NOT EXISTS reservation_guests (
     guest_key              VARCHAR(64) PRIMARY KEY,
     conf_code              VARCHAR(100),
-    member_number          VARCHAR(50) REFERENCES members(member_number) ON DELETE SET NULL,
+    member_number          VARCHAR(50),
     guest_name             VARCHAR(255),
     folio                  VARCHAR(100),
     is_owner               BOOLEAN,
@@ -551,8 +551,56 @@ def create_tables(conn, recreate=False):
             cur.execute(DROP_ALL)
         log.info("Creating tables if not exist...")
         cur.execute(DDL)
+
+        # Folios/reservation guests may include guest/member numbers that are not
+        # present in members yet, so these tables intentionally do not enforce
+        # a foreign key to members. Drop the old FK if it exists from a previous run.
+        cur.execute("""
+            ALTER TABLE IF EXISTS reservation_guests
+            DROP CONSTRAINT IF EXISTS reservation_guests_member_number_fkey
+        """)
     conn.commit()
     log.info("Tables ready.")
+
+
+def filter_rows_to_existing_members(conn, rows, label, member_field="member_number"):
+    """Keep only rows whose member_number exists in members.
+
+    This prevents --folios-only loads from failing when journal/folio CSVs
+    contain guest/member numbers that were not loaded into the members table.
+    """
+    if not rows:
+        return rows
+
+    member_numbers = sorted({
+        clean_str(row.get(member_field), 50)
+        for row in rows
+        if clean_str(row.get(member_field), 50)
+    })
+
+    if not member_numbers:
+        log.warning(f"  {label}: skipped {len(rows)} rows because no member_number was present")
+        return []
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT member_number FROM members WHERE member_number = ANY(%s)",
+            (member_numbers,),
+        )
+        existing = {r[0] for r in cur.fetchall()}
+
+    kept = [
+        row for row in rows
+        if clean_str(row.get(member_field), 50) in existing
+    ]
+
+    skipped = len(rows) - len(kept)
+    if skipped:
+        log.warning(
+            f"  {label}: skipped {skipped} rows because member_number was not in members"
+        )
+
+    return kept
 
 
 def upsert(conn, table, rows, conflict_col, dry_run=False):
