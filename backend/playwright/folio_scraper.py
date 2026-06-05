@@ -66,7 +66,7 @@ LISTING_COLUMNS = [
     "Check-In Date",
     "Check-Out Date",
     "Room #",
-    "Room Rate",
+    "Room Name",
     "Bedroom Count",
     "Reservation Status",
 ]
@@ -140,13 +140,23 @@ def get_conf_code(row):
             return v
     return "UNKNOWN"
 
-def extract_bedroom_count(room_rate):
+def parse_room_rate(room_rate):
     if not room_rate:
-        return None
+        return "", None
     match = re.search(r'(\d+)\s*BR', room_rate, re.IGNORECASE)
     if match:
-        return int(match.group(1))
-    return 1
+        bedroom_count = int(match.group(1))
+        room_name = re.sub(r'\s*\d+\s*BR', '', room_rate, flags=re.IGNORECASE).strip()
+        return room_name, bedroom_count
+    return room_rate.strip(), 1
+
+def extract_room_unit(room_no):
+    if not room_no:
+        return ""
+    parts = room_no.split("-", 1)
+    if len(parts) == 2:
+        return parts[1].strip()
+    return room_no.strip()
 
 def save_csv(filepath, rows):
     """Write rows to filepath, always overwriting any existing file."""
@@ -560,6 +570,9 @@ def scrape_reservation(page, reservation_row, prefix=""):
     conf_href      = reservation_row.get("_conf_href", "")
     main_member_num = reservation_row.get("Member #", "")
     room_rate = reservation_row.get("Room Rate", "")
+    room_name, bedroom_count = parse_room_rate(room_rate)
+    room_no = reservation_row.get("Room #", "")
+    room_unit = extract_room_unit(room_no)
     if not main_member_num:
         raw = reservation_row.get("Member/Guest Name", "") or reservation_row.get("_member_name", "")
         main_member_num, _ = split_member_guest(raw)
@@ -567,7 +580,9 @@ def scrape_reservation(page, reservation_row, prefix=""):
     # Listing metadata to attach to every folio row
     listing_meta = {col: reservation_row.get(col, "") for col in LISTING_COLUMNS}
     listing_meta["Main Member #"] = main_member_num
-    listing_meta["Bedroom Count"] = extract_bedroom_count(room_rate)
+    listing_meta["Room Name"] = room_name
+    listing_meta["Bedroom Count"] = bedroom_count
+    listing_meta["Room #"] = room_unit
 
     saved_files = {}
     pr(prefix, f"=== Reservation: {conf_code} | {reservation_row.get('Member/Guest Name', '')} ===")
