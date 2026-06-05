@@ -97,7 +97,7 @@ export default function Dashboard() {
   const [tableRows, setTableRows] = useState([]);
   const [tableSearch, setTableSearch] = useState("");
   const [sortOrder, setSortOrder] = useState("asc"); // asc | desc
-  const [rowLimit, setRowLimit] = useState("25");   // all | 25 | 100
+  const [rowLimit, setRowLimit] = useState("25"); // all | 25 | 100
   const [selectedColumn, setSelectedColumn] = useState("");
   const [visibleColumns, setVisibleColumns] = useState([]);
   const [page, setPage] = useState(1);
@@ -332,22 +332,22 @@ export default function Dashboard() {
     return String(val).toLowerCase();
   };
 
-  const filteredRows = tableRows.filter((row) => {
+  const filteredRows = tableRows
+    .filter((row) => {
       if (!tableSearch) return true;
       if (!selectedColumn) return true;
       const value = row[selectedColumn];
       if (value == null) return false;
-      return String(value)
-        .toLowerCase()
-        .includes(tableSearch.toLowerCase());
-    }).sort((a, b) => {
+      return String(value).toLowerCase().includes(tableSearch.toLowerCase());
+    })
+    .sort((a, b) => {
       const aVal = sortValue(a[selectedColumn]);
       const bVal = sortValue(b[selectedColumn]);
 
       if (aVal < bVal) return sortOrder === "asc" ? -1 : 1;
       if (aVal > bVal) return sortOrder === "asc" ? 1 : -1;
       return 0;
-    })
+    });
 
   const paginatedRows = (() => {
     if (rowLimit === "all") return filteredRows;
@@ -1075,7 +1075,15 @@ export default function Dashboard() {
                   </select>
                 </div>
 
-                <div style={{ display: "flex", gap: 10, alignItems: "center", position: "relative", width: 300 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    alignItems: "center",
+                    position: "relative",
+                    width: 300,
+                  }}
+                >
                   <span
                     style={{
                       position: "absolute",
@@ -1180,7 +1188,7 @@ export default function Dashboard() {
                   }}
                 >
                   <table style={{ ...styles.table, minWidth: 1200 }}>
-                    <thead  style={{ background: "#FAF6F0" }}>
+                    <thead style={{ background: "#FAF6F0" }}>
                       <tr>
                         {filteredRows.length > 0 &&
                           Object.keys(filteredRows[0]).map((column) => (
@@ -1527,32 +1535,28 @@ export default function Dashboard() {
 
             {/* Row 1: Seasonal + Segment value */}
             <div style={styles.chartsGrid}>
-              <ChartCard
-                title="Seasonal demand"
-                description="Click a bar to drill into who visits each season"
-              >
-                <ResponsiveContainer>
-                  <SeasonFilterBar
-                    seasonalVisits={seasonalVisits}
-                    onSeasonClick={(seasonName, group) => {
-                      // map custom groups to their month ranges for the drill-down
-                      const season = group?.seasons?.find(
-                        (s) => s.season_name === seasonName,
-                      );
-                      if (!season) return;
-                      analyticsApi
-                        .seasonalVisitDetails(seasonName)
-                        .then((rows) => {
-                          setSeasonDetailRows(rows);
-                          setSeasonDetail(seasonName);
-                        })
-                        .catch(() => {});
-                    }}
-                  />
-                </ResponsiveContainer>
-              </ChartCard>
+              <div style={{ width: "200%", minHeight: 360 }}>
+                <SeasonFilterBar
+                  seasonalVisits={seasonalVisits}
+                  onSeasonClick={(seasonName, group) => {
+                    const season = group?.seasons?.find(
+                      (s) => s.season_name === seasonName,
+                    );
 
-              <ChartCard
+                    if (!season) return;
+
+                    analyticsApi
+                      .seasonalVisitDetails(seasonName)
+                      .then((rows) => {
+                        setSeasonDetailRows(rows);
+                        setSeasonDetail(seasonName);
+                      })
+                      .catch(() => {});
+                  }}
+                />
+              </div>
+
+              {/* <ChartCard
                 title="Customer segment value"
                 description="Average spend per segment"
               >
@@ -1573,7 +1577,7 @@ export default function Dashboard() {
                     />
                   </BarChart>
                 </ResponsiveContainer>
-              </ChartCard>
+              </ChartCard> */}
             </div>
 
             {/* Row 2: Amenity adoption + Amenity spend — side by side, full label height */}
