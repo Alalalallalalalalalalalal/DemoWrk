@@ -223,11 +223,12 @@ def ensure_session(page, worker_id=0):
         return False
 
 def dismiss_popup(page):
-    try:
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(300)
-    except Exception:
-        pass
+    for _ in range(3):
+        try:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
+        except Exception:
+            pass
 
 # ─────────────────────────────────────────────
 # RESERVATION NAVIGATION
@@ -250,6 +251,7 @@ def navigate_to_reservation(page, conf_href, conf_code, prefix=""):
         except PWTimeout:
             page.wait_for_timeout(3000)
         pr(prefix, "Reservation page loaded.")
+        dismiss_popup(page)
         return True
     except Exception as e:
         pr(prefix, f"Navigation error: {e}")
@@ -367,6 +369,7 @@ def open_folio_management(page, conf_code, prefix=""):
         if btn:
             btn.click()
             page.wait_for_timeout(3000)
+            dismiss_popup(page)
             landing = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
             if landing and "folio" in landing.url.lower():
                 pr(prefix, f"  Folio page via button: {landing.url[:80]}")
@@ -382,6 +385,7 @@ def open_folio_management(page, conf_code, prefix=""):
         pr(prefix, f"  Direct nav: {url}")
         landing.goto(url, timeout=NAV_TIMEOUT)
         page.wait_for_timeout(2000)
+        dismiss_popup(page)
         landing = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
         if landing and "folio" in landing.url.lower():
             pr(prefix, "  Folio page via direct URL.")
