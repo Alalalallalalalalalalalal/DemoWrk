@@ -1202,11 +1202,22 @@ def add_season_to_group(body: dict, db: Session = Depends(get_db)):
     row = db.execute(text("""
         INSERT INTO seasons
             (season_name, start_month, start_day, end_month, end_day, is_active, group_id)
-        VALUES (:name, :start_month, :start_day, :end_month, :end_day, TRUE, :group_id)
+        VALUES (:season_name, :start_month, :start_day, :end_month, :end_day, TRUE, :group_id)
         RETURNING id;
     """), body).mappings().first()
+
     db.commit()
-    return {"id": row["id"], **body}
+
+    return {
+        "id": row["id"],
+        "season_name": body["season_name"],
+        "start_month": body["start_month"],
+        "start_day": body["start_day"],
+        "end_month": body["end_month"],
+        "end_day": body["end_day"],
+        "group_id": body["group_id"],
+        "is_active": True,
+    }
 
 @router.get("/tables")
 def get_tables(db: Session = Depends(get_db)):
