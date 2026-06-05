@@ -66,7 +66,7 @@ LISTING_COLUMNS = [
     "Check-In Date",
     "Check-Out Date",
     "Room #",
-    "Room Name",
+    "Villa Name",
     "Bedroom Count",
     "Reservation Status",
 ]
@@ -580,7 +580,7 @@ def scrape_reservation(page, reservation_row, prefix=""):
     # Listing metadata to attach to every folio row
     listing_meta = {col: reservation_row.get(col, "") for col in LISTING_COLUMNS}
     listing_meta["Main Member #"] = main_member_num
-    listing_meta["Room Name"] = room_name
+    listing_meta["Villa Name"] = room_name
     listing_meta["Bedroom Count"] = bedroom_count
     listing_meta["Room #"] = room_unit
 
