@@ -223,12 +223,27 @@ def ensure_session(page, worker_id=0):
         return False
 
 def dismiss_popup(page):
-    for _ in range(3):
-        try:
-            page.keyboard.press("Escape")
-            page.wait_for_timeout(300)
-        except Exception:
-            pass
+    try:
+        for frame in page.frames:
+            try:
+                btn = frame.query_selector(
+                    "a[onclick*='close'], button[onclick*='close'], "
+                    ".ui-dialog-titlebar-close, button.close, .close"
+                )
+
+                if btn:
+                    btn.click()
+                    page.wait_for_timeout(1000)
+                    return
+
+            except Exception:
+                continue
+
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+
+    except Exception:
+        pass
 
 # ─────────────────────────────────────────────
 # RESERVATION NAVIGATION

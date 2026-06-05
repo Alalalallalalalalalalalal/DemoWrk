@@ -978,13 +978,15 @@ def load_interests(conn, member_number, filepath, dry_run=False):
 
 def normalize_folio_row(row, journal_folder=None, source_file=None):
     """Normalize one Playwright folio transaction row to the folios table shape."""
-    _member_guest_name = get_first(row, "Member/Guest Name", "Guest Name")
 
-    # Resolve member_number — try explicit columns first, then fall back to
-    # the first token of the guest name field, then the journal folder name.
-    member_number = clean_str(get_first(row, "Member #", "Member Number", "Main Member #", "Main Member Number"), 50)
+    # Resolve member_number — only use explicit member columns, then journal
+    # folder name as a fallback. Do not infer member_number from guest name or conf code values.
+    member_number = clean_str(
+        get_first(row, "Main Member #", "Member #", "Member Number", "Main Member Number"),
+        50,
+    )
     if not member_number:
-        member_number = first_token(_member_guest_name) or clean_str(journal_folder, 50)
+        member_number = clean_str(journal_folder, 50)
 
     conf_code = clean_str(get_first(row, "Conf. Code", "Confirmation Code"), 100)
     folio_num = clean_str(get_first(row, "_folio_num", "Folio", "Folio #", "Folio Num"), 100)

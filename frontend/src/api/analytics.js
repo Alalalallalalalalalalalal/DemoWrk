@@ -118,4 +118,14 @@ export const analyticsApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then((r) => r.json()),
+
+  getTables: () => fetchData("/analytics/tables"),
+
+  getTableData: (table, limit = 100, offset = 0) =>
+    fetchData(`/analytics/table/${table}?limit=${limit}&offset=${offset}`),
+
+  searchTable: (table, column, value) =>
+    fetchData(
+      `/analytics/table/${table}/search?column=${column}&value=${encodeURIComponent(value)}`,
+    ),
 };
