@@ -1,5 +1,5 @@
 # backend/postgres/analytics.py
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -845,4 +845,109 @@ def ml_seasonal_visit_details(season: str, db: Session = Depends(get_db)):
           AND r.check_in_date IS NOT NULL
         ORDER BY r.check_in_date DESC;
     """)).mappings().all()
+    return [dict(row) for row in result]
+
+@router.get("/tables")
+def get_tables(db: Session = Depends(get_db)):
+    result = db.execute(text("""
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+        ORDER BY table_name;
+    """)).fetchall()
+
+    return [row[0] for row in result]
+
+@router.get("/table/{table_name}")
+def get_table_data(table_name: str, limit: int = 100,
+                    offset: int = 0, db: Session = Depends(get_db)):
+    allowed_tables = {
+        "airport_transfer_users",
+        "amenity_adoption",
+        "amenity_revenue",
+        "amenity_spend",
+        "dependent_addresses",
+        "dependent_phones",
+        "dependents",
+        "folios",
+        "interests",
+        "marketing_targets",
+        "member_addresses",
+        "member_amenity_segments",
+        "member_amenity_usage",
+        "member_phones",
+        "member_seasons",
+        "member_segments",
+        "members",
+        "recent_activity",
+        "reservation_guests",
+        "rooms",
+        "seasonal_visits",
+        "seasons",
+        "services",
+        "statements"
+    }
+
+    if table_name not in allowed_tables:
+        raise HTTPException(status_code=400, detail="Invalid table")
+
+    result = db.execute(
+        text(f"""
+            SELECT *
+            FROM {table_name}
+            LIMIT :limit
+            OFFSET :offset
+        """),
+        {"limit": limit, "offset": offset}
+    ).mappings().all()
+
+    return [dict(row) for row in result]
+
+@router.get("/table/{table_name}/search")
+def search_table(
+    table_name: str,
+    column: str,
+    value: str,
+    db: Session = Depends(get_db)
+):
+    allowed_tables = {
+        "airport_transfer_users",
+        "amenity_adoption",
+        "amenity_revenue",
+        "amenity_spend",
+        "dependent_addresses",
+        "dependent_phones",
+        "dependents",
+        "folios",
+        "interests",
+        "marketing_targets",
+        "member_addresses",
+        "member_amenity_segments",
+        "member_amenity_usage",
+        "member_phones",
+        "member_seasons",
+        "member_segments",
+        "members",
+        "recent_activity",
+        "reservation_guests",
+        "rooms",
+        "seasonal_visits",
+        "seasons",
+        "services",
+        "statements"
+    }
+
+    if table_name not in allowed_tables:
+        raise HTTPException(status_code=400, detail="Invalid table")
+
+    result = db.execute(
+        text(f"""
+            SELECT *
+            FROM {table_name}
+            WHERE CAST({column} AS TEXT) ILIKE :value
+            LIMIT 100
+        """),
+        {"value": f"%{value}%"}
+    ).mappings().all()
+
     return [dict(row) for row in result]

@@ -57,7 +57,7 @@ const TABS = [
   { id: "demographics", label: "Demographics", Icon: Users },
   { id: "visits", label: "Visits & Rooms", Icon: BedDouble },
   { id: "finance", label: "Finance", Icon: DollarSign },
-  { id: "directory", label: "Directory", Icon: BookOpen },
+  { id: "reports", label: "Reports", Icon: BookOpen },
   { id: "ml", label: "ML Insights", Icon: Sparkles },
 ];
 
@@ -91,8 +91,15 @@ export default function Dashboard() {
   const [totalDependents, setTotalDependents] = useState(null);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
   const [dependentsPerMember, setDependentsPerMember] = useState([]);
-  const [directoryMembers, setDirectoryMembers] = useState([]);
-  const [directorySearch, setDirectorySearch] = useState("");
+  const [availableTables, setAvailableTables] = useState([]);
+  const [selectedTable, setSelectedTable] = useState("");
+  const [tableRows, setTableRows] = useState([]);
+  const [tableSearch, setTableSearch] = useState("");
+  const [sortOrder, setSortOrder] = useState("asc"); // asc | desc
+  const [rowLimit, setRowLimit] = useState("25");   // all | 25 | 100
+  const [selectedColumn, setSelectedColumn] = useState("");
+  const [visibleColumns, setVisibleColumns] = useState([]);
+  const [page, setPage] = useState(1);
 
   // ML Insights now loads from one master backend response, only when the ML tab opens.
   const [mlInsights, setMlInsights] = useState(null);
@@ -103,6 +110,7 @@ export default function Dashboard() {
   const [seasonDetailRows, setSeasonDetailRows] = useState([]);
   const [amenityDetail, setAmenityDetail] = useState(null);
   const [showEmailModal, setShowEmailModal] = useState(false);
+  const [columnPickerOpen, setColumnPickerOpen] = useState(false);
 
   useEffect(() => {
     const safe = (fn, set) =>
@@ -133,7 +141,7 @@ export default function Dashboard() {
     safe(analyticsApi.totalDependents, setTotalDependents);
     safe(analyticsApi.dependentsByAgeGroup, setDependentsByAgeGroup);
     safe(analyticsApi.dependentsPerMember, setDependentsPerMember);
-    safe(analyticsApi.memberDirectory, setDirectoryMembers);
+    safe(analyticsApi.getTables, setAvailableTables);
   }, []);
 
   useEffect(() => {
@@ -152,6 +160,41 @@ export default function Dashboard() {
       .finally(() => setMlLoading(false));
   }, [activeTab, mlInsights, mlLoading]);
 
+  useEffect(() => {
+    if (!selectedTable) return;
+
+    analyticsApi
+      .getTableData(selectedTable)
+      .then(setTableRows)
+      .catch(console.error);
+  }, [selectedTable]);
+
+  useEffect(() => {
+    if (!selectedTable) return;
+
+    analyticsApi
+      .getTableData(selectedTable)
+      .then((data) => {
+        setTableRows(data);
+
+        // auto-pick first column as default search column
+        if (data?.length > 0) {
+          setSelectedColumn(Object.keys(data[0])[0]);
+        }
+      })
+      .catch(console.error);
+  }, [selectedTable]);
+
+  useEffect(() => {
+    if (!tableRows.length) return;
+
+    setVisibleColumns(Object.keys(tableRows[0]));
+  }, [tableRows]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [tableSearch, selectedColumn, selectedTable]);
+
   // ---------- derived values (identical to original) ----------
   const totalMembers = membersByType.reduce((a, b) => a + (b.total || 0), 0);
 
@@ -165,22 +208,6 @@ export default function Dashboard() {
   const memberAmenityUsage = mlInsights?.memberAmenityUsage ?? [];
   const marketingTargetsByCampaign =
     mlInsights?.marketingTargetsByCampaign ?? [];
-
-  const filteredDirectory = directoryMembers.filter((m) => {
-    const q = directorySearch.toLowerCase();
-    if (!q) return true;
-    return [
-      m.member_name,
-      m.member_number,
-      m.member_type,
-      m.status,
-      m.city,
-      m.state,
-      m.country,
-      m.occupation,
-      m.employer,
-    ].some((v) => v && String(v).toLowerCase().includes(q));
-  });
 
   const selectedMlMember = memberSegments.find((m) => {
     const q = mlSearch.toLowerCase();
@@ -291,6 +318,45 @@ export default function Dashboard() {
   /* ── use the original styles for inner content ── */
   const styles = baseStyles;
 
+  const sortValue = (val) => {
+    if (val == null) return "";
+
+    // number detection
+    if (!isNaN(val) && val !== "") return Number(val);
+
+    // date detection
+    const date = Date.parse(val);
+    if (!isNaN(date)) return date;
+
+    return String(val).toLowerCase();
+  };
+
+  const filteredRows = tableRows.filter((row) => {
+      if (!tableSearch) return true;
+      if (!selectedColumn) return true;
+      const value = row[selectedColumn];
+      if (value == null) return false;
+      return String(value)
+        .toLowerCase()
+        .includes(tableSearch.toLowerCase());
+    }).sort((a, b) => {
+      const aVal = sortValue(a[selectedColumn]);
+      const bVal = sortValue(b[selectedColumn]);
+
+      if (aVal < bVal) return sortOrder === "asc" ? -1 : 1;
+      if (aVal > bVal) return sortOrder === "asc" ? 1 : -1;
+      return 0;
+    })
+
+  const paginatedRows = (() => {
+    if (rowLimit === "all") return filteredRows;
+
+    const start = (page - 1) * Number(rowLimit);
+    const end = start + Number(rowLimit);
+
+    return filteredRows.slice(start, end);
+  })();
+
   return (
     <div style={S.shell}>
       {/* ── Vertical Sidebar ── */}
@@ -324,7 +390,7 @@ export default function Dashboard() {
             "Room performance, booking trends and live roster"}
           {activeTab === "finance" &&
             "Outstanding balances and spend breakdown"}
-          {activeTab === "directory" && "Searchable member and guest records"}
+          {activeTab === "reports" && "View reports and filtering"}
           {activeTab === "ml" &&
             "Segmentation, amenity insights and campaign recommendations"}
         </p>
@@ -959,8 +1025,8 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ════════ DIRECTORY ════════ */}
-        {activeTab === "directory" && (
+        {/* ════════ REPORTS ════════ */}
+        {activeTab === "reports" && (
           <div style={styles.tabContent}>
             <div style={styles.card}>
               <div
@@ -973,14 +1039,42 @@ export default function Dashboard() {
                   flexWrap: "wrap",
                 }}
               >
-                <div>
-                  <p style={styles.cardTitle}>All members &amp; guests</p>
-                  <p style={styles.cardDesc}>
-                    {filteredDirectory.length} of {directoryMembers.length}{" "}
-                    records
-                  </p>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <select
+                    value={selectedTable}
+                    onChange={(e) => setSelectedTable(e.target.value)}
+                    style={{
+                      padding: "10px",
+                      borderRadius: "8px",
+                      border: "1px solid #ddd",
+                      minWidth: "250px",
+                    }}
+                  >
+                    <option value="">Select Report</option>
+
+                    {availableTables.map((table) => (
+                      <option key={table} value={table}>
+                        {table}
+                      </option>
+                    ))}
+                  </select>
+
+                  <select
+                    value={rowLimit}
+                    onChange={(e) => setRowLimit(e.target.value)}
+                    style={{
+                      padding: "10px",
+                      borderRadius: "8px",
+                      border: "1px solid #ddd",
+                    }}
+                  >
+                    <option value="all">All Rows</option>
+                    <option value="25">25 Rows</option>
+                    <option value="100">100 Rows</option>
+                  </select>
                 </div>
-                <div style={{ position: "relative", width: 300 }}>
+
+                <div style={{ display: "flex", gap: 10, alignItems: "center", position: "relative", width: 300 }}>
                   <span
                     style={{
                       position: "absolute",
@@ -1003,78 +1097,113 @@ export default function Dashboard() {
                       <path d="m21 21-4.35-4.35" />
                     </svg>
                   </span>
+                  <div style={{ position: "relative" }}>
+                    <button
+                      onClick={() => setColumnPickerOpen((v) => !v)}
+                      style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 8,
+                        border: "1px solid #ddd",
+                        background: "#fff",
+                        cursor: "pointer",
+                      }}
+                      title="Select column"
+                    >
+                      ☰
+                    </button>
+
+                    {columnPickerOpen && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 45,
+                          left: 0,
+                          background: "#fff",
+                          border: "1px solid #EDE5D8",
+                          borderRadius: 8,
+                          boxShadow: "0 6px 20px rgba(0,0,0,0.08)",
+                          zIndex: 1000,
+                          maxHeight: 200,
+                          overflowY: "auto",
+                        }}
+                      >
+                        {tableRows?.length > 0 &&
+                          Object.keys(tableRows[0]).map((col) => (
+                            <div
+                              key={col}
+                              onClick={() => {
+                                setSelectedColumn(col);
+                                setColumnPickerOpen(false);
+                              }}
+                              style={{
+                                padding: "8px 12px",
+                                cursor: "pointer",
+                                fontSize: 12,
+                              }}
+                            >
+                              {col}
+                            </div>
+                          ))}
+                      </div>
+                    )}
+                  </div>
                   <input
-                    value={directorySearch}
-                    onChange={(e) => setDirectorySearch(e.target.value)}
-                    placeholder="Search name, number, city, occupation…"
+                    value={tableSearch}
+                    onChange={(e) => setTableSearch(e.target.value)}
+                    placeholder="Search selected report…"
                     style={styles.searchInput}
                   />
+
+                  <select
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder(e.target.value)}
+                    style={{
+                      padding: "10px",
+                      borderRadius: "8px",
+                      border: "1px solid #ddd",
+                    }}
+                  >
+                    <option value="asc">Asc</option>
+                    <option value="desc">Desc</option>
+                  </select>
                 </div>
               </div>
-              <div
-                style={{
-                  overflowX: "auto",
-                  borderRadius: 10,
-                  border: "1px solid #EDE5D8",
-                }}
-              >
-                <div style={{ maxHeight: 600, overflowY: "auto" }}>
-                  <table style={{ ...styles.table, minWidth: 900 }}>
-                    <thead
-                      style={{
-                        position: "sticky",
-                        top: 0,
-                        background: "#FDFAF6",
-                        zIndex: 1,
-                      }}
-                    >
+
+              {selectedTable && (
+                <div
+                  style={{
+                    overflowX: "auto",
+                    border: "1px solid #EDE5D8",
+                    borderRadius: 10,
+                  }}
+                >
+                  <table style={{ ...styles.table, minWidth: 1200 }}>
+                    <thead  style={{ background: "#FAF6F0" }}>
                       <tr>
-                        {[
-                          "Member",
-                          "Type",
-                          "Status",
-                          "In-house",
-                          "Age / Gender",
-                          "Location",
-                          "Occupation",
-                          "Tenure",
-                          "Dependents",
-                          "Balance",
-                        ].map((h) => (
-                          <th key={h} style={styles.th}>
-                            {h}
-                          </th>
-                        ))}
+                        {filteredRows.length > 0 &&
+                          Object.keys(filteredRows[0]).map((column) => (
+                            <th key={column} style={styles.th}>
+                              {column}
+                            </th>
+                          ))}
                       </tr>
                     </thead>
+
                     <tbody>
-                      {filteredDirectory.length === 0 ? (
-                        <tr>
-                          <td
-                            colSpan={10}
-                            style={{
-                              ...styles.td,
-                              textAlign: "center",
-                              color: "#B09880",
-                              padding: 40,
-                            }}
-                          >
-                            No data available
-                          </td>
+                      {filteredRows.map((row, index) => (
+                        <tr key={index}>
+                          {Object.values(row).map((value, i) => (
+                            <td key={i} style={styles.td}>
+                              {String(value ?? "")}
+                            </td>
+                          ))}
                         </tr>
-                      ) : (
-                        filteredDirectory.map((m, i) => (
-                          <DirectoryRow
-                            key={m.member_number ?? i}
-                            m={m}
-                            i={i}
-                          />
-                        ))
-                      )}
+                      ))}
                     </tbody>
                   </table>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         )}
