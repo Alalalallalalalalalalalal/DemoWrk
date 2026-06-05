@@ -575,8 +575,8 @@ CREATE TABLE IF NOT EXISTS member_seasons (
     total_nights        INTEGER      NOT NULL DEFAULT 0,
     first_check_in      DATE,
     last_check_out      DATE,
-    top_villa           VARCHAR(255),
-    top_bedroom_count   INTEGER,
+    villa_name          VARCHAR(255),
+    bedroom_count       INTEGER,
     UNIQUE (member_number, season_id)
 );
 """
@@ -894,7 +894,7 @@ def build_member_seasons(conn, dry_run: bool = False) -> int:
                 """
                 INSERT INTO member_seasons
                     (member_number, season_id, season_name, visit_count, total_nights,
-                     first_check_in, last_check_out, top_villa, top_bedroom_count)
+                     first_check_in, last_check_out, villa_name, bedroom_count)
                 VALUES %s
                 ON CONFLICT (member_number, season_id) DO UPDATE SET
                     season_name = EXCLUDED.season_name,
@@ -902,8 +902,8 @@ def build_member_seasons(conn, dry_run: bool = False) -> int:
                     total_nights = EXCLUDED.total_nights,
                     first_check_in = EXCLUDED.first_check_in,
                     last_check_out = EXCLUDED.last_check_out,
-                    top_villa = EXCLUDED.top_villa,
-                    top_bedroom_count = EXCLUDED.top_bedroom_count
+                    villa_name = EXCLUDED.villa_name,
+                    bedroom_count = EXCLUDED.bedroom_count
                 """,
                 output_rows,
                 page_size=1000,
