@@ -48,6 +48,7 @@ import {
   MarketingTargetsPanel,
 } from "./MlDetailPanel";
 import SeasonFilterBar from "./SeasonFilterBar";
+import AmenitySeasonPanel from "./AmenitySeasonPanel";
 
 /* ─── Sidebar config ─────────────────────────────────────────── */
 const TABS = [
@@ -146,7 +147,6 @@ export default function Dashboard() {
       .catch(console.error);
 
     analyticsApi.getTables().then(setAvailableTables).catch(console.error);
-
   }, []);
 
   useEffect(() => {
@@ -194,7 +194,14 @@ export default function Dashboard() {
 
   useEffect(() => {
     setPage(1);
-  }, [tableSearch, selectedColumn, selectedTable, rowLimit, sortColumn, sortDirection]);
+  }, [
+    tableSearch,
+    selectedColumn,
+    selectedTable,
+    rowLimit,
+    sortColumn,
+    sortDirection,
+  ]);
 
   // ---------- derived values (identical to original) ----------
   const totalMembers = membersByType.reduce((a, b) => a + (b.total || 0), 0);
@@ -227,19 +234,19 @@ export default function Dashboard() {
         .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0))
     : [];
 
-  const amenityRevenueReadable = amenityRevenue
-    .map((a) => ({
-      ...a,
-      avg_transaction:
-        Number(a.transactions ?? 0) > 0
-          ? Number(a.revenue ?? 0) / Number(a.transactions ?? 1)
-          : 0,
-    }))
-    .sort((a, b) => Number(b.revenue ?? 0) - Number(a.revenue ?? 0));
+  // const amenityRevenueReadable = amenityRevenue
+  //   .map((a) => ({
+  //     ...a,
+  //     avg_transaction:
+  //       Number(a.transactions ?? 0) > 0
+  //         ? Number(a.revenue ?? 0) / Number(a.transactions ?? 1)
+  //         : 0,
+  //   }))
+  //   .sort((a, b) => Number(b.revenue ?? 0) - Number(a.revenue ?? 0));
 
-  const amenityAdoptionReadable = amenityAdoption
-    .map((a) => ({ ...a, adoption_score: Number(a.members_using ?? 0) }))
-    .sort((a, b) => b.adoption_score - a.adoption_score);
+  // const amenityAdoptionReadable = amenityAdoption
+  //   .map((a) => ({ ...a, adoption_score: Number(a.members_using ?? 0) }))
+  //   .sort((a, b) => b.adoption_score - a.adoption_score);
 
   const activeTabInfo = TABS.find((t) => t.id === activeTab);
 
@@ -247,14 +254,14 @@ export default function Dashboard() {
   const styles = baseStyles;
 
   const getComparableValue = (value) => {
-  if (value == null || value === "") return "";
+    if (value == null || value === "") return "";
 
-  const numericValue = Number(value);
-  if (!Number.isNaN(numericValue) && String(value).trim() !== "") {
-    return numericValue;
-  }
+    const numericValue = Number(value);
+    if (!Number.isNaN(numericValue) && String(value).trim() !== "") {
+      return numericValue;
+    }
 
-  const dateValue = Date.parse(value);
+    const dateValue = Date.parse(value);
     if (!Number.isNaN(dateValue)) {
       return dateValue;
     }
@@ -1816,158 +1823,9 @@ export default function Dashboard() {
             </div>
 
             {/* Row 2: Amenity adoption + Amenity spend — side by side, full label height */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 16,
-                marginBottom: 20,
-              }}
-            >
-              {/* Amenity adoption */}
-              <div
-                style={{
-                  background: "#FDFAF6",
-                  border: "1px solid #EDE5D8",
-                  borderRadius: 14,
-                  padding: "18px 20px 14px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 13,
-                      fontWeight: 700,
-                      color: "#3D2B1F",
-                      fontFamily: "sans-serif",
-                    }}
-                  >
-                    Amenity adoption
-                  </p>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      color: "#A08070",
-                      fontFamily: "sans-serif",
-                    }}
-                  >
-                    · click bar to see members
-                  </span>
-                </div>
-                <div
-                  style={{
-                    height: Math.max(260, amenityAdoptionReadable.length * 32),
-                  }}
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={amenityAdoptionReadable}
-                      layout="vertical"
-                      margin={{ left: 8, right: 16, top: 4, bottom: 4 }}
-                    >
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke="#E8DDD0"
-                        horizontal={false}
-                      />
-                      <XAxis type="number" stroke="#A08070" fontSize={11} />
-                      <YAxis
-                        type="category"
-                        dataKey="amenity"
-                        stroke="#A08070"
-                        fontSize={11}
-                        width={130}
-                        tick={{ fill: "#5A3E2B" }}
-                      />
-                      <Tooltip contentStyle={TOOLTIP_STYLE} />
-                      <Bar
-                        dataKey="members_using"
-                        fill="#5B9EAD"
-                        radius={[0, 6, 6, 0]}
-                        cursor="pointer"
-                        onClick={(data) => {
-                          if (data?.amenity) setAmenityDetail(data.amenity);
-                        }}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* Amenity spend */}
-              <div
-                style={{
-                  background: "#FDFAF6",
-                  border: "1px solid #EDE5D8",
-                  borderRadius: 14,
-                  padding: "18px 20px 14px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 13,
-                      fontWeight: 700,
-                      color: "#3D2B1F",
-                      fontFamily: "sans-serif",
-                    }}
-                  >
-                    Amenity spend ranking
-                  </p>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      color: "#A08070",
-                      fontFamily: "sans-serif",
-                    }}
-                  >
-                    · revenue by amenity
-                  </span>
-                </div>
-                <div
-                  style={{
-                    height: Math.max(260, amenityRevenueReadable.length * 32),
-                  }}
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={amenityRevenueReadable}
-                      layout="vertical"
-                      margin={{ left: 8, right: 16, top: 4, bottom: 4 }}
-                    >
-                      <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke="#E8DDD0"
-                        horizontal={false}
-                      />
-                      <XAxis type="number" stroke="#A08070" fontSize={11} />
-                      <YAxis
-                        type="category"
-                        dataKey="amenity"
-                        stroke="#A08070"
-                        fontSize={11}
-                        width={130}
-                        tick={{ fill: "#5A3E2B" }}
-                      />
-                      <Tooltip contentStyle={TOOLTIP_STYLE} />
-                      <Bar
-                        dataKey="revenue"
-                        fill="#D4AF2A"
-                        radius={[0, 6, 6, 0]}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </div>
+            {/* Row 2: Amenity × Season full panel */}
+            <SectionLabel>Amenity Season Analysis</SectionLabel>
+            <AmenitySeasonPanel />
 
             {/* ════ Targeted Marketing ════ */}
             <SectionLabel>Targeted Marketing</SectionLabel>

@@ -1202,22 +1202,11 @@ def add_season_to_group(body: dict, db: Session = Depends(get_db)):
     row = db.execute(text("""
         INSERT INTO seasons
             (season_name, start_month, start_day, end_month, end_day, is_active, group_id)
-        VALUES (:season_name, :start_month, :start_day, :end_month, :end_day, TRUE, :group_id)
+        VALUES (:name, :start_month, :start_day, :end_month, :end_day, TRUE, :group_id)
         RETURNING id;
     """), body).mappings().first()
-
     db.commit()
-
-    return {
-        "id": row["id"],
-        "season_name": body["season_name"],
-        "start_month": body["start_month"],
-        "start_day": body["start_day"],
-        "end_month": body["end_month"],
-        "end_day": body["end_day"],
-        "group_id": body["group_id"],
-        "is_active": True,
-    }
+    return {"id": row["id"], **body}
 
 @router.get("/tables")
 def get_tables(db: Session = Depends(get_db)):
@@ -1323,3 +1312,63 @@ def search_table(
     ).mappings().all()
 
     return [dict(row) for row in result]
+
+@router.get("/ml/amenity-season-insights")
+def ml_amenity_season_insights(db: Session = Depends(get_db)):
+    def rows(sql: str):
+        return [dict(row) for row in db.execute(text(sql)).mappings().all()]
+
+    spend_raw = rows("""
+        SELECT amenity, season,
+               total_spend,
+               transaction_count,
+               avg_spend_per_visit,
+               member_count
+        FROM amenity_season_spend
+        ORDER BY season, total_spend DESC
+    """)
+
+    profile_raw = rows("""
+        SELECT member_id,
+               member_full_name,
+               top_amenity,
+               top_amenity_spend,
+               total_amenity_spend
+        FROM member_amenity_profile
+        ORDER BY total_amenity_spend DESC NULLS LAST
+        LIMIT 1000
+    """)
+
+    visits_raw = rows("""
+        SELECT member_id,
+               member_full_name,
+               season,
+               amenity,
+               usage_count,
+               total_spend,
+               check_in_fmt,
+               check_out_fmt
+        FROM member_amenity_season_visits
+        ORDER BY check_in_fmt DESC NULLS LAST
+        LIMIT 2000
+    """)
+
+    villa_raw = rows("""
+        SELECT season,
+               total_bookings,
+               total_nights,
+               avg_nights,
+               unique_members,
+               top_villa,
+               top_bedroom_count,
+               bedroom_distribution
+        FROM season_villa_bedroom_summary
+        ORDER BY total_bookings DESC
+    """)
+
+    return {
+        "amenitySeasonSpend": spend_raw,
+        "memberAmenityProfile": profile_raw,
+        "memberAmenitySeasonVisits": visits_raw,
+        "seasonVillaBedroom": villa_raw,
+    }

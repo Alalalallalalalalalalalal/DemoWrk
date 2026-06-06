@@ -63,4 +63,7 @@ export const analyticsApi = {
         column,
       )}&value=${encodeURIComponent(value)}`,
     ),
+
+  amenitySeasonInsights: () =>
+    fetchData("/analytics/ml/amenity-season-insights"),
 };
