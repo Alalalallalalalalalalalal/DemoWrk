@@ -189,6 +189,25 @@ function getCampaignColor(name) {
   return "#8B7B70";
 }
 
+function getMemberNumber(row) {
+  return row?.member_number ?? row?.member_id ?? row?.id ?? null;
+}
+
+function getMemberName(row) {
+  return (
+    row?.member_full_name ??
+    row?.member_name ??
+    row?.full_name ??
+    row?.name ??
+    null
+  );
+}
+
+function memberKey(row) {
+  const value = getMemberNumber(row);
+  return value == null ? "" : String(value);
+}
+
 /* ─────────────────────────────────────────────
    SeasonDetailPanel
    Props: season, rows (from /ml/seasonal-visit-details),
@@ -219,7 +238,7 @@ export function SeasonDetailPanel({
 
   const amenityMap = {};
   (memberAmenityUsage || []).forEach((a) => {
-    const key = String(a.member_number);
+    const key = memberKey(a);
     if (!amenityMap[key]) amenityMap[key] = [];
     amenityMap[key].push(a.amenity);
   });
@@ -239,9 +258,12 @@ export function SeasonDetailPanel({
 
     if (!search) return true;
     const q = search.toLowerCase();
-    return [r.member_full_name, r.member_number, r.country, r.member_type].some(
-      (v) => v && String(v).toLowerCase().includes(q),
-    );
+    return [
+      getMemberName(r),
+      getMemberNumber(r),
+      r.country,
+      r.member_type,
+    ].some((v) => v && String(v).toLowerCase().includes(q));
   });
 
   return (
@@ -378,7 +400,7 @@ export function SeasonDetailPanel({
                   </tr>
                 ) : (
                   filtered.map((r, i) => {
-                    const amenities = amenityMap[String(r.member_number)] || [];
+                    const amenities = amenityMap[memberKey(r)] || [];
                     return (
                       <tr
                         key={i}
@@ -387,10 +409,10 @@ export function SeasonDetailPanel({
                         }}
                       >
                         <td style={{ ...T.td, fontWeight: 600 }}>
-                          {r.member_full_name ?? "—"}
+                          {getMemberName(r) ?? "—"}
                         </td>
                         <td style={{ ...T.td, color: "#A08070", fontSize: 11 }}>
-                          {r.member_number ?? "—"}
+                          {getMemberNumber(r) ?? "—"}
                         </td>
                         <td style={T.td}>{r.member_type ?? "—"}</td>
                         <td style={{ ...T.td, textAlign: "center" }}>
@@ -454,7 +476,7 @@ export function AmenityDetailPanel({
 
   const segmentMap = {};
   (memberSegments || []).forEach((m) => {
-    segmentMap[String(m.member_number)] = m;
+    segmentMap[memberKey(m)] = m;
   });
 
   const rows = (memberAmenityUsage || [])
@@ -464,10 +486,10 @@ export function AmenityDetailPanel({
   const filtered = rows.filter((r) => {
     if (!search) return true;
     const q = search.toLowerCase();
-    const seg = segmentMap[String(r.member_number)];
+    const seg = segmentMap[memberKey(r)];
     return [
-      r.member_full_name,
-      r.member_number,
+      getMemberName(r),
+      getMemberNumber(r),
       seg?.segment_name,
       seg?.campaign,
     ].some((v) => v && String(v).toLowerCase().includes(q));
@@ -541,7 +563,7 @@ export function AmenityDetailPanel({
                   </tr>
                 ) : (
                   filtered.map((r, i) => {
-                    const seg = segmentMap[String(r.member_number)];
+                    const seg = segmentMap[memberKey(r)];
                     const campaigns = seg?.campaign
                       ? seg.campaign.split(",").map((s) => s.trim())
                       : [];
@@ -553,10 +575,10 @@ export function AmenityDetailPanel({
                         }}
                       >
                         <td style={{ ...T.td, fontWeight: 600 }}>
-                          {r.member_full_name ?? "—"}
+                          {getMemberName(r) ?? "—"}
                         </td>
                         <td style={{ ...T.td, color: "#A08070", fontSize: 11 }}>
-                          {r.member_number ?? "—"}
+                          {getMemberNumber(r) ?? "—"}
                         </td>
                         <td style={{ ...T.td, textAlign: "center" }}>
                           {r.usage_count ?? "—"}
@@ -625,7 +647,7 @@ export function MarketingTargetsPanel({
   const topAmenityMap = {};
   const amenitySpendMap = {};
   (memberAmenityUsage || []).forEach((a) => {
-    const key = String(a.member_number);
+    const key = memberKey(a);
     if (
       !amenitySpendMap[key] ||
       Number(a.total_spend) > Number(amenitySpendMap[key].spend)
@@ -666,8 +688,8 @@ export function MarketingTargetsPanel({
     if (search) {
       const q = search.toLowerCase();
       return [
-        m.member_full_name,
-        m.member_number,
+        getMemberName(m),
+        getMemberNumber(m),
         m.segment_name,
         m.campaign,
       ].some((v) => v && String(v).toLowerCase().includes(q));
@@ -838,7 +860,7 @@ export function MarketingTargetsPanel({
                   const campaigns = m.campaign
                     ? m.campaign.split(",").map((s) => s.trim())
                     : [];
-                  const favAmenity = topAmenityMap[String(m.member_number)];
+                  const favAmenity = topAmenityMap[memberKey(m)];
                   return (
                     <tr
                       key={i}
@@ -847,10 +869,10 @@ export function MarketingTargetsPanel({
                       }}
                     >
                       <td style={{ ...T.td, fontWeight: 600 }}>
-                        {m.member_full_name ?? "—"}
+                        {getMemberName(m) ?? "—"}
                       </td>
                       <td style={{ ...T.td, color: "#A08070", fontSize: 11 }}>
-                        {m.member_number ?? "—"}
+                        {getMemberNumber(m) ?? "—"}
                       </td>
                       <td style={T.td}>
                         <span
