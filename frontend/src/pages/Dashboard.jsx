@@ -94,9 +94,11 @@ export default function Dashboard() {
   const [selectedTable, setSelectedTable] = useState("");
   const [tableRows, setTableRows] = useState([]);
   const [tableSearch, setTableSearch] = useState("");
-  const [sortOrder, setSortOrder] = useState("asc"); // asc | desc
   const [rowLimit, setRowLimit] = useState("25"); // all | 25 | 100
   const [selectedColumn, setSelectedColumn] = useState("");
+  const [visibleColumns, setVisibleColumns] = useState([]);
+  const [sortColumn, setSortColumn] = useState("");
+  const [sortDirection, setSortDirection] = useState("asc"); // asc | desc
   const [page, setPage] = useState(1);
 
   // ML Insights now loads from one master backend response, only when the ML tab opens.
@@ -109,6 +111,7 @@ export default function Dashboard() {
   const [amenityDetail, setAmenityDetail] = useState(null);
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
+  const [columnVisibilityOpen, setColumnVisibilityOpen] = useState(false);
 
   useEffect(() => {
     analyticsApi
@@ -143,6 +146,7 @@ export default function Dashboard() {
       .catch(console.error);
 
     analyticsApi.getTables().then(setAvailableTables).catch(console.error);
+
   }, []);
 
   useEffect(() => {
@@ -162,24 +166,35 @@ export default function Dashboard() {
   }, [activeTab, mlInsights, mlLoading]);
 
   useEffect(() => {
-    if (!selectedTable) return;
+    if (!selectedTable) {
+      setTableRows([]);
+      setSelectedColumn("");
+      setVisibleColumns([]);
+      setSortColumn("");
+      setPage(1);
+      return;
+    }
 
     analyticsApi
       .getTableData(selectedTable)
       .then((data) => {
-        setTableRows(data);
+        const rows = Array.isArray(data) ? data : [];
+        const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
 
-        // auto-pick first column as default search column
-        if (data?.length > 0) {
-          setSelectedColumn(Object.keys(data[0])[0]);
-        }
+        setTableRows(rows);
+        setSelectedColumn(columns[0] ?? "");
+        setVisibleColumns(columns);
+        setSortColumn("");
+        setSortDirection("asc");
+        setPage(1);
+        setTableSearch("");
       })
       .catch(console.error);
   }, [selectedTable]);
 
   useEffect(() => {
     setPage(1);
-  }, [tableSearch, selectedColumn, selectedTable]);
+  }, [tableSearch, selectedColumn, selectedTable, rowLimit, sortColumn, sortDirection]);
 
   // ---------- derived values (identical to original) ----------
   const totalMembers = membersByType.reduce((a, b) => a + (b.total || 0), 0);
@@ -231,42 +246,81 @@ export default function Dashboard() {
   /* ── use the original styles for inner content ── */
   const styles = baseStyles;
 
-  const sortValue = (val) => {
-    if (val == null) return "";
-    if (!isNaN(val) && val !== "") return Number(val);
-    const date = Date.parse(val);
-    if (!isNaN(date)) return date;
-    return String(val).toLowerCase();
+  const getComparableValue = (value) => {
+  if (value == null || value === "") return "";
+
+  const numericValue = Number(value);
+  if (!Number.isNaN(numericValue) && String(value).trim() !== "") {
+    return numericValue;
+  }
+
+  const dateValue = Date.parse(value);
+    if (!Number.isNaN(dateValue)) {
+      return dateValue;
+    }
+
+    return String(value).toLowerCase();
   };
 
-  const filteredRows = tableRows
-    .filter((row) => {
-      if (!tableSearch) return true;
-      if (!selectedColumn) return true;
-      const value = row[selectedColumn];
-      if (value == null) return false;
-      return String(value).toLowerCase().includes(tableSearch.toLowerCase());
-    })
-    .sort((a, b) => {
-      const aVal = sortValue(a[selectedColumn]);
-      const bVal = sortValue(b[selectedColumn]);
+  const compareValues = (a, b) => {
+    const aValue = getComparableValue(a);
+    const bValue = getComparableValue(b);
 
-      if (aVal < bVal) return sortOrder === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortOrder === "asc" ? 1 : -1;
-      return 0;
-    });
+    if (aValue < bValue) return -1;
+    if (aValue > bValue) return 1;
+    return 0;
+  };
 
-  const paginatedRows = (() => {
-    if (rowLimit === "all") return filteredRows;
+  const handleSort = (column) => {
+    if (sortColumn === column) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  };
 
-    const start = (page - 1) * Number(rowLimit);
-    const end = start + Number(rowLimit);
+  const toggleVisibleColumn = (column) => {
+    setVisibleColumns((current) =>
+      current.includes(column)
+        ? current.filter((col) => col !== column)
+        : [...current, column],
+    );
+  };
 
-    return filteredRows.slice(start, end);
-  })();
+  const reportColumns = tableRows.length > 0 ? Object.keys(tableRows[0]) : [];
+
+  const filteredRows = tableRows.filter((row) => {
+    const search = tableSearch.trim().toLowerCase();
+
+    if (!search) return true;
+    if (!selectedColumn) return true;
+
+    return String(row[selectedColumn] ?? "")
+      .toLowerCase()
+      .includes(search);
+  });
+
+  const sortedRows = [...filteredRows].sort((a, b) => {
+    if (!sortColumn) return 0;
+
+    const result = compareValues(a[sortColumn], b[sortColumn]);
+
+    return sortDirection === "asc" ? result : -result;
+  });
 
   const totalPages =
-  rowLimit === "all" ? 1 : Math.ceil(filteredRows.length / rowLimit);
+    rowLimit === "all"
+      ? 1
+      : Math.max(1, Math.ceil(sortedRows.length / Number(rowLimit)));
+
+  const paginatedRows =
+    rowLimit === "all"
+      ? sortedRows
+      : sortedRows.slice(
+          (page - 1) * Number(rowLimit),
+          page * Number(rowLimit),
+        );
 
   return (
     <div style={S.shell}>
@@ -950,7 +1004,14 @@ export default function Dashboard() {
                   flexWrap: "wrap",
                 }}
               >
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
                   <select
                     value={selectedTable}
                     onChange={(e) => setSelectedTable(e.target.value)}
@@ -962,7 +1023,6 @@ export default function Dashboard() {
                     }}
                   >
                     <option value="">Select Report</option>
-
                     {availableTables.map((table) => (
                       <option key={table} value={table}>
                         {table}
@@ -983,6 +1043,18 @@ export default function Dashboard() {
                     <option value="25">25 Rows</option>
                     <option value="100">100 Rows</option>
                   </select>
+
+                  {selectedTable && (
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: "#A08070",
+                        fontFamily: "sans-serif",
+                      }}
+                    >
+                      Showing {paginatedRows.length} of {sortedRows.length} rows
+                    </span>
+                  )}
                 </div>
 
                 <div
@@ -990,34 +1062,12 @@ export default function Dashboard() {
                     display: "flex",
                     gap: 10,
                     alignItems: "center",
-                    position: "relative",
-                    width: 300,
+                    flexWrap: "wrap",
                   }}
                 >
-                  <span
-                    style={{
-                      position: "absolute",
-                      left: 12,
-                      top: "50%",
-                      transform: "translateY(-50%)",
-                      color: "#B09880",
-                      pointerEvents: "none",
-                    }}
-                  >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                    >
-                      <circle cx="11" cy="11" r="8" />
-                      <path d="m21 21-4.35-4.35" />
-                    </svg>
-                  </span>
                   <div style={{ position: "relative" }}>
                     <button
+                      type="button"
                       onClick={() => setColumnPickerOpen((v) => !v)}
                       style={{
                         width: 38,
@@ -1026,10 +1076,11 @@ export default function Dashboard() {
                         border: "1px solid #ddd",
                         background: "#fff",
                         cursor: "pointer",
+                        fontSize: 15,
                       }}
-                      title="Select column"
+                      title={`Search column: ${selectedColumn || "None"}`}
                     >
-                      ☰
+                      🔎
                     </button>
 
                     {columnPickerOpen && (
@@ -1037,112 +1088,374 @@ export default function Dashboard() {
                         style={{
                           position: "absolute",
                           top: 45,
-                          left: 0,
+                          right: 0,
                           background: "#fff",
                           border: "1px solid #EDE5D8",
                           borderRadius: 8,
                           boxShadow: "0 6px 20px rgba(0,0,0,0.08)",
                           zIndex: 1000,
-                          maxHeight: 200,
+                          maxHeight: 240,
+                          minWidth: 220,
                           overflowY: "auto",
+                          padding: "6px 0",
                         }}
                       >
-                        {tableRows.length > 0 && (
-                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                            {Object.keys(tableRows[0]).map((col) => (
-                              <label key={col} style={{ fontSize: 12 }}>
-                                <input
-                                  type="checkbox"
-                                  checked={visibleColumns.includes(col)}
-                                  onChange={() => {
-                                    setVisibleColumns((prev) =>
-                                      prev.includes(col)
-                                        ? prev.filter((c) => c !== col)
-                                        : [...prev, col]
-                                    );
-                                  }}
-                                />
-                                {col}
-                              </label>
-                            ))}
+                        <div
+                          style={{
+                            padding: "8px 12px",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            color: "#A08070",
+                            fontFamily: "sans-serif",
+                            borderBottom: "1px solid #F1E8DC",
+                          }}
+                        >
+                          Search in column
+                        </div>
+
+                        {reportColumns.map((col) => (
+                          <div
+                            key={col}
+                            onClick={() => {
+                              setSelectedColumn(col);
+                              setColumnPickerOpen(false);
+                            }}
+                            style={{
+                              padding: "8px 12px",
+                              cursor: "pointer",
+                              fontSize: 12,
+                              fontFamily: "sans-serif",
+                              color:
+                                selectedColumn === col ? "#3D2B1F" : "#6D5848",
+                              background:
+                                selectedColumn === col ? "#FAF6F0" : "#fff",
+                              fontWeight: selectedColumn === col ? 700 : 400,
+                            }}
+                          >
+                            {selectedColumn === col ? "✓ " : ""}
+                            {col}
                           </div>
-                        )}
+                        ))}
                       </div>
                     )}
                   </div>
+
+                  <div style={{ position: "relative" }}>
+                    <button
+                      type="button"
+                      onClick={() => setColumnVisibilityOpen((v) => !v)}
+                      style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 8,
+                        border: "1px solid #ddd",
+                        background: "#fff",
+                        cursor: "pointer",
+                        fontSize: 15,
+                      }}
+                      title="Choose visible columns"
+                    >
+                      ☷
+                    </button>
+
+                    {columnVisibilityOpen && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 45,
+                          right: 0,
+                          background: "#fff",
+                          border: "1px solid #EDE5D8",
+                          borderRadius: 8,
+                          boxShadow: "0 6px 20px rgba(0,0,0,0.08)",
+                          zIndex: 1000,
+                          maxHeight: 280,
+                          minWidth: 240,
+                          overflowY: "auto",
+                          padding: 10,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            gap: 8,
+                            marginBottom: 8,
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setVisibleColumns(reportColumns)}
+                            style={{
+                              fontSize: 11,
+                              border: "1px solid #EDE5D8",
+                              borderRadius: 6,
+                              background: "#FAF6F0",
+                              padding: "5px 8px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            Select all
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setVisibleColumns([])}
+                            style={{
+                              fontSize: 11,
+                              border: "1px solid #EDE5D8",
+                              borderRadius: 6,
+                              background: "#fff",
+                              padding: "5px 8px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            Clear
+                          </button>
+                        </div>
+
+                        {reportColumns.map((col) => (
+                          <label
+                            key={col}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              padding: "6px 4px",
+                              fontSize: 12,
+                              fontFamily: "sans-serif",
+                              color: "#5A3E2B",
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={visibleColumns.includes(col)}
+                              onChange={() => toggleVisibleColumn(col)}
+                            />
+                            {col}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                   <input
                     value={tableSearch}
                     onChange={(e) => setTableSearch(e.target.value)}
-                    placeholder="Search selected report…"
-                    style={styles.searchInput}
-                  />
-
-                  <select
-                    value={sortOrder}
-                    onChange={(e) => setSortOrder(e.target.value)}
+                    placeholder={
+                      selectedColumn
+                        ? `Search ${selectedColumn}…`
+                        : "Choose a column to search…"
+                    }
+                    disabled={!selectedTable || !selectedColumn}
                     style={{
-                      padding: "10px",
-                      borderRadius: "8px",
-                      border: "1px solid #ddd",
+                      ...styles.searchInput,
+                      minWidth: 260,
+                      opacity: !selectedTable || !selectedColumn ? 0.55 : 1,
                     }}
-                  >
-                    <option value="asc">Asc</option>
-                    <option value="desc">Desc</option>
-                  </select>
+                  />
                 </div>
               </div>
-              {totalPages > 1 && (
-                <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-                  <button disabled={page === 1} onClick={() => setPage(page - 1)}>
-                    Prev
-                  </button>
 
-                  <span>
-                    Page {page} of {totalPages}
-                  </span>
-
-                  <button
-                    disabled={page === totalPages}
-                    onClick={() => setPage(page + 1)}
-                  >
-                    Next
-                  </button>
-                </div>
-              )}
-              
               {selectedTable && (
-                <div
-                  style={{
-                    overflowX: "auto",
-                    border: "1px solid #EDE5D8",
-                    borderRadius: 10,
-                  }}
-                >
-                  <table style={{ ...styles.table, minWidth: 1200 }}>
-                    <thead style={{ background: "#FAF6F0" }}>
-                      <tr>
-                        {filteredRows.length > 0 &&
-                          visibleColumns.map((column) => (
-                            <th key={column} style={styles.th}>
-                              {column}
-                            </th>
-                          ))}
-                      </tr>
-                    </thead>
+                <>
+                  {totalPages > 1 && rowLimit !== "all" && (
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        marginBottom: 12,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "#A08070",
+                          fontFamily: "sans-serif",
+                        }}
+                      >
+                        Page {page} of {totalPages}
+                      </div>
 
-                    <tbody>
-                      {paginatedRows.map((row, index) => (
-                        <tr key={index}>
-                          {visibleColumns.map((column) => (
-                            <td key={column} style={styles.td}>
-                              {String(row[column] ?? "")}
-                            </td>
-                          ))}
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          disabled={page === 1}
+                          onClick={() => setPage((p) => Math.max(1, p - 1))}
+                          style={{
+                            padding: "7px 12px",
+                            borderRadius: 8,
+                            border: "1px solid #ddd",
+                            background: page === 1 ? "#F3EDE6" : "#fff",
+                            cursor: page === 1 ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          Prev
+                        </button>
+
+                        {Array.from(
+                          { length: Math.min(totalPages, 5) },
+                          (_, i) => {
+                            const startPage = Math.min(
+                              Math.max(1, page - 2),
+                              Math.max(1, totalPages - 4),
+                            );
+                            return startPage + i;
+                          },
+                        ).map((pageNumber) => (
+                          <button
+                            type="button"
+                            key={pageNumber}
+                            onClick={() => setPage(pageNumber)}
+                            style={{
+                              padding: "7px 11px",
+                              borderRadius: 8,
+                              border: "1px solid #ddd",
+                              background:
+                                page === pageNumber ? "#C8976E" : "#fff",
+                              color: page === pageNumber ? "#fff" : "#3D2B1F",
+                              cursor: "pointer",
+                              fontWeight: page === pageNumber ? 700 : 400,
+                            }}
+                          >
+                            {pageNumber}
+                          </button>
+                        ))}
+
+                        <button
+                          type="button"
+                          disabled={page === totalPages}
+                          onClick={() =>
+                            setPage((p) => Math.min(totalPages, p + 1))
+                          }
+                          style={{
+                            padding: "7px 12px",
+                            borderRadius: 8,
+                            border: "1px solid #ddd",
+                            background:
+                              page === totalPages ? "#F3EDE6" : "#fff",
+                            cursor:
+                              page === totalPages ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div
+                    style={{
+                      overflowX: "auto",
+                      border: "1px solid #EDE5D8",
+                      borderRadius: 10,
+                    }}
+                  >
+                    <table style={{ ...styles.table, minWidth: 1200 }}>
+                      <thead
+                        style={{
+                          position: "sticky",
+                          top: 0,
+                          background: "#FAF6F0",
+                          zIndex: 1,
+                        }}
+                      >
+                        <tr>
+                          {visibleColumns.length > 0 &&
+                            visibleColumns.map((column) => (
+                              <th key={column} style={styles.th}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSort(column)}
+                                  style={{
+                                    border: "none",
+                                    background: "transparent",
+                                    padding: 0,
+                                    cursor: "pointer",
+                                    color: "inherit",
+                                    font: "inherit",
+                                    width: "100%",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    gap: 8,
+                                    textAlign: "left",
+                                  }}
+                                  title={`Sort by ${column}`}
+                                >
+                                  <span>{column}</span>
+                                  <span
+                                    style={{
+                                      fontSize: 10,
+                                      color:
+                                        sortColumn === column
+                                          ? "#C8976E"
+                                          : "#CBB8A5",
+                                    }}
+                                  >
+                                    {sortColumn === column
+                                      ? sortDirection === "asc"
+                                        ? "▲"
+                                        : "▼"
+                                      : "↕"}
+                                  </span>
+                                </button>
+                              </th>
+                            ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+
+                      <tbody>
+                        {paginatedRows.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={Math.max(visibleColumns.length, 1)}
+                              style={{
+                                ...styles.td,
+                                textAlign: "center",
+                                padding: 40,
+                                color: "#B09880",
+                              }}
+                            >
+                              No rows found
+                            </td>
+                          </tr>
+                        ) : visibleColumns.length === 0 ? (
+                          <tr>
+                            <td
+                              style={{
+                                ...styles.td,
+                                textAlign: "center",
+                                padding: 40,
+                                color: "#B09880",
+                              }}
+                            >
+                              Choose at least one visible column.
+                            </td>
+                          </tr>
+                        ) : (
+                          paginatedRows.map((row, index) => (
+                            <tr
+                              key={index}
+                              style={{
+                                background:
+                                  index % 2 === 0 ? "transparent" : "#FAF6F0",
+                              }}
+                            >
+                              {visibleColumns.map((column) => (
+                                <td key={column} style={styles.td}>
+                                  {String(row[column] ?? "")}
+                                </td>
+                              ))}
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </div>
           </div>
