@@ -1,5 +1,3 @@
-//segmentation.py
-
 """
 segments.py — Analytics segmentation pipeline (dashboard-ready)
 
@@ -18,7 +16,7 @@ from datetime import date, timedelta
 import psycopg
 from dotenv import load_dotenv
 
-from specfic_tb import load_active_seasons, get_connection, season_for_date
+from season_tables import load_active_seasons, get_connection, season_for_date
 
 load_dotenv()
 
