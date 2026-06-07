@@ -1,7 +1,11 @@
 # season_tables.py
 
 from __future__ import annotations
-
+import argparse
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+from sqlalchemy import create_engine
 import logging
 from collections import Counter
 from datetime import date
@@ -9,6 +13,32 @@ from datetime import date
 from psycopg2.extras import execute_values
 
 log = logging.getLogger(__name__)
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(BASE_DIR / ".env")
+
+_engine = None
+
+
+def get_engine():
+    global _engine
+    if _engine is None:
+        required = ["DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT", "DB_NAME"]
+        missing = [k for k in required if not os.getenv(k)]
+        if missing:
+            raise EnvironmentError(f"Missing env vars: {missing}")
+
+        url = (
+            f"postgresql+psycopg2://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
+            f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+        )
+        _engine = create_engine(url)
+
+    return _engine
+
+
+def _raw_connection():
+    return get_engine().raw_connection()
 
 DEFAULT_SEASONS = [
     ("High Season 1", 1, 3, 3, 6),
@@ -51,13 +81,20 @@ CREATE TABLE IF NOT EXISTS member_seasons (
     member_number VARCHAR(50),
     season_id INTEGER REFERENCES seasons(id) ON DELETE CASCADE,
     season_name VARCHAR(100) NOT NULL,
+
+    guest_name VARCHAR(255),
+    conf_code VARCHAR(100),
+    room_number VARCHAR(50),
+    villa_name VARCHAR(255),
+    bedroom_count INTEGER,
+    reservation_status VARCHAR(100),
+
     visit_count INTEGER NOT NULL DEFAULT 0,
     total_nights INTEGER NOT NULL DEFAULT 0,
     first_check_in DATE,
     last_check_out DATE,
-    villa_name VARCHAR(255),
-    bedroom_count INTEGER,
-    UNIQUE (member_number, season_id)
+
+    UNIQUE (member_number, season_id, conf_code)
 );
 
 CREATE TABLE IF NOT EXISTS seasonal_visits (
@@ -65,10 +102,25 @@ CREATE TABLE IF NOT EXISTS seasonal_visits (
     visits INTEGER NOT NULL DEFAULT 0,
     avg_stay NUMERIC(10, 2) NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS season_visitors (
+    member_number VARCHAR(50),
+    season_id INTEGER REFERENCES seasons(id) ON DELETE CASCADE,
+    season_name VARCHAR(100),
+    visit_count INTEGER NOT NULL DEFAULT 0,
+
+    PRIMARY KEY (member_number, season_id)
+);
 """
 
 DROP_SPECIFIC_ANALYTICS = """
-DROP TABLE IF EXISTS member_seasons, seasons, season_groups, seasonal_visits CASCADE;
+DROP TABLE IF EXISTS
+    season_visitors,
+    member_seasons,
+    seasons,
+    season_groups,
+    seasonal_visits
+CASCADE;
 """
 
 
@@ -106,6 +158,28 @@ def create_specific_tables(conn, recreate: bool = False) -> None:
         cur.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS seasons_group_definition_unique_idx
             ON seasons (group_id, season_name, start_month, start_day, end_month, end_day)
+        """)
+
+
+        # Keep existing databases in sync with the folio-backed member_seasons shape.
+        cur.execute("""
+            ALTER TABLE member_seasons
+            ADD COLUMN IF NOT EXISTS guest_name VARCHAR(255),
+            ADD COLUMN IF NOT EXISTS conf_code VARCHAR(100),
+            ADD COLUMN IF NOT EXISTS room_number VARCHAR(50),
+            ADD COLUMN IF NOT EXISTS reservation_status VARCHAR(100)
+        """)
+
+        # Remove the older two-column unique constraint if it exists; it prevents
+        # multiple folio reservations for the same member in the same season.
+        cur.execute("""
+            ALTER TABLE member_seasons
+            DROP CONSTRAINT IF EXISTS member_seasons_member_number_season_id_key
+        """)
+
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS member_seasons_member_season_conf_idx
+            ON member_seasons (member_number, season_id, conf_code)
         """)
 
     conn.commit()
@@ -234,23 +308,46 @@ def build_member_seasons(conn, dry_run: bool = False) -> int:
 
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT DISTINCT
+            SELECT DISTINCT ON (
                 member_number,
-                conf_code,
+                COALESCE(conf_code, reservation_folio_id, folio_num, folio_key)
+            )
+                member_number,
+                COALESCE(conf_code, reservation_folio_id, folio_num, folio_key) AS conf_code,
+                guest_name,
                 COALESCE(check_in_date, transaction_date) AS season_date,
+                check_in_date,
                 check_out_date,
+                room_number,
                 villa_name,
-                bedroom_count
+                bedroom_count,
+                reservation_status
             FROM folios
             WHERE member_number IS NOT NULL
               AND COALESCE(check_in_date, transaction_date) IS NOT NULL
+            ORDER BY
+                member_number,
+                COALESCE(conf_code, reservation_folio_id, folio_num, folio_key),
+                check_in_date NULLS LAST,
+                transaction_date NULLS LAST
         """)
         rows = cur.fetchall()
 
-    agg = {}
+    output_rows = []
     matched_by_season = Counter()
 
-    for member_number, _conf_code, season_date, check_out, villa_name, bedroom_count in rows:
+    for (
+        member_number,
+        conf_code,
+        guest_name,
+        season_date,
+        check_in,
+        check_out,
+        room_number,
+        villa_name,
+        bedroom_count,
+        reservation_status,
+    ) in rows:
         season_id, season_name = season_for_date(season_date, active_seasons)
 
         if not season_id:
@@ -258,54 +355,30 @@ def build_member_seasons(conn, dry_run: bool = False) -> int:
 
         matched_by_season[season_name] += 1
 
+        first_check_in = check_in or season_date
+        last_check_out = check_out
+
         nights = 0
-        if check_out:
-            nights = max((check_out - season_date).days, 0)
+        if first_check_in and last_check_out:
+            nights = max((last_check_out - first_check_in).days, 0)
 
-        key = (str(member_number), season_id)
-
-        if key not in agg:
-            agg[key] = {
-                "season_name": season_name,
-                "visit_count": 0,
-                "total_nights": 0,
-                "first_check_in": None,
-                "last_check_out": None,
-                "villa_counts": Counter(),
-                "bedroom_counts": Counter(),
-            }
-
-        agg[key]["visit_count"] += 1
-        agg[key]["total_nights"] += nights
-
-        if agg[key]["first_check_in"] is None or season_date < agg[key]["first_check_in"]:
-            agg[key]["first_check_in"] = season_date
-
-        if check_out and (
-            agg[key]["last_check_out"] is None or check_out > agg[key]["last_check_out"]
-        ):
-            agg[key]["last_check_out"] = check_out
-
-        if villa_name:
-            agg[key]["villa_counts"][villa_name] += 1
-
-        if bedroom_count is not None:
-            agg[key]["bedroom_counts"][bedroom_count] += 1
-
-    output_rows = [
-        (
-            member_number,
-            season_id,
-            values["season_name"],
-            values["visit_count"],
-            values["total_nights"],
-            values["first_check_in"],
-            values["last_check_out"],
-            values["villa_counts"].most_common(1)[0][0] if values["villa_counts"] else None,
-            values["bedroom_counts"].most_common(1)[0][0] if values["bedroom_counts"] else None,
+        output_rows.append(
+            (
+                str(member_number),
+                season_id,
+                season_name,
+                guest_name,
+                conf_code,
+                room_number,
+                villa_name,
+                bedroom_count,
+                reservation_status,
+                1,
+                nights,
+                first_check_in,
+                last_check_out,
+            )
         )
-        for (member_number, season_id), values in agg.items()
-    ]
 
     if dry_run:
         log.info("[DRY RUN] Would replace member_seasons with %d rows", len(output_rows))
@@ -319,17 +392,21 @@ def build_member_seasons(conn, dry_run: bool = False) -> int:
                 cur,
                 """
                 INSERT INTO member_seasons
-                    (member_number, season_id, season_name, visit_count, total_nights,
-                     first_check_in, last_check_out, villa_name, bedroom_count)
+                    (member_number, season_id, season_name, guest_name, conf_code,
+                     room_number, villa_name, bedroom_count, reservation_status,
+                     visit_count, total_nights, first_check_in, last_check_out)
                 VALUES %s
-                ON CONFLICT (member_number, season_id) DO UPDATE SET
+                ON CONFLICT (member_number, season_id, conf_code) DO UPDATE SET
                     season_name = EXCLUDED.season_name,
+                    guest_name = EXCLUDED.guest_name,
+                    room_number = EXCLUDED.room_number,
+                    villa_name = EXCLUDED.villa_name,
+                    bedroom_count = EXCLUDED.bedroom_count,
+                    reservation_status = EXCLUDED.reservation_status,
                     visit_count = EXCLUDED.visit_count,
                     total_nights = EXCLUDED.total_nights,
                     first_check_in = EXCLUDED.first_check_in,
-                    last_check_out = EXCLUDED.last_check_out,
-                    villa_name = EXCLUDED.villa_name,
-                    bedroom_count = EXCLUDED.bedroom_count
+                    last_check_out = EXCLUDED.last_check_out
                 """,
                 output_rows,
                 page_size=1000,
@@ -409,14 +486,132 @@ def build_seasonal_visits(conn, dry_run: bool = False) -> int:
     log.info("seasonal_visits: %d rows written", len(output_rows))
     return len(output_rows)
 
+def build_season_visitors(conn, dry_run: bool = False) -> int:
+    log.info("Building season_visitors...")
+
+    active_seasons = load_active_seasons(conn)
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+                member_number,
+                check_in_date
+            FROM rooms
+            WHERE member_number IS NOT NULL
+              AND check_in_date IS NOT NULL
+        """)
+        rows = cur.fetchall()
+
+    visitor_counts = {}
+
+    for member_number, check_in_date in rows:
+        season_id, season_name = season_for_date(
+            check_in_date,
+            active_seasons,
+        )
+
+        if not season_id:
+            continue
+
+        key = (str(member_number), season_id)
+
+        if key not in visitor_counts:
+            visitor_counts[key] = {
+                "season_name": season_name,
+                "visits": 0,
+            }
+
+        visitor_counts[key]["visits"] += 1
+
+    output_rows = [
+        (
+            member_number,
+            season_id,
+            values["season_name"],
+            values["visits"],
+        )
+        for (member_number, season_id), values in visitor_counts.items()
+        if values["visits"] >= 2
+    ]
+
+    if dry_run:
+        log.info(
+            "[DRY RUN] Would replace season_visitors with %d rows",
+            len(output_rows),
+        )
+        return len(output_rows)
+
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM season_visitors")
+
+        if output_rows:
+            execute_values(
+                cur,
+                """
+                INSERT INTO season_visitors
+                    (member_number, season_id, season_name, visit_count)
+                VALUES %s
+                ON CONFLICT (member_number, season_id)
+                DO UPDATE SET
+                    visit_count = EXCLUDED.visit_count,
+                    season_name = EXCLUDED.season_name
+                """,
+                output_rows,
+            )
+
+    conn.commit()
+
+    log.info(
+        "season_visitors: %d rows written",
+        len(output_rows),
+    )
+
+    return len(output_rows)
 
 def build_season_tables(
-    conn,
     *,
     dry_run: bool = False,
     recreate: bool = False,
 ) -> None:
-    create_specific_tables(conn, recreate=recreate)
-    seed_seasons(conn, dry_run=dry_run)
-    build_member_seasons(conn, dry_run=dry_run)
-    build_seasonal_visits(conn, dry_run=dry_run)
+    log.info("=== Seasonal analytics pipeline starting ===")
+
+    conn = _raw_connection()
+
+    try:
+        create_specific_tables(conn, recreate=recreate)
+        seed_seasons(conn, dry_run=dry_run)
+
+        build_member_seasons(conn, dry_run=dry_run)
+        build_seasonal_visits(conn, dry_run=dry_run)
+        build_season_visitors(conn, dry_run=dry_run)
+
+    finally:
+        conn.close()
+
+    log.info("=== Seasonal analytics pipeline complete ===")
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Build seasonal analytics tables."
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Read data but do not write tables",
+    )
+    parser.add_argument(
+        "--recreate",
+        action="store_true",
+        help="Drop/recreate seasonal tables before build",
+    )
+
+    args = parser.parse_args()
+
+    build_season_tables(
+        dry_run=args.dry_run,
+        recreate=args.recreate,
+    )
+
+
+if __name__ == "__main__":
+    main()

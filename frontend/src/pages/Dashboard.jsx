@@ -1,6 +1,6 @@
 // frontend/src/pages/dashboard.jsx
 
-import { useEffect, useState } from "react";
+import { Component, useEffect, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -42,11 +42,6 @@ import {
   PieLegendCard,
   RoomHighlightCard,
 } from "./Dashboardcomponents";
-import {
-  SeasonDetailPanel,
-  AmenityDetailPanel,
-  MarketingTargetsPanel,
-} from "./MlDetailPanel";
 import SeasonFilterBar from "./SeasonFilterBar";
 import AmenitySeasonPanel from "./AmenitySeasonPanel";
 import SegmentationPanel from "./SegmentationPanel";
@@ -102,16 +97,6 @@ export default function Dashboard() {
   const [sortColumn, setSortColumn] = useState("");
   const [sortDirection, setSortDirection] = useState("asc"); // asc | desc
   const [page, setPage] = useState(1);
-
-  // ML Insights now loads from one master backend response, only when the ML tab opens.
-  const [mlInsights, setMlInsights] = useState(null);
-  const [mlLoading, setMlLoading] = useState(false);
-  const [mlError, setMlError] = useState(null);
-  const [mlSearch, setMlSearch] = useState("");
-  const [seasonDetail, setSeasonDetail] = useState(null);
-  const [seasonDetailRows, setSeasonDetailRows] = useState([]);
-  const [amenityDetail, setAmenityDetail] = useState(null);
-  const [showEmailModal, setShowEmailModal] = useState(false);
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
   const [columnVisibilityOpen, setColumnVisibilityOpen] = useState(false);
 
@@ -149,22 +134,6 @@ export default function Dashboard() {
 
     analyticsApi.getTables().then(setAvailableTables).catch(console.error);
   }, []);
-
-  useEffect(() => {
-    if (activeTab !== "ml" || mlInsights || mlLoading) return;
-
-    setMlLoading(true);
-    setMlError(null);
-
-    analyticsApi
-      .mlInsights()
-      .then(setMlInsights)
-      .catch((error) => {
-        console.error("Failed to load ML insights", error);
-        setMlError("Unable to load ML insights right now.");
-      })
-      .finally(() => setMlLoading(false));
-  }, [activeTab, mlInsights, mlLoading]);
 
   useEffect(() => {
     if (!selectedTable) {
@@ -206,48 +175,6 @@ export default function Dashboard() {
 
   // ---------- derived values (identical to original) ----------
   const totalMembers = membersByType.reduce((a, b) => a + (b.total || 0), 0);
-
-  const memberSegments = mlInsights?.memberSegments ?? [];
-  const segmentSummary = mlInsights?.segmentSummary ?? [];
-  const amenityAdoption = mlInsights?.amenityAdoption ?? [];
-  const seasonalVisits = mlInsights?.seasonalVisits ?? [];
-  const amenityRevenue = mlInsights?.amenityRevenue ?? [];
-  const memberAmenityUsage = mlInsights?.memberAmenityUsage ?? [];
-
-  const selectedMlMember = memberSegments.find((m) => {
-    const q = mlSearch.toLowerCase();
-    if (!q) return false;
-    return [
-      m.member_full_name,
-      m.member_number,
-      m.segment_name,
-      m.member_type,
-      m.campaign,
-    ].some((v) => v && String(v).toLowerCase().includes(q));
-  });
-
-  const selectedMemberAmenityUsage = selectedMlMember
-    ? memberAmenityUsage
-        .filter(
-          (a) =>
-            String(a.member_number) === String(selectedMlMember.member_number),
-        )
-        .sort((a, b) => Number(b.total_spend ?? 0) - Number(a.total_spend ?? 0))
-    : [];
-
-  // const amenityRevenueReadable = amenityRevenue
-  //   .map((a) => ({
-  //     ...a,
-  //     avg_transaction:
-  //       Number(a.transactions ?? 0) > 0
-  //         ? Number(a.revenue ?? 0) / Number(a.transactions ?? 1)
-  //         : 0,
-  //   }))
-  //   .sort((a, b) => Number(b.revenue ?? 0) - Number(a.revenue ?? 0));
-
-  // const amenityAdoptionReadable = amenityAdoption
-  //   .map((a) => ({ ...a, adoption_score: Number(a.members_using ?? 0) }))
-  //   .sort((a, b) => b.adoption_score - a.adoption_score);
 
   const activeTabInfo = TABS.find((t) => t.id === activeTab);
 
@@ -1472,251 +1399,62 @@ export default function Dashboard() {
         {/* ════════ ML INSIGHTS ════════ */}
         {activeTab === "ml" && (
           <div style={styles.tabContent}>
-            {mlError && (
-              <p
-                style={{
-                  color: "#C45B5B",
-                  fontSize: 12,
-                  fontFamily: "sans-serif",
-                }}
-              >
-                {mlError}
-              </p>
-            )}
-
-            {/* ── Season detail slide-over ── */}
-            {seasonDetail && (
-              <SeasonDetailPanel
-                season={seasonDetail}
-                rows={seasonDetailRows}
-                memberAmenityUsage={memberAmenityUsage}
-                onClose={() => {
-                  setSeasonDetail(null);
-                  setSeasonDetailRows([]);
-                }}
-              />
-            )}
-
-            {/* ── Amenity detail slide-over ── */}
-            {amenityDetail && (
-              <AmenityDetailPanel
-                amenity={amenityDetail}
-                memberAmenityUsage={memberAmenityUsage}
-                memberSegments={memberSegments}
-                onClose={() => setAmenityDetail(null)}
-              />
-            )}
-
-            {/* ── Email promotion modal placeholder ── */}
-            {showEmailModal && (
-              <div
-                style={{
-                  position: "fixed",
-                  inset: 0,
-                  background: "rgba(30,18,10,0.55)",
-                  zIndex: 2000,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-                onClick={() => setShowEmailModal(false)}
-              >
-                <div
-                  style={{
-                    background: "#FDFAF6",
-                    borderRadius: 14,
-                    padding: "32px 36px",
-                    width: "min(480px,90vw)",
-                    boxShadow: "0 8px 40px rgba(0,0,0,0.18)",
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <p
-                    style={{
-                      margin: "0 0 8px",
-                      fontSize: 17,
-                      fontWeight: 700,
-                      color: "#3D2B1F",
-                      fontFamily: "sans-serif",
-                    }}
-                  >
-                    Add Email Promotion
-                  </p>
-                  <p
-                    style={{
-                      margin: "0 0 20px",
-                      fontSize: 12,
-                      color: "#A08070",
-                      fontFamily: "sans-serif",
-                    }}
-                  >
-                    This feature is coming soon. You'll be able to compose and
-                    schedule targeted campaigns from here.
-                  </p>
-                  <button
-                    style={{
-                      padding: "9px 20px",
-                      borderRadius: 8,
-                      border: "none",
-                      background: "#C8976E",
-                      color: "#fff",
-                      fontSize: 13,
-                      fontWeight: 700,
-                      fontFamily: "sans-serif",
-                      cursor: "pointer",
-                    }}
-                    onClick={() => setShowEmailModal(false)}
-                  >
-                    Got it
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* ════ Customer Segments ════ */}
             <SectionLabel>Customer Segments</SectionLabel>
-            <SegmentationPanel />
+            <ErrorBoundary title="Member Segments">
+              <SegmentationPanel />
+            </ErrorBoundary>
 
-            {/* ════ Member Lookup ════ */}
-            <SectionLabel>Member Lookup</SectionLabel>
-            <div style={styles.card}>
-              <div
-                style={{
-                  ...styles.cardHeader,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                <p style={{ ...styles.cardTitle, margin: 0 }}>Member lookup</p>
-              </div>
-              <input
-                value={mlSearch}
-                onChange={(e) => setMlSearch(e.target.value)}
-                placeholder="Search by name, member #, segment, or campaign..."
-                style={{
-                  ...styles.searchInput,
-                  maxWidth: 520,
-                  marginBottom: 20,
-                }}
-              />
-              {!selectedMlMember ? (
-                <p style={styles.cardDesc}>
-                  Start typing a member's name to see their personalized
-                  profile.
-                </p>
-              ) : (
-                (() => {
-                  const favAmenity = selectedMemberAmenityUsage[0];
-                  return (
-                    <div style={styles.statsGrid}>
-                      <StatCard
-                        icon={UserCheck}
-                        label="Member"
-                        value={
-                          selectedMlMember.member_full_name ??
-                          selectedMlMember.member_number
-                        }
-                        hint={selectedMlMember.member_type}
-                      />
-                      <StatCard
-                        icon={Sparkles}
-                        label="Segment"
-                        value={selectedMlMember.segment_name ?? "—"}
-                        hint={
-                          selectedMlMember.is_active
-                            ? "Active member"
-                            : "Inactive / at-risk"
-                        }
-                      />
-                      <StatCard
-                        icon={DollarSign}
-                        label="Total Spend"
-                        value={`$${Number(selectedMlMember.total_spend ?? 0).toLocaleString()}`}
-                        hint={`Avg. spend $${Number(selectedMlMember.avg_spend ?? 0).toLocaleString()}`}
-                      />
-                      <StatCard
-                        icon={BedDouble}
-                        label="Visits"
-                        value={selectedMlMember.visit_count ?? 0}
-                        hint={`Avg. stay ${Number(selectedMlMember.avg_stay ?? 0).toFixed(1)} nights`}
-                      />
-                      <StatCard
-                        icon={Clock}
-                        label="Recency"
-                        value={
-                          selectedMlMember.days_since_last_visit != null
-                            ? `${selectedMlMember.days_since_last_visit} days`
-                            : "—"
-                        }
-                        hint="Since last visit"
-                      />
-                      <StatCard
-                        icon={TrendingUp}
-                        label="Campaign"
-                        value={selectedMlMember.campaign ?? "—"}
-                        hint="Recommended marketing action"
-                      />
-                      <StatCard
-                        icon={Sparkles}
-                        label="Favourite Amenity"
-                        value={favAmenity?.amenity ?? "—"}
-                        hint={
-                          favAmenity
-                            ? `${favAmenity.usage_count} uses · $${Number(favAmenity.total_spend ?? 0).toLocaleString()} spent`
-                            : "No amenity data"
-                        }
-                      />
-                    </div>
-                  );
-                })()
-              )}
-            </div>
+            <SectionLabel>Season Filters</SectionLabel>
+            <ErrorBoundary title="Season Filter Bar">
+              <SeasonFilterBar />
+            </ErrorBoundary>
 
-            {/* ════ General ML Insights ════ */}
-            <SectionLabel>General ML Insights</SectionLabel>
-
-            {/* Row 1: Seasonal + Segment value */}
-            <div style={styles.chartsGrid}>
-              <div
-                style={{ width: "100%", minHeight: 360, gridColumn: "1 / -1" }}
-              >
-                <SeasonFilterBar
-                  seasonalVisits={seasonalVisits}
-                  onSeasonClick={(seasonName, group) => {
-                    const season = group?.seasons?.find(
-                      (s) => s.season_name === seasonName,
-                    );
-
-                    if (!season) return;
-
-                    analyticsApi
-                      .seasonalVisitDetails(seasonName)
-                      .then((rows) => {
-                        setSeasonDetailRows(rows);
-                        setSeasonDetail(seasonName);
-                      })
-                      .catch(() => {});
-                  }}
-                />
-              </div>
-            </div>
-
-            {/* Row 2: Amenity adoption + Amenity spend — side by side, full label height */}
-            {/* Row 2: Amenity × Season full panel */}
             <SectionLabel>Amenity Season Analysis</SectionLabel>
-            <AmenitySeasonPanel />
-
-            {/* ════ Targeted Marketing ════ */}
-            <SectionLabel>Targeted Marketing</SectionLabel>
-            <MarketingTargetsPanel
-              memberSegments={memberSegments}
-              memberAmenityUsage={memberAmenityUsage}
-              onAddPromotion={() => setShowEmailModal(true)}
-            />
+            <ErrorBoundary title="Amenity Season Insights">
+              <AmenitySeasonPanel />
+            </ErrorBoundary>
           </div>
         )}
       </main>
     </div>
   );
+}
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error(`${this.props.title} crashed:`, error, info);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+
+    return (
+      <div
+        style={{
+          padding: 20,
+          border: "1px solid #EDE5D8",
+          borderRadius: 12,
+          background: "#FDFAF6",
+          color: "#C45B5B",
+          fontFamily: "sans-serif",
+          fontSize: 13,
+        }}
+      >
+        <strong>{this.props.title} could not render.</strong>
+        <div style={{ marginTop: 6 }}>
+          {this.state.error?.message ||
+            "Check the browser console for details."}
+        </div>
+      </div>
+    );
+  }
 }

@@ -24,28 +24,20 @@ export const analyticsApi = {
   // Combined dashboard endpoint
   dashboardSummary: () => fetchData("/analytics/dashboard-summary"),
 
-  // Combined ML endpoint
-  mlInsights: () => fetchData("/analytics/ml/insights"),
+  // Season endpoints
+  seasonSummary: () => fetchData("/analytics/season-summary"),
 
-  // Detail drill-downs
-  seasonalVisitDetails: (season, limit = 50) =>
-    fetchData(
-      `/analytics/ml/seasonal-visit-details?season=${encodeURIComponent(
-        season,
-      )}&limit=${limit}`,
-    ),
+  seasonMembers: (seasonId) =>
+    fetchData(`/analytics/seasons/${seasonId}/members`),
 
-  // Season groups CRUD
-  seasonGroups: () => fetchData("/analytics/ml/season-groups"),
+  createSeasonGroup: (payload) =>
+    fetchData("/analytics/season-groups", jsonRequest("POST", payload)),
 
-  createSeasonGroup: (body) =>
-    fetchData("/analytics/ml/season-groups", jsonRequest("POST", body)),
+  addSeason: (payload) =>
+    fetchData("/analytics/seasons", jsonRequest("POST", payload)),
 
-  updateSeason: (seasonId, body) =>
-    fetchData(`/analytics/ml/seasons/${seasonId}`, jsonRequest("PATCH", body)),
-
-  addSeason: (body) =>
-    fetchData("/analytics/ml/seasons", jsonRequest("POST", body)),
+  updateSeason: (id, payload) =>
+    fetchData(`/analytics/seasons/${id}`, jsonRequest("PATCH", payload)),
 
   // Reports
   getTables: () => fetchData("/analytics/tables"),
