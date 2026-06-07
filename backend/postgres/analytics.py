@@ -1372,3 +1372,32 @@ def ml_amenity_season_insights(db: Session = Depends(get_db)):
         "memberAmenitySeasonVisits": visits_raw,
         "seasonVillaBedroom": villa_raw,
     }
+
+    
+#-----------------------------#
+# Endpoints for Segmentation
+#-----------------------------#
+@router.get("/ml/member-segments")
+def member_segments(db: Session = Depends(get_db)):
+
+    spenders = db.execute(text("""
+        SELECT *
+        FROM segment_spenders
+    """)).mappings().all()
+
+    visitors = db.execute(text("""
+        SELECT *
+        FROM segment_visitors
+    """)).mappings().all()
+
+    amenities = db.execute(text("""
+        SELECT *
+        FROM segment_amenities
+    """)).mappings().all()
+
+    return {
+        "spenders": [dict(r) for r in spenders],
+        "visitors": [dict(r) for r in visitors],
+        "amenities": [dict(r) for r in amenities]
+    }
+

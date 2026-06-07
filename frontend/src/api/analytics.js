@@ -66,4 +66,7 @@ export const analyticsApi = {
 
   amenitySeasonInsights: () =>
     fetchData("/analytics/ml/amenity-season-insights"),
+
+  // Member segments
+  memberSegments: () => fetchData("/analytics/ml/member-segments"),
 };
