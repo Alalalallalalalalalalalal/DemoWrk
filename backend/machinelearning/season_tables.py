@@ -59,10 +59,16 @@ CREATE TABLE IF NOT EXISTS member_seasons (
     bedroom_count INTEGER,
     UNIQUE (member_number, season_id)
 );
+
+CREATE TABLE IF NOT EXISTS seasonal_visits (
+    month VARCHAR(7) PRIMARY KEY,
+    visits INTEGER NOT NULL DEFAULT 0,
+    avg_stay NUMERIC(10, 2) NOT NULL DEFAULT 0
+);
 """
 
 DROP_SPECIFIC_ANALYTICS = """
-DROP TABLE IF EXISTS member_seasons, seasons, season_groups CASCADE;
+DROP TABLE IF EXISTS member_seasons, seasons, season_groups, seasonal_visits CASCADE;
 """
 
 
@@ -337,6 +343,73 @@ def build_member_seasons(conn, dry_run: bool = False) -> int:
     return len(output_rows)
 
 
+def build_seasonal_visits(conn, dry_run: bool = False) -> int:
+    log.info("Building seasonal_visits from rooms...")
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT member_number, check_in_date, check_out_date
+            FROM rooms
+            WHERE check_in_date IS NOT NULL
+        """)
+        rows = cur.fetchall()
+
+    monthly = {}
+
+    for member_number, check_in, check_out in rows:
+        month = check_in.strftime("%Y-%m")
+
+        if month not in monthly:
+            monthly[month] = {
+                "visits": 0,
+                "total_stay": 0,
+                "stay_count": 0,
+            }
+
+        monthly[month]["visits"] += 1
+
+        if check_out:
+            nights = max((check_out - check_in).days, 0)
+            monthly[month]["total_stay"] += nights
+            monthly[month]["stay_count"] += 1
+
+    output_rows = [
+        (
+            month,
+            values["visits"],
+            round(values["total_stay"] / values["stay_count"], 2)
+            if values["stay_count"]
+            else 0,
+        )
+        for month, values in sorted(monthly.items())
+    ]
+
+    if dry_run:
+        log.info("[DRY RUN] Would replace seasonal_visits with %d rows", len(output_rows))
+        return len(output_rows)
+
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM seasonal_visits")
+
+        if output_rows:
+            execute_values(
+                cur,
+                """
+                INSERT INTO seasonal_visits (month, visits, avg_stay)
+                VALUES %s
+                ON CONFLICT (month) DO UPDATE SET
+                    visits = EXCLUDED.visits,
+                    avg_stay = EXCLUDED.avg_stay
+                """,
+                output_rows,
+                page_size=1000,
+            )
+
+    conn.commit()
+    log.info("seasonal_visits: %d rows written", len(output_rows))
+    return len(output_rows)
+
+
 def build_season_tables(
     conn,
     *,
@@ -346,3 +419,4 @@ def build_season_tables(
     create_specific_tables(conn, recreate=recreate)
     seed_seasons(conn, dry_run=dry_run)
     build_member_seasons(conn, dry_run=dry_run)
+    build_seasonal_visits(conn, dry_run=dry_run)
