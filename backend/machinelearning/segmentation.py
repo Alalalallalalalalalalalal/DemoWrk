@@ -1,5 +1,5 @@
 """
-segments.py — Analytics segmentation pipeline (dashboard-ready)
+segmentation.py — Analytics segmentation pipeline (dashboard-ready)
 
 Creates and refreshes:
     1. segment_spenders
@@ -16,7 +16,7 @@ from datetime import date, timedelta
 import psycopg
 from dotenv import load_dotenv
 
-from season_tables import load_active_seasons, get_connection, season_for_date
+from season_tables import load_active_seasons, season_for_date
 
 load_dotenv()
 

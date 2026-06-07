@@ -49,6 +49,7 @@ import {
 } from "./MlDetailPanel";
 import SeasonFilterBar from "./SeasonFilterBar";
 import AmenitySeasonPanel from "./AmenitySeasonPanel";
+import SegmentationPanel from "./SegmentationPanel";
 
 /* ─── Sidebar config ─────────────────────────────────────────── */
 const TABS = [
@@ -1574,128 +1575,7 @@ export default function Dashboard() {
 
             {/* ════ Customer Segments ════ */}
             <SectionLabel>Customer Segments</SectionLabel>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-                gap: 14,
-                marginBottom: 28,
-              }}
-            >
-              {segmentSummary.map((s, i) => {
-                const SEGMENT_COLORS = [
-                  "#C8976E",
-                  "#5B9EAD",
-                  "#C4A24D",
-                  "#7B5EA7",
-                  "#2D8A5F",
-                  "#C45B5B",
-                ];
-                const color = SEGMENT_COLORS[i % SEGMENT_COLORS.length];
-                return (
-                  <div
-                    key={s.segment_name ?? i}
-                    style={{
-                      background: "#FDFAF6",
-                      border: `1px solid #EDE5D8`,
-                      borderTop: `3px solid ${color}`,
-                      borderRadius: 12,
-                      padding: "16px 18px",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 6,
-                    }}
-                  >
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: 10,
-                        fontWeight: 700,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.09em",
-                        color,
-                        fontFamily: "sans-serif",
-                      }}
-                    >
-                      Segment {i + 1}
-                    </p>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: 14,
-                        fontWeight: 700,
-                        color: "#3D2B1F",
-                        fontFamily: "sans-serif",
-                        lineHeight: 1.3,
-                      }}
-                    >
-                      {s.segment_name ?? "Unnamed"}
-                    </p>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: 26,
-                        fontWeight: 700,
-                        color: "#3D2B1F",
-                        fontFamily: "sans-serif",
-                        lineHeight: 1,
-                      }}
-                    >
-                      {s.member_count ?? 0}
-                    </p>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: 11,
-                        color: "#A08070",
-                        fontFamily: "sans-serif",
-                      }}
-                    >
-                      members
-                    </p>
-                    <div
-                      style={{
-                        height: 1,
-                        background: "#EDE5D8",
-                        margin: "4px 0",
-                      }}
-                    />
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 3,
-                      }}
-                    >
-                      <p
-                        style={{
-                          margin: 0,
-                          fontSize: 11,
-                          color: "#5A3E2B",
-                          fontFamily: "sans-serif",
-                        }}
-                      >
-                        Avg spend{" "}
-                        <strong>
-                          ${Number(s.avg_total_spend ?? 0).toLocaleString()}
-                        </strong>
-                      </p>
-                      <p
-                        style={{
-                          margin: 0,
-                          fontSize: 11,
-                          color: "#5A3E2B",
-                          fontFamily: "sans-serif",
-                        }}
-                      >
-                        Avg visits{" "}
-                        <strong>{Number(s.avg_visits ?? 0).toFixed(1)}</strong>
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <SegmentationPanel />
 
             {/* ════ Member Lookup ════ */}
             <SectionLabel>Member Lookup</SectionLabel>

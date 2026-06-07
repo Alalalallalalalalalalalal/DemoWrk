@@ -794,54 +794,54 @@ def dashboard_summary(db: Session = Depends(get_db)):
 # Customer Segments
 # ───────────────────────────────────────────────────────────
  
-@router.get("/ml/member-segments")
-def ml_member_segments(db: Session = Depends(get_db)):
-    """
-    Full per-member segment table.
-    Includes: segment_name, active/inactive flag, spend, visits,
-    avg stay, favourite amenity, and campaign assignment.
-    """
-    result = db.execute(text("""
-        SELECT
-            ms.member_number,
-            m.member_full_name,
-            ms.status,
-            ms.member_type,
-            ms.is_active,
-            ms.segment_name,
-            ms.total_spend,
-            ms.avg_spend,
-            ms.visit_count,
-            ms.avg_stay,
-            ms.days_since_last_visit,
-            ms.campaign
-        FROM member_segments ms
-        LEFT JOIN members m ON ms.member_number = m.member_number
-        ORDER BY ms.total_spend DESC NULLS LAST;
-    """)).mappings().all()
-    return [dict(row) for row in result]
+# @router.get("/ml/member-segments")
+# def ml_member_segments(db: Session = Depends(get_db)):
+#     """
+#     Full per-member segment table.
+#     Includes: segment_name, active/inactive flag, spend, visits,
+#     avg stay, favourite amenity, and campaign assignment.
+#     """
+#     result = db.execute(text("""
+#         SELECT
+#             ms.member_number,
+#             m.member_full_name,
+#             ms.status,
+#             ms.member_type,
+#             ms.is_active,
+#             ms.segment_name,
+#             ms.total_spend,
+#             ms.avg_spend,
+#             ms.visit_count,
+#             ms.avg_stay,
+#             ms.days_since_last_visit,
+#             ms.campaign
+#         FROM member_segments ms
+#         LEFT JOIN members m ON ms.member_number = m.member_number
+#         ORDER BY ms.total_spend DESC NULLS LAST;
+#     """)).mappings().all()
+#     return [dict(row) for row in result]
  
  
-@router.get("/ml/segment-summary")
-def ml_segment_summary(db: Session = Depends(get_db)):
-    """
-    Aggregated count, average spend and average visits per segment.
-    Ideal for a summary chart or dashboard card.
-    """
-    result = db.execute(text("""
-        SELECT
-            segment_name,
-            COUNT(*)                             AS member_count,
-            ROUND(AVG(total_spend)::NUMERIC, 2) AS avg_total_spend,
-            ROUND(AVG(visit_count)::NUMERIC, 2) AS avg_visits,
-            ROUND(AVG(avg_stay)::NUMERIC, 2)    AS avg_stay_nights,
-            SUM(CASE WHEN is_active THEN 1 ELSE 0 END)      AS active_count,
-            SUM(CASE WHEN NOT is_active THEN 1 ELSE 0 END)  AS inactive_count
-        FROM member_segments
-        GROUP BY segment_name
-        ORDER BY member_count DESC;
-    """)).mappings().all()
-    return [dict(row) for row in result]
+# @router.get("/ml/segment-summary")
+# def ml_segment_summary(db: Session = Depends(get_db)):
+#     """
+#     Aggregated count, average spend and average visits per segment.
+#     Ideal for a summary chart or dashboard card.
+#     """
+#     result = db.execute(text("""
+#         SELECT
+#             segment_name,
+#             COUNT(*)                             AS member_count,
+#             ROUND(AVG(total_spend)::NUMERIC, 2) AS avg_total_spend,
+#             ROUND(AVG(visit_count)::NUMERIC, 2) AS avg_visits,
+#             ROUND(AVG(avg_stay)::NUMERIC, 2)    AS avg_stay_nights,
+#             SUM(CASE WHEN is_active THEN 1 ELSE 0 END)      AS active_count,
+#             SUM(CASE WHEN NOT is_active THEN 1 ELSE 0 END)  AS inactive_count
+#         FROM member_segments
+#         GROUP BY segment_name
+#         ORDER BY member_count DESC;
+#     """)).mappings().all()
+#     return [dict(row) for row in result]
  
  
  
