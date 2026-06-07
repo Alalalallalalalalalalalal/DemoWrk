@@ -292,7 +292,7 @@ export default function Dashboard() {
             "Outstanding balances and spend breakdown"}
           {activeTab === "reports" && "View reports and filtering"}
           {activeTab === "ml" &&
-            "Segmentation, amenity insights and campaign recommendations"}
+            "Segmentation, amenity insights and campaign recommendations,  all monetary figures are in $USD"}
         </p>
 
         {/* ════════ OVERVIEW ════════ */}
