@@ -94,9 +94,9 @@ CREATE TABLE IF NOT EXISTS segment_amenities (
     member_number VARCHAR,
     name VARCHAR,
     email VARCHAR,
-    amenity_type VARCHAR,
-    total_spend NUMERIC,
-    visit_count INTEGER,
+    top_amenity VARCHAR,
+    top_amenity_spend NUMERIC,
+    total_amenity_spend NUMERIC,
     check_in_date DATE,
     check_out_date DATE,
     season VARCHAR,
@@ -313,27 +313,27 @@ def build_visitors(conn, seasons):
 def build_amenities(conn, seasons):
     sql = """
     SELECT
-        a.member_number,
-        f.guest_name AS name,
+        a.member_id AS member_number,
+        a.member_full_name AS name,
         m.email,
-        a.amenity_type,
-        a.total_spent,
-        a.visit_count,
+        a.top_amenity,
+        a.top_amenity_spend,
+        a.total_amenity_spend,
         f.check_in_date,
         f.check_out_date
-    FROM amenity_spend a
+    FROM member_amenity_profile a
+
     LEFT JOIN LATERAL (
         SELECT
-            guest_name,
             check_in_date,
             check_out_date
         FROM folios
-        WHERE member_number = a.member_number
+        WHERE member_number = a.member_id
         ORDER BY check_in_date DESC
         LIMIT 1
     ) f ON TRUE
     LEFT JOIN members m
-        ON m.member_number = a.member_number;
+        ON m.member_number = a.member_id;
     """
 
     with conn.cursor() as cur:
@@ -350,17 +350,17 @@ def build_amenities(conn, seasons):
 
             cur.execute("""
                 INSERT INTO segment_amenities
-                (member_number, name, email, amenity_type,
-                 total_spend, visit_count,
+                (member_number, name, email, top_amenity,
+                 top_amenity_spend, total_amenity_spend,
                  check_in_date, check_out_date, season)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (
                 r["member_number"],
                 r["name"],
                 r["email"],
-                r["amenity_type"],
-                r["total_spent"],
-                r["visit_count"],
+                r["top_amenity"],
+                r["top_amenity_spend"],
+                r["total_amenity_spend"],
                 r["check_in_date"],
                 r["check_out_date"],
                 season
