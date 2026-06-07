@@ -145,7 +145,7 @@ function MemberSidePanel({ member, tab, onClose }) {
       ? member.tier
       : tab === "visitors"
         ? member.visitor_type
-        : member.amenity_type;
+        : member.top_amenity;
 
   const pal = paletteFor(label);
 
@@ -180,9 +180,9 @@ function MemberSidePanel({ member, tab, onClose }) {
         : [
             { label: "Member #", value: member.member_number },
             { label: "Email", value: member.email || "—" },
-            { label: "Amenity", value: member.amenity_type },
-            { label: "Total Spend", value: fmt$(member.total_spend) },
-            { label: "Visits", value: member.visit_count ?? "—" },
+            { label: "Amenity", value: member.top_amenity },
+            { label: "Total Spend", value: fmt$(member.total_amenity_spend) },
+            { label: "Visits", value: member.top_amenity_spend ?? "—" },
             { label: "Check-in", value: fmtDate(member.check_in_date) },
             { label: "Check-out", value: fmtDate(member.check_out_date) },
             { label: "Season", value: member.season || "—" },
@@ -312,12 +312,12 @@ function MemberSidePanel({ member, tab, onClose }) {
               <>
                 <KpiChip
                   label="Total Spend"
-                  value={fmt$(member.total_spend)}
+                  value={fmt$(member.total_amenity_spend)}
                   color={pal.accent}
                 />
                 <KpiChip
                   label="Visits"
-                  value={member.visit_count ?? "—"}
+                  value={member.top_amenity_spend ?? "—"}
                   color={C.muted}
                 />
               </>
@@ -492,7 +492,7 @@ function MemberRow({ member, tab, idx, onClick }) {
       ? member.tier
       : tab === "visitors"
         ? member.visitor_type
-        : member.amenity_type;
+        : member.top_amenity;
 
   const pal = paletteFor(label);
 
@@ -501,14 +501,14 @@ function MemberRow({ member, tab, idx, onClick }) {
       ? fmt$(member.net_spend)
       : tab === "visitors"
         ? (member.total_reservations ?? "—")
-        : fmt$(member.total_spend);
+        : fmt$(member.total_amenity_spend);
 
   const secondary =
     tab === "spenders"
       ? member.season || "—"
       : tab === "visitors"
         ? fmtDate(member.last_visit)
-        : (member.visit_count ?? "—");
+        : (member.top_amenity_spend ?? "—");
 
   const detail =
     tab === "spenders"
@@ -517,7 +517,7 @@ function MemberRow({ member, tab, idx, onClick }) {
         : ""
       : tab === "visitors"
         ? fmtDate(member.check_in_date)
-        : member.amenity_type || "—";
+        : member.top_amenity || "—";
 
   return (
     <tr
@@ -690,7 +690,7 @@ export default function SegmentationPanel() {
           ? r.tier
           : activeTab === "visitors"
             ? r.visitor_type
-            : r.amenity_type;
+            : (r.amenity_type ?? r.top_amenity);
       if (!label) return;
       if (!map[label]) map[label] = { count: 0, totalSpend: 0 };
       map[label].count++;
@@ -716,7 +716,7 @@ export default function SegmentationPanel() {
             ? r.tier
             : activeTab === "visitors"
               ? r.visitor_type
-              : r.amenity_type) === filterLabel,
+              : (r.amenity_type ?? r.top_amenity)) === filterLabel,
       );
     }
     if (search.trim()) {
