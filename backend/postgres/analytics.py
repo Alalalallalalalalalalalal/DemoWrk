@@ -642,8 +642,292 @@ def search_table(
 
     return [dict(row) for row in result]
 
+AMENITY_CASE_SQL = """
+    CASE
+        WHEN description ~* '\m(spa|massage|facial)\M' THEN 'Spa'
+        WHEN description ~* '\m(golf|pro shop|cart)\M' THEN 'Golf'
+        WHEN description ~* '\mgrill\M' THEN 'Grill'
+        WHEN description ~* '\mbar\M' THEN 'Bar'
+        WHEN description ~* '\m(restaurant|dinner|lunch|breakfast)\M' THEN 'Restaurant'
+        WHEN description ~* '\mtennis\M' THEN 'Tennis'
+        WHEN description ~* '\m(boutique|shop|commissary)\M' THEN 'Retail'
+        ELSE NULL
+    END
+"""
+
+AMENITY_EXCLUDED_SQL = """
+    description !~* '\m(villa|rental|airport|transfer|shuttle|transport|transportation|membership|dues|fee)\M'
+"""
+
+SEASON_JOIN_SQL = """
+    JOIN active_seasons s
+      ON (
+        s.start_month < s.end_month
+        OR (s.start_month = s.end_month AND s.start_day <= s.end_day)
+      )
+      AND (
+        EXTRACT(MONTH FROM ref_date)::INT > s.start_month
+        OR (
+          EXTRACT(MONTH FROM ref_date)::INT = s.start_month
+          AND EXTRACT(DAY FROM ref_date)::INT >= s.start_day
+        )
+      )
+      AND (
+        EXTRACT(MONTH FROM ref_date)::INT < s.end_month
+        OR (
+          EXTRACT(MONTH FROM ref_date)::INT = s.end_month
+          AND EXTRACT(DAY FROM ref_date)::INT <= s.end_day
+        )
+      )
+    OR (
+      (
+        s.start_month > s.end_month
+        OR (s.start_month = s.end_month AND s.start_day > s.end_day)
+      )
+      AND (
+        EXTRACT(MONTH FROM ref_date)::INT > s.start_month
+        OR (
+          EXTRACT(MONTH FROM ref_date)::INT = s.start_month
+          AND EXTRACT(DAY FROM ref_date)::INT >= s.start_day
+        )
+        OR EXTRACT(MONTH FROM ref_date)::INT < s.end_month
+        OR (
+          EXTRACT(MONTH FROM ref_date)::INT = s.end_month
+          AND EXTRACT(DAY FROM ref_date)::INT <= s.end_day
+        )
+      )
+    )
+"""
+
+
+def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
+    active_season_count = db.execute(
+        text("""
+            SELECT COUNT(*)
+            FROM seasons
+            WHERE group_id = :group_id
+              AND is_active = TRUE
+        """),
+        {"group_id": group_id},
+    ).scalar() or 0
+
+    if active_season_count == 0:
+        return {
+            "amenitySeasonSpend": [],
+            "memberAmenityProfile": [],
+            "memberAmenitySeasonVisits": [],
+            "seasonVillaBedroom": [],
+        }
+
+    def rows(sql: str):
+        return [
+            dict(row)
+            for row in db.execute(text(sql), {"group_id": group_id}).mappings().all()
+        ]
+
+    base_ctes = f"""
+        WITH active_seasons AS (
+            SELECT id, season_name, start_month, start_day, end_month, end_day
+            FROM seasons
+            WHERE group_id = :group_id
+              AND is_active = TRUE
+        ),
+        amenity_rows AS (
+            SELECT
+                f.member_number AS member_id,
+                COALESCE(
+                    NULLIF(TRIM(f.guest_name), ''),
+                    NULLIF(TRIM(m.member_full_name), ''),
+                    NULLIF(TRIM(m.member_name), '')
+                ) AS member_full_name,
+                f.description,
+                COALESCE(f.amount, 0) AS amount,
+                COALESCE(f.check_in_date, f.transaction_date)::DATE AS ref_date,
+                f.check_in_date,
+                f.check_out_date,
+                {AMENITY_CASE_SQL} AS amenity
+            FROM folios f
+            LEFT JOIN members m ON f.member_number = m.member_number
+            WHERE f.member_number IS NOT NULL
+              AND f.description IS NOT NULL
+              AND COALESCE(f.check_in_date, f.transaction_date) IS NOT NULL
+              AND {AMENITY_EXCLUDED_SQL}
+        ),
+        season_amenity_rows AS (
+            SELECT
+                ar.member_id,
+                ar.member_full_name,
+                ar.description,
+                ar.amount,
+                ar.ref_date,
+                ar.check_in_date,
+                ar.check_out_date,
+                ar.amenity,
+                s.season_name AS season
+            FROM amenity_rows ar
+            {SEASON_JOIN_SQL}
+            WHERE ar.amenity IS NOT NULL
+        )
+    """
+
+    spend_raw = rows(f"""
+        {base_ctes}
+        SELECT amenity,
+               season,
+               ROUND(SUM(amount)::NUMERIC, 2) AS total_spend,
+               COUNT(*)::INT AS transaction_count,
+               ROUND((SUM(amount) / NULLIF(COUNT(*), 0))::NUMERIC, 2) AS avg_spend_per_visit,
+               COUNT(DISTINCT member_id)::INT AS member_count
+        FROM season_amenity_rows
+        GROUP BY amenity, season
+        ORDER BY season, total_spend DESC
+    """)
+
+    profile_raw = rows(f"""
+        {base_ctes},
+        per_member_amenity AS (
+            SELECT member_id,
+                   MAX(member_full_name) AS member_full_name,
+                   amenity,
+                   COUNT(*) AS usage_count,
+                   SUM(amount) AS amenity_spend
+            FROM season_amenity_rows
+            GROUP BY member_id, amenity
+        ),
+        ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY member_id
+                       ORDER BY amenity_spend DESC NULLS LAST
+                   ) AS rn,
+                   SUM(amenity_spend) OVER (PARTITION BY member_id) AS total_amenity_spend
+            FROM per_member_amenity
+        )
+        SELECT member_id,
+               member_full_name,
+               amenity AS top_amenity,
+               ROUND(amenity_spend::NUMERIC, 2) AS top_amenity_spend,
+               ROUND(total_amenity_spend::NUMERIC, 2) AS total_amenity_spend
+        FROM ranked
+        WHERE rn = 1
+        ORDER BY total_amenity_spend DESC NULLS LAST
+        LIMIT 1000
+    """)
+
+    visits_raw = rows(f"""
+        {base_ctes}
+        SELECT member_id,
+               member_full_name,
+               season,
+               amenity,
+               COUNT(*)::INT AS usage_count,
+               ROUND(SUM(amount)::NUMERIC, 2) AS total_spend,
+               TO_CHAR(check_in_date, 'Mon DD, YYYY') AS check_in_fmt,
+               TO_CHAR(check_out_date, 'Mon DD, YYYY') AS check_out_fmt
+        FROM season_amenity_rows
+        GROUP BY member_id, member_full_name, season, check_in_date, check_out_date, amenity
+        ORDER BY check_in_date DESC NULLS LAST
+        LIMIT 2000
+    """)
+
+    villa_raw = rows(f"""
+        WITH active_seasons AS (
+            SELECT id, season_name, start_month, start_day, end_month, end_day
+            FROM seasons
+            WHERE group_id = :group_id
+              AND is_active = TRUE
+        ),
+        stay_rows AS (
+            SELECT
+                f.member_number,
+                f.check_in_date::DATE AS ref_date,
+                f.check_in_date,
+                f.check_out_date,
+                f.villa_name,
+                f.bedroom_count,
+                GREATEST((f.check_out_date - f.check_in_date), 0) AS nights
+            FROM folios f
+            WHERE f.member_number IS NOT NULL
+              AND f.check_in_date IS NOT NULL
+        ),
+        season_stay_rows AS (
+            SELECT sr.*, s.season_name AS season
+            FROM stay_rows sr
+            {SEASON_JOIN_SQL}
+        ),
+        season_totals AS (
+            SELECT season,
+                   COUNT(*)::INT AS total_bookings,
+                   COALESCE(SUM(nights), 0)::INT AS total_nights,
+                   ROUND(AVG(nights)::NUMERIC, 2) AS avg_nights,
+                   COUNT(DISTINCT member_number)::INT AS unique_members
+            FROM season_stay_rows
+            GROUP BY season
+        ),
+        villa_rank AS (
+            SELECT season,
+                   villa_name,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY season
+                       ORDER BY COUNT(*) DESC, villa_name
+                   ) AS rn
+            FROM season_stay_rows
+            WHERE villa_name IS NOT NULL
+            GROUP BY season, villa_name
+        ),
+        bedroom_rank AS (
+            SELECT season,
+                   bedroom_count,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY season
+                       ORDER BY COUNT(*) DESC, bedroom_count
+                   ) AS rn
+            FROM season_stay_rows
+            WHERE bedroom_count IS NOT NULL
+            GROUP BY season, bedroom_count
+        ),
+        bedroom_dist AS (
+            SELECT season,
+                   jsonb_object_agg(bedroom_count::INT::TEXT, count)::TEXT AS bedroom_distribution
+            FROM (
+                SELECT season, bedroom_count, COUNT(*)::INT AS count
+                FROM season_stay_rows
+                WHERE bedroom_count IS NOT NULL
+                GROUP BY season, bedroom_count
+            ) counts
+            GROUP BY season
+        )
+        SELECT st.season,
+               st.total_bookings,
+               st.total_nights,
+               st.avg_nights,
+               st.unique_members,
+               vr.villa_name AS top_villa,
+               br.bedroom_count::INT AS top_bedroom_count,
+               bd.bedroom_distribution
+        FROM season_totals st
+        LEFT JOIN villa_rank vr ON vr.season = st.season AND vr.rn = 1
+        LEFT JOIN bedroom_rank br ON br.season = st.season AND br.rn = 1
+        LEFT JOIN bedroom_dist bd ON bd.season = st.season
+        ORDER BY st.total_bookings DESC
+    """)
+
+    return {
+        "amenitySeasonSpend": spend_raw,
+        "memberAmenityProfile": profile_raw,
+        "memberAmenitySeasonVisits": visits_raw,
+        "seasonVillaBedroom": villa_raw,
+    }
+
+
 @router.get("/ml/amenity-season-insights")
-def ml_amenity_season_insights(db: Session = Depends(get_db)):
+def ml_amenity_season_insights(
+    group_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    if group_id is not None:
+        return _ml_amenity_season_insights_for_group(group_id, db)
+
     def rows(sql: str):
         return [dict(row) for row in db.execute(text(sql)).mappings().all()]
 

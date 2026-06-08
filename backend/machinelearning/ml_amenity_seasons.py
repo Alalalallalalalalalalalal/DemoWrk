@@ -121,17 +121,34 @@ def classify_amenity(description: str | None) -> str | None:
 
 # ─── Season helpers ───────────────────────────────────────────────────────────
 
-def _load_active_seasons() -> list[dict]:
-    """Load active Business Season definitions from DB."""
-    rows = _query("""
-        SELECT s.id, s.season_name, s.start_month, s.start_day,
-               s.end_month, s.end_day
-        FROM seasons s
-        JOIN season_groups sg ON sg.id = s.group_id
-        WHERE s.is_active = TRUE
-          AND sg.group_type = 'business'
-        ORDER BY s.start_month, s.start_day
-    """)
+def _load_active_seasons(group_id: int | None = None) -> list[dict]:
+    """Load active season definitions from DB.
+
+    Defaults to Business Seasons for the existing standalone rebuild.
+    Passing group_id lets the same builder use a selected custom group.
+    """
+    if group_id is not None:
+        rows = _query(
+            """
+            SELECT s.id, s.season_name, s.start_month, s.start_day,
+                   s.end_month, s.end_day
+            FROM seasons s
+            WHERE s.is_active = TRUE
+              AND s.group_id = :group_id
+            ORDER BY s.start_month, s.start_day
+            """,
+            {"group_id": group_id},
+        )
+    else:
+        rows = _query("""
+            SELECT s.id, s.season_name, s.start_month, s.start_day,
+                   s.end_month, s.end_day
+            FROM seasons s
+            JOIN season_groups sg ON sg.id = s.group_id
+            WHERE s.is_active = TRUE
+              AND sg.group_type = 'business'
+            ORDER BY s.start_month, s.start_day
+        """)
     return rows.to_dict("records")
 
 
@@ -430,12 +447,13 @@ def build_amenity_season_tables(
     *,
     dry_run: bool = False,
     recreate: bool = False,
+    group_id: int | None = None,
 ) -> None:
     log.info("=== Amenity × Season pipeline starting ===")
 
-    seasons = _load_active_seasons()
+    seasons = _load_active_seasons(group_id=group_id)
     if not seasons:
-        log.error("No active Business Seasons found — aborting.")
+        log.error("No active seasons found — aborting.")
         return
 
     log.info("Active seasons loaded: %s", [s["season_name"] for s in seasons])
@@ -467,8 +485,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build amenity × season cross-analysis tables.")
     parser.add_argument("--dry-run",  action="store_true", help="Read data but do not write tables")
     parser.add_argument("--recreate", action="store_true", help="Drop/recreate tables before build")
+    parser.add_argument("--group-id", type=int, default=None, help="Use active seasons from one season group")
     args = parser.parse_args()
-    build_amenity_season_tables(dry_run=args.dry_run, recreate=args.recreate)
+    build_amenity_season_tables(
+        dry_run=args.dry_run,
+        recreate=args.recreate,
+        group_id=args.group_id,
+    )
 
 
 if __name__ == "__main__":

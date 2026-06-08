@@ -77,7 +77,10 @@ function aggregateByGroup(seasonalVisits, seasons) {
   });
 }
 
-export default function SeasonFilterBar({ onSeasonClick }) {
+export default function SeasonFilterBar({
+  onSeasonClick,
+  onSeasonGroupChange,
+}) {
   const [groups, setGroups] = useState([]);
   const [seasonalVisits, setSeasonalVisits] = useState([]);
   const [activeGroupIdx, setActiveGroupIdx] = useState(0);
@@ -111,9 +114,10 @@ export default function SeasonFilterBar({ onSeasonClick }) {
         setGroups(visibleGroups);
         setSeasonalVisits(data?.seasonalVisits ?? []);
         setActiveGroupIdx(0);
+        onSeasonGroupChange?.(visibleGroups[0] ?? null);
       })
       .catch(() => {});
-  }, []);
+  }, [onSeasonGroupChange]);
 
   const [showGraphKey, setShowGraphKey] = useState(false);
 
@@ -123,36 +127,42 @@ export default function SeasonFilterBar({ onSeasonClick }) {
     : [];
 
   async function toggleSeason(season) {
-    const updated = { is_active: !season.is_active };
-    await analyticsApi.updateSeason(season.id, updated);
-    setGroups((prev) =>
-      prev.map((g, gi) =>
-        gi !== activeGroupIdx
-          ? g
-          : {
-              ...g,
-              seasons: g.seasons.map((s) =>
-                s.id === season.id ? { ...s, ...updated } : s,
-              ),
-            },
+    if (!activeGroup) return;
+
+    const saved = await analyticsApi.updateSeason(season.id, {
+      is_active: !season.is_active,
+    });
+    const nextGroup = {
+      ...activeGroup,
+      seasons: activeGroup.seasons.map((s) =>
+        s.id === season.id ? { ...s, ...saved } : s,
       ),
+    };
+
+    setGroups((prev) =>
+      prev.map((g, gi) => (gi === activeGroupIdx ? nextGroup : g)),
     );
+    onSeasonGroupChange?.(nextGroup);
   }
 
   async function saveEdit() {
-    await analyticsApi.updateSeason(editingSeason.season.id, editForm);
-    setGroups((prev) =>
-      prev.map((g, gi) =>
-        gi !== activeGroupIdx
-          ? g
-          : {
-              ...g,
-              seasons: g.seasons.map((s) =>
-                s.id === editingSeason.season.id ? { ...s, ...editForm } : s,
-              ),
-            },
-      ),
+    if (!activeGroup || !editingSeason) return;
+
+    const saved = await analyticsApi.updateSeason(
+      editingSeason.season.id,
+      editForm,
     );
+    const nextGroup = {
+      ...activeGroup,
+      seasons: activeGroup.seasons.map((s) =>
+        s.id === editingSeason.season.id ? { ...s, ...saved } : s,
+      ),
+    };
+
+    setGroups((prev) =>
+      prev.map((g, gi) => (gi === activeGroupIdx ? nextGroup : g)),
+    );
+    onSeasonGroupChange?.(nextGroup);
     setEditingSeason(null);
   }
 
@@ -161,8 +171,11 @@ export default function SeasonFilterBar({ onSeasonClick }) {
     const created = await analyticsApi.createSeasonGroup({
       group_name: newGroupName.trim(),
     });
-    setGroups((prev) => [...prev, created]);
-    setActiveGroupIdx(groups.length);
+    setGroups((prev) => {
+      setActiveGroupIdx(prev.length);
+      onSeasonGroupChange?.(created);
+      return [...prev, created];
+    });
     setNewGroupName("");
     setShowAddGroup(false);
   }
@@ -173,16 +186,15 @@ export default function SeasonFilterBar({ onSeasonClick }) {
       ...newSeason,
       group_id: activeGroup.id,
     });
+    const nextGroup = {
+      ...activeGroup,
+      seasons: [...activeGroup.seasons, created],
+    };
+
     setGroups((prev) =>
-      prev.map((g, gi) =>
-        gi !== activeGroupIdx
-          ? g
-          : {
-              ...g,
-              seasons: [...g.seasons, created],
-            },
-      ),
+      prev.map((g, gi) => (gi === activeGroupIdx ? nextGroup : g)),
     );
+    onSeasonGroupChange?.(nextGroup);
     setNewSeason({
       season_name: "",
       start_month: 1,
@@ -423,6 +435,7 @@ export default function SeasonFilterBar({ onSeasonClick }) {
               style={S.tab(i === activeGroupIdx)}
               onClick={() => {
                 setActiveGroupIdx(i);
+                onSeasonGroupChange?.(g);
                 setEditingSeason(null);
                 setShowAddGroup(false);
                 setShowAddSeason(false);
