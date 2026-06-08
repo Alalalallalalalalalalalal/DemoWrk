@@ -1311,7 +1311,7 @@ function AmenitySpendBarChart({ spendData, onBarClick }) {
 }
 
 /* ── Main exported component ─────────────────────────────────────── */
-export default function AmenitySeasonPanel() {
+export default function AmenitySeasonPanel({ seasonGroupId = null }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1323,8 +1323,13 @@ export default function AmenitySeasonPanel() {
   useEffect(() => {
     let mounted = true;
 
+    setLoading(true);
+    setError(null);
+    setDrillAmenity("");
+    setDrillSeason("");
+
     analyticsApi
-      .amenitySeasonInsights()
+      .amenitySeasonInsights({ group_id: seasonGroupId })
       .then((res) => {
         if (mounted) setData(res);
       })
@@ -1342,7 +1347,7 @@ export default function AmenitySeasonPanel() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [seasonGroupId]);
 
   const {
     amenitySeasonSpend = [],

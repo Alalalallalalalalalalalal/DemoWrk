@@ -20,6 +20,19 @@ const jsonRequest = (method, body) => ({
   body: JSON.stringify(body),
 });
 
+const withQuery = (endpoint, params = {}) => {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, value);
+    }
+  });
+
+  const queryString = query.toString();
+  return queryString ? `${endpoint}?${queryString}` : endpoint;
+};
+
 export const analyticsApi = {
   // Combined dashboard endpoint
   dashboardSummary: () => fetchData("/analytics/dashboard-summary"),
@@ -56,8 +69,8 @@ export const analyticsApi = {
       )}&value=${encodeURIComponent(value)}`,
     ),
 
-  amenitySeasonInsights: () =>
-    fetchData("/analytics/ml/amenity-season-insights"),
+  amenitySeasonInsights: (params = {}) =>
+    fetchData(withQuery("/analytics/ml/amenity-season-insights", params)),
 
   // Member segments
   memberSegments: () => fetchData("/analytics/ml/member-segments"),

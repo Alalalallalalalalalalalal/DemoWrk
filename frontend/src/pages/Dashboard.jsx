@@ -59,6 +59,7 @@ const TABS = [
 /* ─── Main Dashboard ─────────────────────────────────────────── */
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("overview");
+  const [activeSeasonGroup, setActiveSeasonGroup] = useState(null);
 
   // ---------- all your existing state ----------
   const [membersByCountry, setMembersByCountry] = useState([]);
@@ -1406,12 +1407,12 @@ export default function Dashboard() {
 
             <SectionLabel>Season Filters</SectionLabel>
             <ErrorBoundary title="Season Filter Bar">
-              <SeasonFilterBar />
+              <SeasonFilterBar onSeasonGroupChange={setActiveSeasonGroup} />
             </ErrorBoundary>
 
             <SectionLabel>Amenity Season Analysis</SectionLabel>
             <ErrorBoundary title="Amenity Season Insights">
-              <AmenitySeasonPanel />
+              <AmenitySeasonPanel seasonGroupId={activeSeasonGroup?.id} />
             </ErrorBoundary>
           </div>
         )}
