@@ -699,7 +699,6 @@ SEASON_JOIN_SQL = """
     )
 """
 
-
 def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
     active_season_count = db.execute(
         text("""
@@ -851,53 +850,61 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
               AND f.check_in_date IS NOT NULL
         ),
         season_stay_rows AS (
-            SELECT sr.*, s.season_name AS season
+            SELECT
+                sr.*,
+                s.season_name AS season,
+                EXTRACT(YEAR FROM sr.ref_date)::INT AS year
             FROM stay_rows sr
             {SEASON_JOIN_SQL}
         ),
         season_totals AS (
-            SELECT season,
+            SELECT year,
+                   season,
                    COUNT(*)::INT AS total_bookings,
                    COALESCE(SUM(nights), 0)::INT AS total_nights,
                    ROUND(AVG(nights)::NUMERIC, 2) AS avg_nights,
                    COUNT(DISTINCT member_number)::INT AS unique_members
             FROM season_stay_rows
-            GROUP BY season
+            GROUP BY year, season
         ),
         villa_rank AS (
-            SELECT season,
+            SELECT year,
+                   season,
                    villa_name,
                    ROW_NUMBER() OVER (
-                       PARTITION BY season
+                       PARTITION BY year, season
                        ORDER BY COUNT(*) DESC, villa_name
                    ) AS rn
             FROM season_stay_rows
             WHERE villa_name IS NOT NULL
-            GROUP BY season, villa_name
+            GROUP BY year, season, villa_name
         ),
         bedroom_rank AS (
-            SELECT season,
+            SELECT year,
+                   season,
                    bedroom_count,
                    ROW_NUMBER() OVER (
-                       PARTITION BY season
+                       PARTITION BY year, season
                        ORDER BY COUNT(*) DESC, bedroom_count
                    ) AS rn
             FROM season_stay_rows
             WHERE bedroom_count IS NOT NULL
-            GROUP BY season, bedroom_count
+            GROUP BY year, season, bedroom_count
         ),
         bedroom_dist AS (
-            SELECT season,
+            SELECT year,
+                   season,
                    jsonb_object_agg(bedroom_count::INT::TEXT, count)::TEXT AS bedroom_distribution
             FROM (
-                SELECT season, bedroom_count, COUNT(*)::INT AS count
+                SELECT year, season, bedroom_count, COUNT(*)::INT AS count
                 FROM season_stay_rows
                 WHERE bedroom_count IS NOT NULL
-                GROUP BY season, bedroom_count
+                GROUP BY year, season, bedroom_count
             ) counts
-            GROUP BY season
+            GROUP BY year, season
         )
-        SELECT st.season,
+        SELECT st.year,
+               st.season,
                st.total_bookings,
                st.total_nights,
                st.avg_nights,
@@ -906,10 +913,18 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                br.bedroom_count::INT AS top_bedroom_count,
                bd.bedroom_distribution
         FROM season_totals st
-        LEFT JOIN villa_rank vr ON vr.season = st.season AND vr.rn = 1
-        LEFT JOIN bedroom_rank br ON br.season = st.season AND br.rn = 1
-        LEFT JOIN bedroom_dist bd ON bd.season = st.season
-        ORDER BY st.total_bookings DESC
+        LEFT JOIN villa_rank vr
+          ON vr.year = st.year
+         AND vr.season = st.season
+         AND vr.rn = 1
+        LEFT JOIN bedroom_rank br
+          ON br.year = st.year
+         AND br.season = st.season
+         AND br.rn = 1
+        LEFT JOIN bedroom_dist bd
+          ON bd.year = st.year
+         AND bd.season = st.season
+        ORDER BY st.year DESC, st.total_bookings DESC
     """)
 
     return {
@@ -918,7 +933,6 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
         "memberAmenitySeasonVisits": visits_raw,
         "seasonVillaBedroom": villa_raw,
     }
-
 
 @router.get("/ml/amenity-season-insights")
 def ml_amenity_season_insights(
@@ -974,7 +988,8 @@ def ml_amenity_season_insights(
                unique_members,
                top_villa,
                top_bedroom_count,
-               bedroom_distribution
+               bedroom_distribution,
+                year
         FROM season_villa_bedroom_summary
         ORDER BY total_bookings DESC
     """)

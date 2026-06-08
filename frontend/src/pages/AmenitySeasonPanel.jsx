@@ -515,13 +515,13 @@ function MemberAmenityProfileTable({ data }) {
                   style={{ ...th, cursor: "pointer" }}
                   onClick={() => sortBy("top_amenity_spend")}
                 >
-                  Amenity Spend <SortIcon col="top_amenity_spend" />
+                  Amenity Spend ($USD) <SortIcon col="top_amenity_spend" />
                 </th>
                 <th
                   style={{ ...th, cursor: "pointer" }}
                   onClick={() => sortBy("total_amenity_spend")}
                 >
-                  Total Spend <SortIcon col="total_amenity_spend" />
+                  Total Spend ($USD) <SortIcon col="total_amenity_spend" />
                 </th>
               </tr>
             </thead>
@@ -807,7 +807,7 @@ function MemberSeasonVisitsTable({
                   "Check-in",
                   "Check-out",
                   "Uses",
-                  "Spend",
+                  "Spend ($USD)",
                 ].map((h) => (
                   <th key={h} style={th}>
                     {h}
@@ -954,6 +954,28 @@ function MemberSeasonVisitsTable({
 /* ── SeasonCapacityCards ─────────────────────────────────────────── */
 function SeasonCapacityCards({ data }) {
   const [expanded, setExpanded] = useState(null);
+  const [year, setYear] = useState("All");
+
+  const getYear = (d) =>
+    d.year ??
+    d.Year ??
+    d.booking_year ??
+    d.check_in_year ??
+    (d.check_in_date ? new Date(d.check_in_date).getFullYear() : null);
+
+  const years = useMemo(
+    () =>
+      [
+        "All",
+        ...new Set((data ?? []).map((d) => getYear(d)).filter(Boolean)),
+      ].sort((a, b) => String(b).localeCompare(String(a))),
+    [data],
+  );
+
+  const filteredData = useMemo(() => {
+    if (year === "All") return data ?? [];
+    return (data ?? []).filter((d) => String(getYear(d)) === String(year));
+  }, [data, year]);
 
   if (!data?.length)
     return (
@@ -962,7 +984,6 @@ function SeasonCapacityCards({ data }) {
       </p>
     );
 
-  // Parse bedroom_distribution string → object
   const parseDist = (raw) => {
     if (!raw) return {};
     try {
@@ -973,205 +994,109 @@ function SeasonCapacityCards({ data }) {
   };
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))",
-        gap: 14,
-      }}
-    >
-      {data.map((s, i) => {
-        const dist = parseDist(s.bedroom_distribution);
-        const isOpen = expanded === i;
-        const distEntries = Object.entries(dist).sort(
-          (a, b) => Number(b[1]) - Number(a[1]),
-        );
+    <>
+      <select
+        style={{ ...select, marginBottom: 14 }}
+        value={year}
+        onChange={(e) => {
+          setYear(e.target.value);
+          setExpanded(null);
+        }}
+      >
+        {years.map((y) => (
+          <option key={y} value={y}>
+            {y === "All" ? "All Years" : y}
+          </option>
+        ))}
+      </select>
 
-        return (
-          <div
-            key={i}
-            style={{
-              ...card,
-              borderTop: `3px solid ${CHART_COLORS[i % CHART_COLORS.length]}`,
-              cursor: "pointer",
-              transition: "box-shadow 0.15s",
-            }}
-            onClick={() => setExpanded(isOpen ? null : i)}
-          >
-            {/* Season name + toggle */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))",
+          gap: 14,
+        }}
+      >
+        {filteredData.map((s, i) => {
+          const dist = parseDist(s.bedroom_distribution);
+          const isOpen = expanded === i;
+          const distEntries = Object.entries(dist).sort(
+            (a, b) => Number(b[1]) - Number(a[1]),
+          );
+
+          return (
             <div
+              key={`${s.year ?? "all"}-${s.season}-${i}`}
               style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 10,
+                ...card,
+                borderTop: `3px solid ${CHART_COLORS[i % CHART_COLORS.length]}`,
+                cursor: "pointer",
               }}
+              onClick={() => setExpanded(isOpen ? null : i)}
             >
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: 13,
-                  fontWeight: 700,
-                  color: C.textPrimary,
-                  fontFamily: "sans-serif",
-                }}
-              >
-                {s.season}
-              </p>
-              {isOpen ? (
-                <ChevronUp size={14} color={C.textMuted} />
-              ) : (
-                <ChevronDown size={14} color={C.textMuted} />
-              )}
-            </div>
-
-            {/* Quick stats row */}
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 8,
-                marginBottom: isOpen ? 14 : 0,
-              }}
-            >
-              {[
-                {
-                  label: "Bookings",
-                  value: s.total_bookings?.toLocaleString() ?? "—",
-                },
-                {
-                  label: "Nights",
-                  value: s.total_nights?.toLocaleString() ?? "—",
-                },
-                {
-                  label: "Avg Stay",
-                  value: s.avg_nights != null ? `${s.avg_nights}n` : "—",
-                },
-                {
-                  label: "Members",
-                  value: s.unique_members?.toLocaleString() ?? "—",
-                },
-              ].map(({ label, value }) => (
-                <div
-                  key={label}
-                  style={{
-                    background: C.headerBg,
-                    borderRadius: 8,
-                    padding: "6px 10px",
-                  }}
-                >
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 10,
-                      color: C.textMuted,
-                      fontFamily: "sans-serif",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.07em",
-                    }}
-                  >
-                    {label}
-                  </p>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 14,
-                      fontWeight: 700,
-                      color: C.textPrimary,
-                      fontFamily: "sans-serif",
-                    }}
-                  >
-                    {value}
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            {/* Expandable detail */}
-            {isOpen && (
               <div
                 style={{
-                  borderTop: `1px solid ${C.border}`,
-                  paddingTop: 12,
                   display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 10,
                 }}
               >
-                {/* Top villa */}
-                {s.top_villa && (
-                  <div
-                    style={{ display: "flex", alignItems: "center", gap: 8 }}
-                  >
-                    <Home size={14} color={C.accent} />
-                    <div>
-                      <p
-                        style={{
-                          margin: 0,
-                          fontSize: 10,
-                          color: C.textMuted,
-                          fontFamily: "sans-serif",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.07em",
-                        }}
-                      >
-                        Most Requested Villa
-                      </p>
-                      <p
-                        style={{
-                          margin: 0,
-                          fontSize: 13,
-                          fontWeight: 600,
-                          color: C.textPrimary,
-                          fontFamily: "sans-serif",
-                        }}
-                      >
-                        {s.top_villa}
-                      </p>
-                    </div>
-                  </div>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: C.textPrimary,
+                    fontFamily: "sans-serif",
+                  }}
+                >
+                  {s.season} {getYear(s) ? `· ${getYear(s)}` : ""}
+                </p>
+                {isOpen ? (
+                  <ChevronUp size={14} color={C.textMuted} />
+                ) : (
+                  <ChevronDown size={14} color={C.textMuted} />
                 )}
+              </div>
 
-                {/* Top bedroom count */}
-                {s.top_bedroom_count != null && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 8,
+                  marginBottom: isOpen ? 14 : 0,
+                }}
+              >
+                {[
+                  {
+                    label: "Bookings",
+                    value: s.total_bookings?.toLocaleString() ?? "—",
+                  },
+                  {
+                    label: "Nights",
+                    value: s.total_nights?.toLocaleString() ?? "—",
+                  },
+                  {
+                    label: "Avg Stay",
+                    value: s.avg_nights != null ? `${s.avg_nights}n` : "—",
+                  },
+                  {
+                    label: "Members",
+                    value: s.unique_members?.toLocaleString() ?? "—",
+                  },
+                ].map(({ label, value }) => (
                   <div
-                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                    key={label}
+                    style={{
+                      background: C.headerBg,
+                      borderRadius: 8,
+                      padding: "6px 10px",
+                    }}
                   >
-                    <Bed size={14} color={C.teal} />
-                    <div>
-                      <p
-                        style={{
-                          margin: 0,
-                          fontSize: 10,
-                          color: C.textMuted,
-                          fontFamily: "sans-serif",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.07em",
-                        }}
-                      >
-                        Most Booked Bedroom Count
-                      </p>
-                      <p
-                        style={{
-                          margin: 0,
-                          fontSize: 13,
-                          fontWeight: 600,
-                          color: C.textPrimary,
-                          fontFamily: "sans-serif",
-                        }}
-                      >
-                        {s.top_bedroom_count} bedrooms
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Bedroom distribution bar */}
-                {distEntries.length > 0 && (
-                  <div>
                     <p
                       style={{
-                        margin: "0 0 6px",
+                        margin: 0,
                         fontSize: 10,
                         color: C.textMuted,
                         fontFamily: "sans-serif",
@@ -1179,74 +1104,156 @@ function SeasonCapacityCards({ data }) {
                         letterSpacing: "0.07em",
                       }}
                     >
-                      Bedroom Distribution
+                      {label}
                     </p>
-                    {distEntries.map(([bedrooms, count]) => {
-                      const maxCount = Math.max(
-                        ...distEntries.map((e) => Number(e[1])),
-                      );
-                      const pct = Math.round((Number(count) / maxCount) * 100);
-                      return (
-                        <div
-                          key={bedrooms}
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: 14,
+                        fontWeight: 700,
+                        color: C.textPrimary,
+                        fontFamily: "sans-serif",
+                      }}
+                    >
+                      {value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              {isOpen && (
+                <div
+                  style={{
+                    borderTop: `1px solid ${C.border}`,
+                    paddingTop: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}
+                >
+                  {s.top_villa && (
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: 8 }}
+                    >
+                      <Home size={14} color={C.accent} />
+                      <div>
+                        <p
                           style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            marginBottom: 5,
+                            margin: 0,
+                            fontSize: 10,
+                            color: C.textMuted,
                           }}
                         >
-                          <span
-                            style={{
-                              fontSize: 11,
-                              color: C.textMid,
-                              width: 70,
-                              fontFamily: "sans-serif",
-                            }}
-                          >
-                            {bedrooms} bed
-                          </span>
+                          Most Requested Villa
+                        </p>
+                        <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
+                          {s.top_villa}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {s.top_bedroom_count != null && (
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: 8 }}
+                    >
+                      <Bed size={14} color={C.teal} />
+                      <div>
+                        <p
+                          style={{
+                            margin: 0,
+                            fontSize: 10,
+                            color: C.textMuted,
+                          }}
+                        >
+                          Most Booked Bedroom Count
+                        </p>
+                        <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
+                          {s.top_bedroom_count} bedrooms
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {distEntries.length > 0 && (
+                    <div>
+                      <p
+                        style={{
+                          margin: "0 0 6px",
+                          fontSize: 10,
+                          color: C.textMuted,
+                        }}
+                      >
+                        Bedroom Distribution
+                      </p>
+
+                      {distEntries.map(([bedrooms, count]) => {
+                        const maxCount = Math.max(
+                          ...distEntries.map((e) => Number(e[1])),
+                        );
+                        const pct = Math.round(
+                          (Number(count) / maxCount) * 100,
+                        );
+
+                        return (
                           <div
+                            key={bedrooms}
                             style={{
-                              flex: 1,
-                              height: 8,
-                              background: C.border,
-                              borderRadius: 4,
-                              overflow: "hidden",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              marginBottom: 5,
                             }}
                           >
+                            <span
+                              style={{
+                                fontSize: 11,
+                                color: C.textMid,
+                                width: 70,
+                              }}
+                            >
+                              {bedrooms} bed
+                            </span>
                             <div
                               style={{
-                                width: `${pct}%`,
-                                height: "100%",
-                                background: C.teal,
+                                flex: 1,
+                                height: 8,
+                                background: C.border,
                                 borderRadius: 4,
-                                transition: "width 0.4s",
+                                overflow: "hidden",
                               }}
-                            />
+                            >
+                              <div
+                                style={{
+                                  width: `${pct}%`,
+                                  height: "100%",
+                                  background: C.teal,
+                                  borderRadius: 4,
+                                }}
+                              />
+                            </div>
+                            <span
+                              style={{
+                                fontSize: 11,
+                                color: C.textMuted,
+                                width: 28,
+                                textAlign: "right",
+                              }}
+                            >
+                              {count}
+                            </span>
                           </div>
-                          <span
-                            style={{
-                              fontSize: 11,
-                              color: C.textMuted,
-                              width: 28,
-                              textAlign: "right",
-                              fontFamily: "sans-serif",
-                            }}
-                          >
-                            {count}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -1508,7 +1515,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
           }}
         >
           <p style={{ ...sectionTitle, marginBottom: 0 }}>
-            Spend Heatmap — Amenity × Season
+            Spend Heatmap — Amenity × Season ($USD)
           </p>
           <span
             style={{

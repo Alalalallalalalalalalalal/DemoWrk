@@ -182,7 +182,10 @@ function MemberSidePanel({ member, tab, onClose }) {
             { label: "Email", value: member.email || "—" },
             { label: "Amenity", value: member.top_amenity },
             { label: "Total Spend", value: fmt$(member.total_amenity_spend) },
-            { label: "Visits", value: member.top_amenity_spend ?? "—" },
+            {
+              label: "Amenity Spend",
+              value: fmt$(member.top_amenity_spend) ?? "—",
+            },
             { label: "Check-in", value: fmtDate(member.check_in_date) },
             { label: "Check-out", value: fmtDate(member.check_out_date) },
             { label: "Season", value: member.season || "—" },
@@ -316,8 +319,8 @@ function MemberSidePanel({ member, tab, onClose }) {
                   color={pal.accent}
                 />
                 <KpiChip
-                  label="Visits"
-                  value={member.top_amenity_spend ?? "—"}
+                  label="Amenity Spend"
+                  value={fmt$(member.top_amenity_spend)}
                   color={C.muted}
                 />
               </>
@@ -508,7 +511,7 @@ function MemberRow({ member, tab, idx, onClick }) {
       ? member.season || "—"
       : tab === "visitors"
         ? fmtDate(member.last_visit)
-        : (member.top_amenity_spend ?? "—");
+        : fmt$(member.top_amenity_spend);
 
   const detail =
     tab === "spenders"
@@ -549,7 +552,15 @@ function MemberRow({ member, tab, idx, onClick }) {
       <td style={{ ...td, fontWeight: 700, color: C.text }}>{kpi}</td>
 
       {/* secondary */}
-      <td style={{ ...td, color: C.sub }}>{secondary}</td>
+      <td
+        style={{
+          ...td,
+          color: C.sub,
+          fontWeight: tab === "amenities" ? 700 : 400,
+        }}
+      >
+        {secondary}
+      </td>
 
       {/* detail */}
       <td
@@ -741,10 +752,17 @@ export default function SegmentationPanel() {
 
   const tableHeaders =
     activeTab === "spenders"
-      ? ["Member", "Tier", "Total Spend", "Season", "Categories", ""]
+      ? ["Member", "Tier", "Total Spend ($USD)", "Season", "Categories", ""]
       : activeTab === "visitors"
         ? ["Member", "Visitor Type", "Visits", "Last Visit", "Check-in", ""]
-        : ["Member", "Amenity", "Spend", "Visit Count", "Amenity Type", ""];
+        : [
+            "Member",
+            "Amenity",
+            "Total Spend ($USD)",
+            "Amenity Spend ($USD)",
+            "Amenity Type",
+            "",
+          ];
 
   if (loading)
     return (

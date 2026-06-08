@@ -376,9 +376,10 @@ def build_season_villa_bedroom_summary(
         lambda d: _season_for_date(d.month, d.day, seasons) if pd.notna(d) else None
     )
     df = df[df["season"].notna()]
+    df["year"] = df["check_in_date"].dt.year
 
     agg = (
-        df.groupby("season")
+        df.groupby(["year", "season"])
         .agg(
             total_bookings=("member_number",  "count"),
             total_nights=("nights",           "sum"),
@@ -392,19 +393,19 @@ def build_season_villa_bedroom_summary(
     villa_df = df[df["villa_name"].notna()]
     if not villa_df.empty:
         villa_mode = (
-            villa_df.groupby("season")["villa_name"]
+            villa_df.groupby(["year", "season"])["villa_name"]
             .agg(lambda s: s.value_counts().index[0] if len(s) else None)
             .reset_index()
             .rename(columns={"villa_name": "top_villa"})
         )
     else:
-        villa_mode = pd.DataFrame(columns=["season", "top_villa"])
+        villa_mode = pd.DataFrame(columns=["year", "season", "top_villa"])
 
     # Most popular bedroom count per season
     bed_df = df[df["bedroom_count"].notna()]
     if not bed_df.empty:
         bed_mode = (
-            bed_df.groupby("season")["bedroom_count"]
+            bed_df.groupby(["year", "season"])["bedroom_count"]
             .agg(lambda s: int(s.value_counts().index[0]) if len(s) else None)
             .reset_index()
             .rename(columns={"bedroom_count": "top_bedroom_count"})
@@ -412,12 +413,12 @@ def build_season_villa_bedroom_summary(
 
         # Bedroom count distribution per season — serialised as string for DB
         bed_counts = (
-            bed_df.groupby(["season", "bedroom_count"])
+            bed_df.groupby(["year", "season", "bedroom_count"])
             .size()
             .reset_index(name="count")
         )
         bed_dist_map = (
-            bed_counts.groupby("season")
+            bed_counts.groupby(["year", "season"])
             .apply(
                 lambda g: str(dict(zip(g["bedroom_count"].astype(int).astype(str), g["count"]))),
                 include_groups=False,
@@ -426,14 +427,14 @@ def build_season_villa_bedroom_summary(
         bed_dist = bed_dist_map.reset_index().rename(columns={0: "bedroom_distribution"})
     else:
         log.warning("No bedroom_count data found in folios — bedroom columns will be null")
-        bed_mode = pd.DataFrame(columns=["season", "top_bedroom_count"])
-        bed_dist = pd.DataFrame(columns=["season", "bedroom_distribution"])
+        bed_mode = pd.DataFrame(columns=["year", "season", "top_bedroom_count"])
+        bed_dist = pd.DataFrame(columns=["year", "season", "bedroom_distribution"])
 
     summary = (
         agg
-        .merge(villa_mode, on="season", how="left")
-        .merge(bed_mode,   on="season", how="left")
-        .merge(bed_dist,   on="season", how="left")
+        .merge(villa_mode, on=["year", "season"], how="left")
+        .merge(bed_mode,   on=["year", "season"], how="left")
+        .merge(bed_dist,   on=["year", "season"], how="left")
     )
     summary["avg_nights"] = summary["avg_nights"].round(2)
 
