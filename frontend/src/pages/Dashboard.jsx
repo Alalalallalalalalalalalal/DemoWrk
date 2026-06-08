@@ -1,5 +1,8 @@
 // frontend/src/pages/dashboard.jsx
 
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import { Component, useEffect, useState } from "react";
 import {
   BarChart,
@@ -26,6 +29,7 @@ import {
   LayoutDashboard,
   Users,
   BookOpen,
+  Download,
 } from "lucide-react";
 
 import { analyticsApi } from "../api/analytics";
@@ -99,6 +103,7 @@ export default function Dashboard() {
   const [page, setPage] = useState(1);
   const [columnPickerOpen, setColumnPickerOpen] = useState(false);
   const [columnVisibilityOpen, setColumnVisibilityOpen] = useState(false);
+  const [exportMenu, setExportMenu] = useState(false);
 
   useEffect(() => {
     analyticsApi
@@ -256,6 +261,101 @@ export default function Dashboard() {
           (page - 1) * Number(rowLimit),
           page * Number(rowLimit),
         );
+
+  const getExportRows = () => {
+    return sortedRows.map((row) => {
+      const cleanRow = {};
+
+      visibleColumns.forEach((column) => {
+        cleanRow[column] = row[column] ?? "";
+      });
+
+      return cleanRow;
+    });
+  };
+
+  const getExportFileName = (extension) => {
+    const tableName = selectedTable || "report";
+    const date = new Date().toISOString().split("T")[0];
+
+    return `${tableName}_${date}.${extension}`;
+  };
+
+  const exportToCSV = () => {
+    const rows = getExportRows();
+
+    if (rows.length === 0) return;
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const csv = XLSX.utils.sheet_to_csv(worksheet);
+
+    const blob = new Blob([csv], {
+      type: "text/csv;charset=utf-8;",
+    });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    link.href = url;
+    link.download = getExportFileName("csv");
+    link.click();
+
+    URL.revokeObjectURL(url);
+  };
+
+  const exportToExcel = () => {
+    const rows = getExportRows();
+
+    if (rows.length === 0) return;
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, selectedTable || "Report");
+
+    XLSX.writeFile(workbook, getExportFileName("xlsx"));
+  };
+
+  const exportToPDF = () => {
+    const rows = getExportRows();
+
+    if (rows.length === 0) return;
+
+    const doc = new jsPDF({
+      orientation: "landscape",
+      unit: "pt",
+      format: "a4",
+    });
+
+    doc.setFontSize(14);
+    doc.text(`${selectedTable || "Report"} Export`, 40, 35);
+
+    autoTable(doc, {
+      head: [visibleColumns],
+      body: rows.map((row) => visibleColumns.map((column) => String(row[column] ?? ""))),
+      startY: 50,
+      styles: {
+        fontSize: 7,
+        cellPadding: 4,
+        overflow: "linebreak",
+      },
+      headStyles: {
+        fillColor: [200, 151, 110],
+      },
+    });
+
+    doc.save(getExportFileName("pdf"));
+  };
+
+  const exportMenuItemStyle = {
+    width: "100%",
+    padding: "9px 12px",
+    background: "#fff",
+    textAlign: "left",
+    cursor: "pointer",
+    fontSize: 12,
+    color: "#3D2B1F",
+  };
 
   return (
     <div style={S.shell}>
@@ -1172,6 +1272,79 @@ export default function Dashboard() {
                       </div>
                     )}
                   </div>
+
+                  {selectedTable && sortedRows.length > 0 && (
+                    <div style={{ position: "relative" }}>
+                      <button
+                        type="button"
+                        onClick={() => setExportMenu((open) => !open)}
+                        style={{
+                          width: 38,
+                          height: 38,
+                          borderRadius: 8,
+                          border: "1px solid #ddd",
+                          background: "#fff",
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                        title="Download report"
+                      >
+                        <Download size={17} />
+                      </button>
+
+                      {exportMenu && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: 45,
+                            left: 0,
+                            background: "#fff",
+                            border: "1px solid #EDE5D8",
+                            borderRadius: 8,
+                            boxShadow: "0 6px 20px rgba(0,0,0,0.08)",
+                            zIndex: 1000,
+                            minWidth: 160,
+                            padding: "6px 0",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              exportToCSV();
+                              setExportMenu(false);
+                            }}
+                            style={exportMenuItemStyle}
+                          >
+                            CSV
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              exportToExcel();
+                              setExportMenu(false);
+                            }}
+                            style={exportMenuItemStyle}
+                          >
+                            Excel
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              exportToPDF();
+                              setExportMenu(false);
+                            }}
+                            style={exportMenuItemStyle}
+                          >
+                            PDF
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <input
                     value={tableSearch}
