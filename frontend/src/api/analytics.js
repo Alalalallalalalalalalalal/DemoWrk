@@ -52,6 +52,12 @@ export const analyticsApi = {
   updateSeason: (id, payload) =>
     fetchData(`/analytics/seasons/${id}`, jsonRequest("PATCH", payload)),
 
+  deleteSeason: (id) =>
+    fetchData(`/analytics/seasons/${id}`, jsonRequest("DELETE", {})),
+
+  deleteSeasonGroup: (id) =>
+    fetchData(`/analytics/season-groups/${id}`, jsonRequest("DELETE", {})),
+
   // Reports
   getTables: () => fetchData("/analytics/tables"),
 

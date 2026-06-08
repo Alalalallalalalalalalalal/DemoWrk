@@ -385,6 +385,56 @@ def create_season(payload: dict, db: Session = Depends(get_db)):
     db.commit()
     return dict(row)
 
+@router.delete("/seasons/{season_id}")
+def delete_season(season_id: int, db: Session = Depends(get_db)):
+    row = db.execute(
+        text("""
+            DELETE FROM seasons
+            WHERE id = :season_id
+            RETURNING id
+        """),
+        {"season_id": season_id},
+    ).mappings().first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Season not found")
+
+    db.commit()
+    return {"ok": True, "deleted_id": season_id}
+
+
+@router.delete("/season-groups/{group_id}")
+def delete_season_group(group_id: int, db: Session = Depends(get_db)):
+    group = db.execute(
+        text("""
+            SELECT id, group_type
+            FROM season_groups
+            WHERE id = :group_id
+        """),
+        {"group_id": group_id},
+    ).mappings().first()
+
+    if not group:
+        raise HTTPException(status_code=404, detail="Season group not found")
+
+    if group["group_type"] != "custom":
+        raise HTTPException(
+            status_code=400,
+            detail="Only custom season groups can be deleted"
+        )
+
+    db.execute(
+        text("DELETE FROM seasons WHERE group_id = :group_id"),
+        {"group_id": group_id},
+    )
+
+    db.execute(
+        text("DELETE FROM season_groups WHERE id = :group_id"),
+        {"group_id": group_id},
+    )
+
+    db.commit()
+    return {"ok": True, "deleted_id": group_id}
 
 @router.patch("/seasons/{season_id}")
 def update_season(season_id: int, payload: dict, db: Session = Depends(get_db)):

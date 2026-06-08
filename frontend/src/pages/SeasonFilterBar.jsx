@@ -239,6 +239,35 @@ export default function SeasonFilterBar({
     }
   }
 
+  async function deleteSeason(season) {
+    if (!window.confirm(`Delete ${season.season_name}?`)) return;
+
+    await analyticsApi.deleteSeason(season.id);
+
+    const nextGroup = {
+      ...activeGroup,
+      seasons: activeGroup.seasons.filter((s) => s.id !== season.id),
+    };
+
+    setGroups((prev) =>
+      prev.map((g, gi) => (gi === activeGroupIdx ? nextGroup : g)),
+    );
+
+    onSeasonGroupChange?.(nextGroup);
+  }
+
+  async function deleteGroup(group) {
+    if (group.group_type !== "custom") return;
+    if (!window.confirm(`Delete group ${group.group_name}?`)) return;
+
+    await analyticsApi.deleteSeasonGroup(group.id);
+
+    const nextGroups = groups.filter((g) => g.id !== group.id);
+    setGroups(nextGroups);
+    setActiveGroupIdx(0);
+    onSeasonGroupChange?.(nextGroups[0] ?? null);
+  }
+
   const S = {
     wrap: {
       background: "#FDFAF6",
@@ -362,6 +391,7 @@ export default function SeasonFilterBar({
       cursor: "pointer",
       fontFamily: "sans-serif",
     },
+
     infoWrap: { position: "relative", display: "inline-flex" },
     infoBtn: {
       width: 18,
@@ -441,21 +471,40 @@ export default function SeasonFilterBar({
                 setShowAddSeason(false);
               }}
             >
-              {g.group_name}
               {g.group_type === "custom" && (
-                <span
-                  style={{
-                    marginLeft: 5,
-                    fontSize: 9,
-                    padding: "1px 5px",
-                    borderRadius: 8,
-                    background: "#C8976E22",
-                    color: "#C8976E",
-                    border: "1px solid #C8976E44",
-                  }}
-                >
-                  custom
-                </span>
+                <>
+                  <span
+                    style={{
+                      marginLeft: 5,
+                      fontSize: 9,
+                      padding: "1px 5px",
+                      borderRadius: 8,
+                      background: "#C8976E22",
+                      color: "#C8976E",
+                      border: "1px solid #C8976E44",
+                    }}
+                  >
+                    custom
+                  </span>
+
+                  <button
+                    type="button"
+                    style={{
+                      marginLeft: 6,
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                      color: "#C45B5B",
+                    }}
+                    title="Delete group"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteGroup(g);
+                    }}
+                  >
+                    🗑
+                  </button>
+                </>
               )}
             </div>
           ))}
@@ -507,6 +556,13 @@ export default function SeasonFilterBar({
                     }}
                   >
                     ✎
+                  </button>
+                  <button
+                    style={S.chipBtn}
+                    title="Delete"
+                    onClick={() => deleteSeason(s)}
+                  >
+                    🗑
                   </button>
                 </span>
               </div>
