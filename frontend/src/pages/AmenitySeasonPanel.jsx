@@ -151,6 +151,29 @@ const TOOLTIP_STYLE = {
   fontFamily: "sans-serif",
 };
 
+function getRowYear(row) {
+  const directYear =
+    row?.year ?? row?.Year ?? row?.booking_year ?? row?.check_in_year;
+
+  if (directYear) return Number(directYear);
+
+  const rawDate =
+    row?.check_in_date ??
+    row?.transaction_date ??
+    row?.ref_date ??
+    row?.check_in_fmt;
+
+  if (!rawDate) return null;
+
+  const match = String(rawDate).match(/(\d{4})/);
+  return match ? Number(match[1]) : null;
+}
+
+function rowMatchesYear(row, year) {
+  if (year === "All") return true;
+  return String(getRowYear(row)) === String(year);
+}
+
 /* ── SearchInput ────────────────────────────────────────────────── */
 function SearchInput({ value, onChange, placeholder }) {
   return (
@@ -954,28 +977,10 @@ function MemberSeasonVisitsTable({
 /* ── SeasonCapacityCards ─────────────────────────────────────────── */
 function SeasonCapacityCards({ data }) {
   const [expanded, setExpanded] = useState(null);
-  const [year, setYear] = useState("All");
 
-  const getYear = (d) =>
-    d.year ??
-    d.Year ??
-    d.booking_year ??
-    d.check_in_year ??
-    (d.check_in_date ? new Date(d.check_in_date).getFullYear() : null);
-
-  const years = useMemo(
-    () =>
-      [
-        "All",
-        ...new Set((data ?? []).map((d) => getYear(d)).filter(Boolean)),
-      ].sort((a, b) => String(b).localeCompare(String(a))),
-    [data],
-  );
-
-  const filteredData = useMemo(() => {
-    if (year === "All") return data ?? [];
-    return (data ?? []).filter((d) => String(getYear(d)) === String(year));
-  }, [data, year]);
+  useEffect(() => {
+    setExpanded(null);
+  }, [data]);
 
   if (!data?.length)
     return (
@@ -994,266 +999,240 @@ function SeasonCapacityCards({ data }) {
   };
 
   return (
-    <>
-      <select
-        style={{ ...select, marginBottom: 14 }}
-        value={year}
-        onChange={(e) => {
-          setYear(e.target.value);
-          setExpanded(null);
-        }}
-      >
-        {years.map((y) => (
-          <option key={y} value={y}>
-            {y === "All" ? "All Years" : y}
-          </option>
-        ))}
-      </select>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))",
+        gap: 14,
+      }}
+    >
+      {data.map((s, i) => {
+        const dist = parseDist(s.bedroom_distribution);
+        const isOpen = expanded === i;
+        const distEntries = Object.entries(dist).sort(
+          (a, b) => Number(b[1]) - Number(a[1]),
+        );
+        const year = getRowYear(s);
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))",
-          gap: 14,
-        }}
-      >
-        {filteredData.map((s, i) => {
-          const dist = parseDist(s.bedroom_distribution);
-          const isOpen = expanded === i;
-          const distEntries = Object.entries(dist).sort(
-            (a, b) => Number(b[1]) - Number(a[1]),
-          );
-
-          return (
+        return (
+          <div
+            key={`${year ?? "all"}-${s.season}-${i}`}
+            style={{
+              ...card,
+              borderTop: `3px solid ${CHART_COLORS[i % CHART_COLORS.length]}`,
+              cursor: "pointer",
+            }}
+            onClick={() => setExpanded(isOpen ? null : i)}
+          >
             <div
-              key={`${s.year ?? "all"}-${s.season}-${i}`}
               style={{
-                ...card,
-                borderTop: `3px solid ${CHART_COLORS[i % CHART_COLORS.length]}`,
-                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 10,
               }}
-              onClick={() => setExpanded(isOpen ? null : i)}
             >
-              <div
+              <p
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  marginBottom: 10,
+                  margin: 0,
+                  fontSize: 13,
+                  fontWeight: 700,
+                  color: C.textPrimary,
+                  fontFamily: "sans-serif",
                 }}
               >
-                <p
-                  style={{
-                    margin: 0,
-                    fontSize: 13,
-                    fontWeight: 700,
-                    color: C.textPrimary,
-                    fontFamily: "sans-serif",
-                  }}
-                >
-                  {s.season} {getYear(s) ? `· ${getYear(s)}` : ""}
-                </p>
-                {isOpen ? (
-                  <ChevronUp size={14} color={C.textMuted} />
-                ) : (
-                  <ChevronDown size={14} color={C.textMuted} />
-                )}
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 8,
-                  marginBottom: isOpen ? 14 : 0,
-                }}
-              >
-                {[
-                  {
-                    label: "Bookings",
-                    value: s.total_bookings?.toLocaleString() ?? "—",
-                  },
-                  {
-                    label: "Nights",
-                    value: s.total_nights?.toLocaleString() ?? "—",
-                  },
-                  {
-                    label: "Avg Stay",
-                    value: s.avg_nights != null ? `${s.avg_nights}n` : "—",
-                  },
-                  {
-                    label: "Members",
-                    value: s.unique_members?.toLocaleString() ?? "—",
-                  },
-                ].map(({ label, value }) => (
-                  <div
-                    key={label}
-                    style={{
-                      background: C.headerBg,
-                      borderRadius: 8,
-                      padding: "6px 10px",
-                    }}
-                  >
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: 10,
-                        color: C.textMuted,
-                        fontFamily: "sans-serif",
-                        textTransform: "uppercase",
-                        letterSpacing: "0.07em",
-                      }}
-                    >
-                      {label}
-                    </p>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: 14,
-                        fontWeight: 700,
-                        color: C.textPrimary,
-                        fontFamily: "sans-serif",
-                      }}
-                    >
-                      {value}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              {isOpen && (
-                <div
-                  style={{
-                    borderTop: `1px solid ${C.border}`,
-                    paddingTop: 12,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 10,
-                  }}
-                >
-                  {s.top_villa && (
-                    <div
-                      style={{ display: "flex", alignItems: "center", gap: 8 }}
-                    >
-                      <Home size={14} color={C.accent} />
-                      <div>
-                        <p
-                          style={{
-                            margin: 0,
-                            fontSize: 10,
-                            color: C.textMuted,
-                          }}
-                        >
-                          Most Requested Villa
-                        </p>
-                        <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
-                          {s.top_villa}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {s.top_bedroom_count != null && (
-                    <div
-                      style={{ display: "flex", alignItems: "center", gap: 8 }}
-                    >
-                      <Bed size={14} color={C.teal} />
-                      <div>
-                        <p
-                          style={{
-                            margin: 0,
-                            fontSize: 10,
-                            color: C.textMuted,
-                          }}
-                        >
-                          Most Booked Bedroom Count
-                        </p>
-                        <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
-                          {s.top_bedroom_count} bedrooms
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {distEntries.length > 0 && (
-                    <div>
-                      <p
-                        style={{
-                          margin: "0 0 6px",
-                          fontSize: 10,
-                          color: C.textMuted,
-                        }}
-                      >
-                        Bedroom Distribution
-                      </p>
-
-                      {distEntries.map(([bedrooms, count]) => {
-                        const maxCount = Math.max(
-                          ...distEntries.map((e) => Number(e[1])),
-                        );
-                        const pct = Math.round(
-                          (Number(count) / maxCount) * 100,
-                        );
-
-                        return (
-                          <div
-                            key={bedrooms}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                              marginBottom: 5,
-                            }}
-                          >
-                            <span
-                              style={{
-                                fontSize: 11,
-                                color: C.textMid,
-                                width: 70,
-                              }}
-                            >
-                              {bedrooms} bed
-                            </span>
-                            <div
-                              style={{
-                                flex: 1,
-                                height: 8,
-                                background: C.border,
-                                borderRadius: 4,
-                                overflow: "hidden",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: `${pct}%`,
-                                  height: "100%",
-                                  background: C.teal,
-                                  borderRadius: 4,
-                                }}
-                              />
-                            </div>
-                            <span
-                              style={{
-                                fontSize: 11,
-                                color: C.textMuted,
-                                width: 28,
-                                textAlign: "right",
-                              }}
-                            >
-                              {count}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                {s.season} {year ? `· ${year}` : ""}
+              </p>
+              {isOpen ? (
+                <ChevronUp size={14} color={C.textMuted} />
+              ) : (
+                <ChevronDown size={14} color={C.textMuted} />
               )}
             </div>
-          );
-        })}
-      </div>
-    </>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 8,
+                marginBottom: isOpen ? 14 : 0,
+              }}
+            >
+              {[
+                {
+                  label: "Bookings",
+                  value: s.total_bookings?.toLocaleString() ?? "—",
+                },
+                {
+                  label: "Nights",
+                  value: s.total_nights?.toLocaleString() ?? "—",
+                },
+                {
+                  label: "Avg Stay",
+                  value: s.avg_nights != null ? `${s.avg_nights}n` : "—",
+                },
+                {
+                  label: "Members",
+                  value: s.unique_members?.toLocaleString() ?? "—",
+                },
+              ].map(({ label, value }) => (
+                <div
+                  key={label}
+                  style={{
+                    background: C.headerBg,
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                  }}
+                >
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 10,
+                      color: C.textMuted,
+                      fontFamily: "sans-serif",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.07em",
+                    }}
+                  >
+                    {label}
+                  </p>
+                  <p
+                    style={{
+                      margin: 0,
+                      fontSize: 14,
+                      fontWeight: 700,
+                      color: C.textPrimary,
+                      fontFamily: "sans-serif",
+                    }}
+                  >
+                    {value}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            {isOpen && (
+              <div
+                style={{
+                  borderTop: `1px solid ${C.border}`,
+                  paddingTop: 12,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 10,
+                }}
+              >
+                {s.top_villa && (
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  >
+                    <Home size={14} color={C.accent} />
+                    <div>
+                      <p
+                        style={{ margin: 0, fontSize: 10, color: C.textMuted }}
+                      >
+                        Most Requested Villa
+                      </p>
+                      <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
+                        {s.top_villa}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {s.top_bedroom_count != null && (
+                  <div
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  >
+                    <Bed size={14} color={C.teal} />
+                    <div>
+                      <p
+                        style={{ margin: 0, fontSize: 10, color: C.textMuted }}
+                      >
+                        Most Booked Bedroom Count
+                      </p>
+                      <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
+                        {s.top_bedroom_count} bedrooms
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {distEntries.length > 0 && (
+                  <div>
+                    <p
+                      style={{
+                        margin: "0 0 6px",
+                        fontSize: 10,
+                        color: C.textMuted,
+                      }}
+                    >
+                      Bedroom Distribution
+                    </p>
+
+                    {distEntries.map(([bedrooms, count]) => {
+                      const maxCount = Math.max(
+                        ...distEntries.map((e) => Number(e[1])),
+                      );
+                      const pct = Math.round((Number(count) / maxCount) * 100);
+
+                      return (
+                        <div
+                          key={bedrooms}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                            marginBottom: 5,
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: 11,
+                              color: C.textMid,
+                              width: 70,
+                            }}
+                          >
+                            {bedrooms} bed
+                          </span>
+                          <div
+                            style={{
+                              flex: 1,
+                              height: 8,
+                              background: C.border,
+                              borderRadius: 4,
+                              overflow: "hidden",
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: `${pct}%`,
+                                height: "100%",
+                                background: C.teal,
+                                borderRadius: 4,
+                              }}
+                            />
+                          </div>
+                          <span
+                            style={{
+                              fontSize: 11,
+                              color: C.textMuted,
+                              width: 28,
+                              textAlign: "right",
+                            }}
+                          >
+                            {count}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -1325,6 +1304,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
 
   const [drillAmenity, setDrillAmenity] = useState("");
   const [drillSeason, setDrillSeason] = useState("");
+  const [selectedYear, setSelectedYear] = useState("All");
   const visitsRef = useRef(null);
 
   useEffect(() => {
@@ -1363,27 +1343,89 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
     seasonVillaBedroom = [],
   } = data ?? {};
 
+  const yearOptions = useMemo(() => {
+    const years = new Set();
+
+    [
+      ...amenitySeasonSpend,
+      ...memberAmenityProfile,
+      ...memberAmenitySeasonVisits,
+      ...seasonVillaBedroom,
+    ].forEach((row) => {
+      const year = getRowYear(row);
+      if (year) years.add(year);
+    });
+
+    return [
+      "All",
+      ...Array.from(years)
+        .sort((a, b) => b - a)
+        .map(String),
+    ];
+  }, [
+    amenitySeasonSpend,
+    memberAmenityProfile,
+    memberAmenitySeasonVisits,
+    seasonVillaBedroom,
+  ]);
+
+  useEffect(() => {
+    if (!yearOptions.includes(selectedYear)) {
+      setSelectedYear("All");
+    }
+  }, [selectedYear, yearOptions]);
+
+  useEffect(() => {
+    setDrillAmenity("");
+    setDrillSeason("");
+  }, [selectedYear]);
+
+  const filteredAmenitySeasonSpend = useMemo(
+    () => amenitySeasonSpend.filter((row) => rowMatchesYear(row, selectedYear)),
+    [amenitySeasonSpend, selectedYear],
+  );
+
+  const filteredMemberAmenityProfile = useMemo(
+    () =>
+      memberAmenityProfile.filter((row) => rowMatchesYear(row, selectedYear)),
+    [memberAmenityProfile, selectedYear],
+  );
+
+  const filteredMemberAmenitySeasonVisits = useMemo(
+    () =>
+      memberAmenitySeasonVisits.filter((row) =>
+        rowMatchesYear(row, selectedYear),
+      ),
+    [memberAmenitySeasonVisits, selectedYear],
+  );
+
+  const filteredSeasonVillaBedroom = useMemo(
+    () => seasonVillaBedroom.filter((row) => rowMatchesYear(row, selectedYear)),
+    [seasonVillaBedroom, selectedYear],
+  );
+
   // Summary stats
   const totalAmenitySpend = useMemo(
-    () => amenitySeasonSpend.reduce((s, d) => s + d.total_spend, 0),
-    [amenitySeasonSpend],
+    () => filteredAmenitySeasonSpend.reduce((s, d) => s + d.total_spend, 0),
+    [filteredAmenitySeasonSpend],
   );
   const totalTxns = useMemo(
-    () => amenitySeasonSpend.reduce((s, d) => s + d.transaction_count, 0),
-    [amenitySeasonSpend],
+    () =>
+      filteredAmenitySeasonSpend.reduce((s, d) => s + d.transaction_count, 0),
+    [filteredAmenitySeasonSpend],
   );
   const uniqueMembers = useMemo(
-    () => new Set(memberAmenityProfile.map((m) => m.member_id)).size,
-    [memberAmenityProfile],
+    () => new Set(filteredMemberAmenityProfile.map((m) => m.member_id)).size,
+    [filteredMemberAmenityProfile],
   );
   const topAmenity = useMemo(() => {
-    if (!amenitySeasonSpend.length) return "—";
+    if (!filteredAmenitySeasonSpend.length) return "—";
     const agg = {};
-    amenitySeasonSpend.forEach((d) => {
+    filteredAmenitySeasonSpend.forEach((d) => {
       agg[d.amenity] = (agg[d.amenity] ?? 0) + d.total_spend;
     });
     return Object.entries(agg).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
-  }, [amenitySeasonSpend]);
+  }, [filteredAmenitySeasonSpend]);
 
   const handleCellClick = (amenity, season) => {
     setDrillAmenity(amenity);
@@ -1441,6 +1483,45 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div
+        style={{
+          ...card,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+          padding: "12px 16px",
+        }}
+      >
+        <div>
+          <p style={{ ...sectionTitle, marginBottom: 2 }}>
+            Amenity year filter
+          </p>
+          <p
+            style={{
+              margin: 0,
+              fontSize: 12,
+              color: C.textMuted,
+              fontFamily: "sans-serif",
+            }}
+          >
+            Applies to cards, revenue ranking, heatmap, and visit details.
+          </p>
+        </div>
+        <select
+          style={{ ...select, minWidth: 130 }}
+          value={selectedYear}
+          onChange={(e) => setSelectedYear(e.target.value)}
+        >
+          {yearOptions.map((year) => (
+            <option key={year} value={year}>
+              {year === "All" ? "All Years" : year}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {/* ── Summary stat row ── */}
       <div
         style={{
@@ -1499,7 +1580,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
           </span>
         </div>
         <AmenitySpendBarChart
-          spendData={amenitySeasonSpend}
+          spendData={filteredAmenitySeasonSpend}
           onBarClick={handleBarClick}
         />
       </div>
@@ -1528,7 +1609,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
           </span>
         </div>
         <AmenitySeasonHeatmap
-          data={amenitySeasonSpend}
+          data={filteredAmenitySeasonSpend}
           onCellClick={handleCellClick}
         />
       </div>
@@ -1536,7 +1617,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
       <SectionDivider>Member Profiles</SectionDivider>
 
       {/* ── Member amenity profile table ── */}
-      <MemberAmenityProfileTable data={memberAmenityProfile} />
+      <MemberAmenityProfileTable data={filteredMemberAmenityProfile} />
 
       <SectionDivider>Visit Details</SectionDivider>
 
@@ -1592,7 +1673,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
           </div>
         )}
         <MemberSeasonVisitsTable
-          data={memberAmenitySeasonVisits}
+          data={filteredMemberAmenitySeasonVisits}
           initialSeason={drillSeason}
           initialAmenity={drillAmenity}
         />
@@ -1618,7 +1699,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
             useful for pre-season room allocation.
           </p>
         </div>
-        <SeasonCapacityCards data={seasonVillaBedroom} />
+        <SeasonCapacityCards data={filteredSeasonVillaBedroom} />
       </div>
     </div>
   );

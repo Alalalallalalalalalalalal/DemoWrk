@@ -370,21 +370,6 @@ def create_season_group(payload: dict, db: Session = Depends(get_db)):
     return {**dict(row), "seasons": []}
 
 
-@router.post("/seasons")
-def create_season(payload: dict, db: Session = Depends(get_db)):
-    row = db.execute(
-        text("""
-            INSERT INTO seasons
-                (group_id, season_name, start_month, start_day, end_month, end_day, is_active)
-            VALUES
-                (:group_id, :season_name, :start_month, :start_day, :end_month, :end_day, true)
-            RETURNING id, group_id, season_name, start_month, start_day, end_month, end_day, is_active
-        """),
-        payload,
-    ).mappings().first()
-    db.commit()
-    return dict(row)
-
 @router.delete("/seasons/{season_id}")
 def delete_season(season_id: int, db: Session = Depends(get_db)):
     row = db.execute(
@@ -436,6 +421,23 @@ def delete_season_group(group_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"ok": True, "deleted_id": group_id}
 
+
+@router.post("/seasons")
+def create_season(payload: dict, db: Session = Depends(get_db)):
+    row = db.execute(
+        text("""
+            INSERT INTO seasons
+                (group_id, season_name, start_month, start_day, end_month, end_day, is_active)
+            VALUES
+                (:group_id, :season_name, :start_month, :start_day, :end_month, :end_day, true)
+            RETURNING id, group_id, season_name, start_month, start_day, end_month, end_day, is_active
+        """),
+        payload,
+    ).mappings().first()
+    db.commit()
+    return dict(row)
+
+
 @router.patch("/seasons/{season_id}")
 def update_season(season_id: int, payload: dict, db: Session = Depends(get_db)):
     allowed = {
@@ -469,6 +471,7 @@ def update_season(season_id: int, payload: dict, db: Session = Depends(get_db)):
 
     db.commit()
     return dict(row)
+
 @router.get("/seasons/{season_id}/members")
 def season_members(season_id: int, db: Session = Depends(get_db)):
     season = db.execute(
@@ -571,29 +574,28 @@ def season_members(season_id: int, db: Session = Depends(get_db)):
 @router.get("/tables")
 def get_tables(db: Session = Depends(get_db)):
     allowed_tables = [
-        "amenity_season_spend",
+        "airport_transfer_users",
+        "amenity_adoption",
+        "amenity_revenue",
+        "amenity_spend",
         "dependent_addresses",
         "dependent_phones",
         "dependents",
         "folios",
         "interests",
+        "marketing_targets",
         "member_addresses",
-        "member_amenity_profile",
-        "member_amenity_season_visits",
+        "member_amenity_segments",
+        "member_amenity_usage",
         "member_phones",
         "member_seasons",
+        "member_segments",
         "members",
         "recent_activity",
         "reservation_guests",
         "rooms",
-        "season_groups",
-        "season_villa_bedroom_summary",
-        "seasonal_visitors",
         "seasonal_visits",
         "seasons",
-        "segment_amenities",
-        "segment_spenders",
-        "segment_visitors",
         "services",
         "statements",
     ]
@@ -603,31 +605,30 @@ def get_tables(db: Session = Depends(get_db)):
 def get_table_data(table_name: str, limit: int = 100,
                     offset: int = 0, db: Session = Depends(get_db)):
     allowed_tables = {
-        "amenity_season_spend",
+        "airport_transfer_users",
+        "amenity_adoption",
+        "amenity_revenue",
+        "amenity_spend",
         "dependent_addresses",
         "dependent_phones",
         "dependents",
         "folios",
         "interests",
+        "marketing_targets",
         "member_addresses",
-        "member_amenity_profile",
-        "member_amenity_season_visits",
+        "member_amenity_segments",
+        "member_amenity_usage",
         "member_phones",
         "member_seasons",
+        "member_segments",
         "members",
         "recent_activity",
         "reservation_guests",
         "rooms",
-        "season_groups",
-        "season_villa_bedroom_summary",
-        "seasonal_visitors",
         "seasonal_visits",
         "seasons",
-        "segment_amenities",
-        "segment_spenders",
-        "segment_visitors",
         "services",
-        "statements",
+        "statements"
     }
 
     if table_name not in allowed_tables:
@@ -653,31 +654,30 @@ def search_table(
     db: Session = Depends(get_db)
 ):
     allowed_tables = {
-        "amenity_season_spend",
+        "airport_transfer_users",
+        "amenity_adoption",
+        "amenity_revenue",
+        "amenity_spend",
         "dependent_addresses",
         "dependent_phones",
         "dependents",
         "folios",
         "interests",
+        "marketing_targets",
         "member_addresses",
-        "member_amenity_profile",
-        "member_amenity_season_visits",
+        "member_amenity_segments",
+        "member_amenity_usage",
         "member_phones",
         "member_seasons",
+        "member_segments",
         "members",
         "recent_activity",
         "reservation_guests",
         "rooms",
-        "season_groups",
-        "season_villa_bedroom_summary",
-        "seasonal_visitors",
         "seasonal_visits",
         "seasons",
-        "segment_amenities",
-        "segment_spenders",
-        "segment_visitors",
         "services",
-        "statements",
+        "statements"
     }
 
     if table_name not in allowed_tables:
@@ -752,6 +752,7 @@ SEASON_JOIN_SQL = """
     )
 """
 
+
 def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
     active_season_count = db.execute(
         text("""
@@ -815,6 +816,7 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                 ar.check_in_date,
                 ar.check_out_date,
                 ar.amenity,
+                EXTRACT(YEAR FROM ar.ref_date)::INT AS year,
                 s.season_name AS season
             FROM amenity_rows ar
             {SEASON_JOIN_SQL}
@@ -824,51 +826,55 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
 
     spend_raw = rows(f"""
         {base_ctes}
-        SELECT amenity,
+        SELECT year,
+               amenity,
                season,
                ROUND(SUM(amount)::NUMERIC, 2) AS total_spend,
                COUNT(*)::INT AS transaction_count,
                ROUND((SUM(amount) / NULLIF(COUNT(*), 0))::NUMERIC, 2) AS avg_spend_per_visit,
                COUNT(DISTINCT member_id)::INT AS member_count
         FROM season_amenity_rows
-        GROUP BY amenity, season
-        ORDER BY season, total_spend DESC
+        GROUP BY year, amenity, season
+        ORDER BY year DESC, season, total_spend DESC
     """)
 
     profile_raw = rows(f"""
         {base_ctes},
         per_member_amenity AS (
-            SELECT member_id,
+            SELECT year,
+                   member_id,
                    MAX(member_full_name) AS member_full_name,
                    amenity,
                    COUNT(*) AS usage_count,
                    SUM(amount) AS amenity_spend
             FROM season_amenity_rows
-            GROUP BY member_id, amenity
+            GROUP BY year, member_id, amenity
         ),
         ranked AS (
             SELECT *,
                    ROW_NUMBER() OVER (
-                       PARTITION BY member_id
+                       PARTITION BY year, member_id
                        ORDER BY amenity_spend DESC NULLS LAST
                    ) AS rn,
-                   SUM(amenity_spend) OVER (PARTITION BY member_id) AS total_amenity_spend
+                   SUM(amenity_spend) OVER (PARTITION BY year, member_id) AS total_amenity_spend
             FROM per_member_amenity
         )
-        SELECT member_id,
+        SELECT year,
+               member_id,
                member_full_name,
                amenity AS top_amenity,
                ROUND(amenity_spend::NUMERIC, 2) AS top_amenity_spend,
                ROUND(total_amenity_spend::NUMERIC, 2) AS total_amenity_spend
         FROM ranked
         WHERE rn = 1
-        ORDER BY total_amenity_spend DESC NULLS LAST
+        ORDER BY year DESC, total_amenity_spend DESC NULLS LAST
         LIMIT 1000
     """)
 
     visits_raw = rows(f"""
         {base_ctes}
-        SELECT member_id,
+        SELECT year,
+               member_id,
                member_full_name,
                season,
                amenity,
@@ -877,7 +883,7 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                TO_CHAR(check_in_date, 'Mon DD, YYYY') AS check_in_fmt,
                TO_CHAR(check_out_date, 'Mon DD, YYYY') AS check_out_fmt
         FROM season_amenity_rows
-        GROUP BY member_id, member_full_name, season, check_in_date, check_out_date, amenity
+        GROUP BY year, member_id, member_full_name, season, check_in_date, check_out_date, amenity
         ORDER BY check_in_date DESC NULLS LAST
         LIMIT 2000
     """)
@@ -893,6 +899,7 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
             SELECT
                 f.member_number,
                 f.check_in_date::DATE AS ref_date,
+                EXTRACT(YEAR FROM f.check_in_date)::INT AS year,
                 f.check_in_date,
                 f.check_out_date,
                 f.villa_name,
@@ -903,10 +910,7 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
               AND f.check_in_date IS NOT NULL
         ),
         season_stay_rows AS (
-            SELECT
-                sr.*,
-                s.season_name AS season,
-                EXTRACT(YEAR FROM sr.ref_date)::INT AS year
+            SELECT sr.*, s.season_name AS season
             FROM stay_rows sr
             {SEASON_JOIN_SQL}
         ),
@@ -966,17 +970,9 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                br.bedroom_count::INT AS top_bedroom_count,
                bd.bedroom_distribution
         FROM season_totals st
-        LEFT JOIN villa_rank vr
-          ON vr.year = st.year
-         AND vr.season = st.season
-         AND vr.rn = 1
-        LEFT JOIN bedroom_rank br
-          ON br.year = st.year
-         AND br.season = st.season
-         AND br.rn = 1
-        LEFT JOIN bedroom_dist bd
-          ON bd.year = st.year
-         AND bd.season = st.season
+        LEFT JOIN villa_rank vr ON vr.year = st.year AND vr.season = st.season AND vr.rn = 1
+        LEFT JOIN bedroom_rank br ON br.year = st.year AND br.season = st.season AND br.rn = 1
+        LEFT JOIN bedroom_dist bd ON bd.year = st.year AND bd.season = st.season
         ORDER BY st.year DESC, st.total_bookings DESC
     """)
 
@@ -986,6 +982,7 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
         "memberAmenitySeasonVisits": visits_raw,
         "seasonVillaBedroom": villa_raw,
     }
+
 
 @router.get("/ml/amenity-season-insights")
 def ml_amenity_season_insights(
@@ -1041,8 +1038,7 @@ def ml_amenity_season_insights(
                unique_members,
                top_villa,
                top_bedroom_count,
-               bedroom_distribution,
-                year
+               bedroom_distribution
         FROM season_villa_bedroom_summary
         ORDER BY total_bookings DESC
     """)
