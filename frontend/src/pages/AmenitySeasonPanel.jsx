@@ -282,6 +282,115 @@ function SectionDivider({ children }) {
   );
 }
 
+/* ── InsightGuide: visible, UX-friendly chart/table explanation ─── */
+function InsightGuide({
+  title,
+  description,
+  meta = [],
+  action,
+  compact = false,
+}) {
+  return (
+    <div
+      style={{
+        marginBottom: compact ? 12 : 16,
+        padding: compact ? "12px 14px" : "14px 16px",
+        borderRadius: 12,
+        background: "linear-gradient(135deg, #FDF6F0 0%, #FDFAF6 100%)",
+        border: `1px solid ${C.border}`,
+        borderLeft: `4px solid ${C.accent}`,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ flex: "1 1 420px", minWidth: 260 }}>
+          <p
+            style={{
+              margin: "0 0 5px",
+              fontSize: compact ? 13 : 14,
+              fontWeight: 800,
+              color: C.textPrimary,
+              fontFamily: "sans-serif",
+            }}
+          >
+            {title}
+          </p>
+          <p
+            style={{
+              margin: 0,
+              fontSize: 12,
+              lineHeight: 1.55,
+              color: C.textMuted,
+              fontFamily: "sans-serif",
+            }}
+          >
+            {description}
+          </p>
+        </div>
+
+        {action && (
+          <div
+            style={{
+              flex: "0 1 260px",
+              padding: "8px 10px",
+              borderRadius: 10,
+              background: C.bg,
+              border: `1px dashed ${C.borderHover}`,
+              color: C.accent,
+              fontSize: 11,
+              fontWeight: 700,
+              lineHeight: 1.4,
+              fontFamily: "sans-serif",
+            }}
+          >
+            {action}
+          </div>
+        )}
+      </div>
+
+      {meta.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            marginTop: 12,
+          }}
+        >
+          {meta.map((item) => (
+            <span
+              key={`${item.label}-${item.value}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "5px 9px",
+                borderRadius: 999,
+                background: C.bg,
+                border: `1px solid ${C.border}`,
+                color: C.textMid,
+                fontSize: 11,
+                fontFamily: "sans-serif",
+                whiteSpace: "nowrap",
+              }}
+            >
+              <strong style={{ color: C.textPrimary }}>{item.label}:</strong>
+              {item.value}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── AmenitySeasonHeatmap ───────────────────────────────────────── */
 function AmenitySeasonHeatmap({ data, onCellClick }) {
   const seasons = useMemo(
@@ -295,15 +404,32 @@ function AmenitySeasonHeatmap({ data, onCellClick }) {
 
   const lookup = useMemo(() => {
     const m = {};
+
     data.forEach((d) => {
-      m[`${d.amenity}||${d.season}`] = d;
+      const key = `${d.amenity}||${d.season}`;
+
+      if (!m[key]) {
+        m[key] = {
+          ...d,
+          total_spend: 0,
+          transaction_count: 0,
+        };
+      }
+
+      m[key].total_spend += Number(d.total_spend ?? 0);
+      m[key].transaction_count += Number(d.transaction_count ?? 0);
     });
+
     return m;
   }, [data]);
 
   const maxSpend = useMemo(
-    () => Math.max(...data.map((d) => d.total_spend), 1),
-    [data],
+    () =>
+      Math.max(
+        ...Object.values(lookup).map((d) => Number(d.total_spend ?? 0)),
+        1,
+      ),
+    [lookup],
   );
 
   if (!seasons.length)
@@ -409,7 +535,9 @@ function AmenitySeasonHeatmap({ data, onCellClick }) {
           fontFamily: "sans-serif",
         }}
       >
-        Darker cell = higher spend · click any cell to filter visits below
+        Revenue intensity increases with darker shading. Select any populated
+        cell to view the matching member visits, usage count, and spend details
+        below.
       </p>
     </div>
   );
@@ -468,7 +596,16 @@ function MemberAmenityProfileTable({ data }) {
 
   return (
     <div style={card}>
-      <p style={sectionTitle}>Member Amenity Profile</p>
+      <InsightGuide
+        compact
+        title="Member Amenity Profiles"
+        description="Highlights each member’s preferred amenity based on spend and compares that amount against their total amenity spending across all amenities visited."
+        meta={[
+          { label: "Primary Measure", value: "Top Amenity Spend (USD)" },
+          { label: "Comparison", value: "Total Amenity Spend (USD)" },
+          { label: "Best Used For", value: "Member preference analysis" },
+        ]}
+      />
 
       {/* Filters */}
       <div
@@ -531,20 +668,22 @@ function MemberAmenityProfileTable({ data }) {
           >
             <thead>
               <tr>
-                <th style={th}>Member</th>
-                <th style={th}>ID</th>
-                <th style={th}>Top Amenity</th>
+                <th style={th}>Member Name</th>
+                <th style={th}>Member ID</th>
+                <th style={th}>Preferred Amenity</th>
                 <th
                   style={{ ...th, cursor: "pointer" }}
                   onClick={() => sortBy("top_amenity_spend")}
                 >
-                  Amenity Spend ($USD) <SortIcon col="top_amenity_spend" />
+                  Preferred Amenity Spend (USD){" "}
+                  <SortIcon col="top_amenity_spend" />
                 </th>
                 <th
                   style={{ ...th, cursor: "pointer" }}
                   onClick={() => sortBy("total_amenity_spend")}
                 >
-                  Total Spend ($USD) <SortIcon col="total_amenity_spend" />
+                  Total Amenity Spend (USD){" "}
+                  <SortIcon col="total_amenity_spend" />
                 </th>
               </tr>
             </thead>
@@ -720,21 +859,20 @@ function MemberSeasonVisitsTable({
           flexWrap: "wrap",
         }}
       >
-        <div>
-          <p style={{ ...sectionTitle, marginBottom: 2 }}>
-            Season Visit × Amenity Usage
-          </p>
-          <p
-            style={{
-              margin: 0,
-              fontSize: 12,
-              color: C.textMuted,
-              fontFamily: "sans-serif",
-            }}
-          >
-            Each row = one visit · multiple rows per member if they visited in
-            different seasons
-          </p>
+        <div style={{ flex: "1 1 620px" }}>
+          <InsightGuide
+            compact
+            title="Season Visit × Amenity Usage"
+            description="Displays detailed member amenity activity by season and stay period. Each row represents a member’s interaction with an amenity, including visit dates, usage count, and total spend."
+            meta={[
+              {
+                label: "Filter By",
+                value: "Year, season, amenity, member, or ID",
+              },
+              { label: "Table Grain", value: "Member stay × amenity" },
+              { label: "Spend", value: "Total Spend (USD)" },
+            ]}
+          />
         </div>
         <span
           style={{ fontSize: 12, color: C.textMuted, fontFamily: "sans-serif" }}
@@ -823,14 +961,14 @@ function MemberSeasonVisitsTable({
             <thead>
               <tr>
                 {[
-                  "Member",
-                  "ID",
-                  "Season",
+                  "Member Name",
+                  "Member ID",
+                  "Business Season",
                   "Amenity",
-                  "Check-in",
-                  "Check-out",
-                  "Uses",
-                  "Spend ($USD)",
+                  "Check-In Date",
+                  "Check-Out Date",
+                  "Usage Count",
+                  "Total Spend (USD)",
                 ].map((h) => (
                   <th key={h} style={th}>
                     {h}
@@ -1255,7 +1393,7 @@ function AmenitySpendBarChart({ spendData, onBarClick }) {
         <BarChart
           data={chartData}
           layout="vertical"
-          margin={{ left: 8, right: 24, top: 4, bottom: 4 }}
+          margin={{ left: 24, right: 24, top: 8, bottom: 26 }}
         >
           <CartesianGrid
             strokeDasharray="3 3"
@@ -1267,14 +1405,30 @@ function AmenitySpendBarChart({ spendData, onBarClick }) {
             stroke={C.textMuted}
             fontSize={11}
             tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+            label={{
+              value: "Total Revenue (USD)",
+              position: "insideBottom",
+              offset: -12,
+              fill: C.textMuted,
+              fontSize: 11,
+              fontFamily: "sans-serif",
+            }}
           />
           <YAxis
             type="category"
             dataKey="amenity"
             stroke={C.textMuted}
             fontSize={11}
-            width={90}
+            width={105}
             tick={{ fill: C.textMid }}
+            label={{
+              value: "Amenity Name",
+              angle: -90,
+              position: "insideLeft",
+              fill: C.textMuted,
+              fontSize: 11,
+              fontFamily: "sans-serif",
+            }}
           />
           <Tooltip
             contentStyle={TOOLTIP_STYLE}
@@ -1558,27 +1712,16 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
 
       {/* ── Spend by amenity bar ── */}
       <div style={card}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            marginBottom: 14,
-          }}
-        >
-          <p style={{ ...sectionTitle, marginBottom: 0 }}>
-            Amenity Revenue Ranking
-          </p>
-          <span
-            style={{
-              fontSize: 11,
-              color: C.textMuted,
-              fontFamily: "sans-serif",
-            }}
-          >
-            · click a bar to filter visits
-          </span>
-        </div>
+        <InsightGuide
+          title="Amenity Revenue Ranking"
+          description="Ranks amenities by total revenue generated during the selected year. Use this chart to quickly identify the strongest-performing amenities and compare revenue contribution across amenity categories."
+          meta={[
+            { label: "X-Axis", value: "Total Revenue (USD)" },
+            { label: "Y-Axis", value: "Amenity Name" },
+            { label: "Sort Order", value: "Highest to lowest revenue" },
+          ]}
+          action="Select a bar to filter the visit table by amenity."
+        />
         <AmenitySpendBarChart
           spendData={filteredAmenitySeasonSpend}
           onBarClick={handleBarClick}
@@ -1587,27 +1730,17 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
 
       {/* ── Heatmap ── */}
       <div style={card}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            marginBottom: 14,
-          }}
-        >
-          <p style={{ ...sectionTitle, marginBottom: 0 }}>
-            Spend Heatmap — Amenity × Season ($USD)
-          </p>
-          <span
-            style={{
-              fontSize: 11,
-              color: C.textMuted,
-              fontFamily: "sans-serif",
-            }}
-          >
-            · click a cell to drill down
-          </span>
-        </div>
+        <InsightGuide
+          title="Amenity Spend Heatmap"
+          description="Shows how total amenity revenue changes across business seasons. Each cell represents one amenity during one season, making it easy to spot seasonal demand patterns and high-value amenity periods."
+          meta={[
+            { label: "Columns", value: "Business Seasons" },
+            { label: "Rows", value: "Amenity Names" },
+            { label: "Cell Value", value: "Total Revenue (USD)" },
+            { label: "Color", value: "Darker shading = higher revenue" },
+          ]}
+          action="Select a cell to filter the visit table by both season and amenity."
+        />
         <AmenitySeasonHeatmap
           data={filteredAmenitySeasonSpend}
           onCellClick={handleCellClick}
@@ -1683,22 +1816,22 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
 
       {/* ── Villa / bedroom season cards ── */}
       <div style={card}>
-        <div style={{ marginBottom: 14 }}>
-          <p style={{ ...sectionTitle, marginBottom: 2 }}>
-            Season Villa &amp; Bedroom Summary
-          </p>
-          <p
-            style={{
-              margin: 0,
-              fontSize: 12,
-              color: C.textMuted,
-              fontFamily: "sans-serif",
-            }}
-          >
-            Click any card to see villa preference and bedroom distribution —
-            useful for pre-season room allocation.
-          </p>
-        </div>
+        <InsightGuide
+          title="Season Villa & Bedroom Summary"
+          description="Provides seasonal accommodation performance metrics, including booking volume, average length of stay, member counts, preferred villa selections, and bedroom demand patterns."
+          meta={[
+            { label: "Card Level", value: "Season and year" },
+            {
+              label: "Key Metrics",
+              value: "Bookings, nights, average stay, and members",
+            },
+            {
+              label: "Expanded View",
+              value: "Villa preference and bedroom distribution",
+            },
+          ]}
+          action="Select a season card to expand detailed accommodation demand insights."
+        />
         <SeasonCapacityCards data={filteredSeasonVillaBedroom} />
       </div>
     </div>

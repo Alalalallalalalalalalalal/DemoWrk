@@ -77,6 +77,83 @@ function aggregateByGroup(seasonalVisits, seasons) {
   });
 }
 
+function InsightGuide({ title, description, meta = [], action }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <p
+          style={{
+            margin: 0,
+            fontSize: 13,
+            fontWeight: 700,
+            color: "#3D2B1F",
+            fontFamily: "sans-serif",
+          }}
+        >
+          {title}
+        </p>
+        {action && (
+          <span
+            style={{
+              padding: "4px 9px",
+              borderRadius: 999,
+              background: "#FDF6F0",
+              border: "1px solid #C8976E55",
+              color: "#C8976E",
+              fontSize: 11,
+              fontWeight: 700,
+              fontFamily: "sans-serif",
+            }}
+          >
+            {action}
+          </span>
+        )}
+      </div>
+
+      <p
+        style={{
+          margin: "6px 0 10px",
+          fontSize: 12,
+          lineHeight: 1.55,
+          color: "#A08070",
+          fontFamily: "sans-serif",
+          maxWidth: 980,
+        }}
+      >
+        {description}
+      </p>
+
+      {meta.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {meta.map((m) => (
+            <span
+              key={`${m.label}-${m.value}`}
+              style={{
+                padding: "5px 9px",
+                borderRadius: 999,
+                background: "#F4EDE4",
+                border: "1px solid #EDE5D8",
+                fontSize: 11,
+                color: "#5A3E2B",
+                fontFamily: "sans-serif",
+              }}
+            >
+              <strong>{m.label}:</strong> {m.value}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SeasonFilterBar({
   onSeasonClick,
   onSeasonGroupChange,
@@ -118,8 +195,6 @@ export default function SeasonFilterBar({
       })
       .catch(() => {});
   }, [onSeasonGroupChange]);
-
-  const [showGraphKey, setShowGraphKey] = useState(false);
 
   const activeGroup = groups[activeGroupIdx];
   const chartData = activeGroup
@@ -391,71 +466,29 @@ export default function SeasonFilterBar({
       cursor: "pointer",
       fontFamily: "sans-serif",
     },
-
-    infoWrap: { position: "relative", display: "inline-flex" },
-    infoBtn: {
-      width: 18,
-      height: 18,
-      borderRadius: "50%",
-      border: "1px solid #DDD0C4",
-      background: "#FDFAF6",
-      color: "#7A6050",
-      fontSize: 11,
-      fontWeight: 700,
-      cursor: "help",
-    },
-    infoCard: {
-      position: "absolute",
-      top: 24,
-      left: 0,
-      zIndex: 5,
-      width: 260,
-      padding: "10px 12px",
-      borderRadius: 10,
-      background: "#FFFDF9",
-      border: "1px solid #EDE5D8",
-      boxShadow: "0 8px 22px rgba(61, 43, 31, 0.12)",
-      color: "#5A3E2B",
-      fontSize: 11,
-      lineHeight: 1.45,
-      fontFamily: "sans-serif",
-    },
   };
 
   return (
     <>
       <div style={S.wrap}>
         <div style={S.header}>
-          <p style={S.title}>Seasonal demand</p>
-
-          <span
-            style={S.infoWrap}
-            onMouseEnter={() => setShowGraphKey(true)}
-            onMouseLeave={() => setShowGraphKey(false)}
-          >
-            <button
-              type="button"
-              style={S.infoBtn}
-              aria-label="Graph key"
-              onFocus={() => setShowGraphKey(true)}
-              onBlur={() => setShowGraphKey(false)}
-            >
-              i
-            </button>
-
-            {showGraphKey && (
-              <div style={S.infoCard}>
-                <strong>Graph key</strong>
-                <br />
-                <strong>X-axis:</strong> season name.
-                <br />
-                <strong>Y-axis:</strong> total visits.
-                <br />
-                <strong>Click a bar:</strong> opens the drill-down table for
-                that season using the selected year, month, or day filters.
-              </div>
-            )}
-          </span>
+          <InsightGuide
+            title="Seasonal Demand"
+            description="Shows total member visits across the active seasons in the selected season group. You can add, edit, disable, or delete seasons, and the chart updates to reflect the active seasonal definitions. Custom season groups let you create alternative business-season views without changing the existing drill-down workflow."
+            meta={[
+              { label: "X-Axis", value: "Season Name" },
+              { label: "Y-Axis", value: "Total Visits" },
+              {
+                label: "Season Chips",
+                value: "Enable, disable, edit, or delete seasons",
+              },
+              {
+                label: "Custom Groups",
+                value: "Create alternate season definitions",
+              },
+            ]}
+            action="Select a bar to view visiting members"
+          />
         </div>
         {/* Group tabs */}
         <div style={S.tabRow}>
@@ -471,6 +504,7 @@ export default function SeasonFilterBar({
                 setShowAddSeason(false);
               }}
             >
+              {g.group_name}
               {g.group_type === "custom" && (
                 <>
                   <span
@@ -832,13 +866,45 @@ export default function SeasonFilterBar({
         )}
 
         {/* Chart */}
-        <div style={{ height: Math.max(220, 220) }}>
+        <div style={{ height: Math.max(240, 220), marginTop: 4 }}>
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} style={{ cursor: "pointer" }}>
+            <BarChart
+              data={chartData}
+              style={{ cursor: "pointer" }}
+              margin={{ top: 10, right: 24, left: 12, bottom: 24 }}
+            >
               <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
-              <XAxis dataKey="season" stroke="#A08070" fontSize={11} />
-              <YAxis stroke="#A08070" fontSize={11} />
-              <Tooltip contentStyle={TOOLTIP_STYLE} />
+              <XAxis
+                dataKey="season"
+                stroke="#A08070"
+                fontSize={11}
+                label={{
+                  value: "Season Name",
+                  position: "insideBottom",
+                  offset: -12,
+                  fill: "#A08070",
+                  fontSize: 11,
+                }}
+              />
+              <YAxis
+                stroke="#A08070"
+                fontSize={11}
+                label={{
+                  value: "Total Visits",
+                  angle: -90,
+                  position: "insideLeft",
+                  fill: "#A08070",
+                  fontSize: 11,
+                }}
+              />
+              <Tooltip
+                contentStyle={TOOLTIP_STYLE}
+                formatter={(value, name) => [
+                  Number(value).toLocaleString(),
+                  name === "visits" ? "Total Visits" : name,
+                ]}
+                labelFormatter={(label) => `Season: ${label}`}
+              />
               <Bar
                 dataKey="visits"
                 fill="#C8976E"
@@ -855,11 +921,14 @@ export default function SeasonFilterBar({
             color: "#A08070",
             fontFamily: "sans-serif",
             margin: 0,
+            lineHeight: 1.45,
           }}
         >
           Showing <strong>{activeGroup?.group_name ?? "—"}</strong>
           {activeGroup &&
             ` · ${activeGroup.seasons.filter((s) => s.is_active).length} of ${activeGroup.seasons.length} seasons active`}
+          {activeGroup &&
+            " · active seasons are included in the chart; disabled seasons are hidden from the bar totals."}
         </p>
       </div>
 
@@ -1085,8 +1154,39 @@ function SeasonDetailPanel({ season, rows = [], onClose }) {
           <div>
             <p style={MODAL.title}>{season || "Season"} — Member Visits</p>
             <p style={MODAL.sub}>
-              {rows.length} visits · click outside to close
+              Detailed member visit records for the selected season. Use the
+              filters below to narrow results by member, country, room, year,
+              month, or day.
             </p>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                marginTop: 10,
+              }}
+            >
+              {[
+                { label: "Table Rows", value: "Individual member stays" },
+                { label: "Date Fields", value: "Check-in and check-out" },
+                { label: "Search", value: "Name, ID, country, type, or room" },
+              ].map((m) => (
+                <span
+                  key={m.label}
+                  style={{
+                    padding: "5px 9px",
+                    borderRadius: 999,
+                    background: "#F4EDE4",
+                    border: "1px solid #EDE5D8",
+                    fontSize: 11,
+                    color: "#5A3E2B",
+                    fontFamily: "sans-serif",
+                  }}
+                >
+                  <strong>{m.label}:</strong> {m.value}
+                </span>
+              ))}
+            </div>
           </div>
           <button type="button" style={MODAL.closeBtn} onClick={onClose}>
             <X size={15} />
@@ -1170,7 +1270,7 @@ function SeasonDetailPanel({ season, rows = [], onClose }) {
           <div
             style={{
               overflow: "auto",
-              maxHeight: "calc(100vh - 250px)",
+              maxHeight: "calc(100vh - 290px)",
               borderRadius: 10,
               border: "1px solid #EDE5D8",
             }}
@@ -1179,15 +1279,15 @@ function SeasonDetailPanel({ season, rows = [], onClose }) {
               <thead>
                 <tr>
                   {[
-                    "Member",
-                    "ID",
-                    "Type",
+                    "Member Name",
+                    "Member ID",
+                    "Member Type",
                     "Age",
                     "Country",
-                    "Check-in",
-                    "Check-out",
-                    "Stay",
-                    "Room",
+                    "Check-In Date",
+                    "Check-Out Date",
+                    "Stay Length",
+                    "Room Type",
                   ].map((h) => (
                     <th key={h} style={MODAL.th}>
                       {h}
