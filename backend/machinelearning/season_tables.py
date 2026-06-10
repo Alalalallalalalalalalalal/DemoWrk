@@ -41,16 +41,19 @@ def _raw_connection():
     return get_engine().raw_connection()
 
 DEFAULT_SEASONS = [
-    ("High Season 1", 1, 3, 3, 6),
-    ("Spring Break", 3, 7, 3, 27),
-    ("High Season 2", 3, 28, 4, 24),
-    ("Shoulder Season 1", 4, 25, 7, 24),
-    ("Summer Season", 7, 25, 10, 30),
-    ("Shoulder Season 2", 10, 31, 11, 20),
-    ("Thanksgiving", 11, 21, 11, 28),
-    ("Shoulder Season 3", 11, 29, 12, 11),
-    ("High Season 3", 12, 12, 12, 18),
-    ("Festive", 12, 19, 1, 3),
+    ("High Season 1", 1, 3, 2, 12),
+    ("Presidents Week", 2, 13, 2, 19),
+    ("High Season 2", 2, 20, 3, 5),
+    ("Spring Break", 3, 6, 4, 2),
+    ("High Season 3", 4, 3, 4, 23),
+    ("Shoulder Season 1", 4, 24, 7, 23),
+    ("Summer Season", 7, 24, 10, 29),
+    ("Shoulder Season 2", 10, 30, 11, 19),
+    ("Thanksgiving", 11, 20, 11, 26),
+    ("Shoulder Season 3", 11, 27, 12, 10),
+    ("High Season 4", 12, 11, 12, 18),
+    ("Christmas", 12, 19, 12, 27),
+    ("Festive", 12, 27, 1, 2),
 ]
 
 SPECIFIC_DDL = """

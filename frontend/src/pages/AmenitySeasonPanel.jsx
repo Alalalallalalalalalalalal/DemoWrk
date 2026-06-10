@@ -1431,7 +1431,21 @@ function AmenitySpendBarChart({ spendData, onBarClick }) {
             }}
           />
           <Tooltip
-            contentStyle={TOOLTIP_STYLE}
+            contentStyle={{
+              background: "#FDFAF6",
+              border: "1px solid #EDE5D8",
+              borderRadius: 8,
+              color: "#3D2B1F",
+              fontSize: 12,
+              fontFamily: "sans-serif",
+            }}
+            labelStyle={{
+              color: "#3D2B1F",
+              fontWeight: 700,
+            }}
+            itemStyle={{
+              color: "#3D2B1F",
+            }}
             formatter={(v) => [`$${Number(v).toLocaleString()}`, "Total Spend"]}
           />
           <Bar
