@@ -1,25 +1,20 @@
 """
 folio_scraper.py — Phase 2: Read folio_report.csv, scrape each reservation's
 folio detail pages, save per-guest CSVs to journal folder.
-
 Run folio_report.py first to generate folio_report.csv.
-
 Output CSV columns per row:
   Date, Description, Amount,
   _folio_num, _folio_name, _balance_due, _reservation_folio_id,
   Conf. Code, Main Member #, Member #, Guest Name,
-  Check-In Date, Check-Out Date, Room #, Room Rate,
-  Reservation Status
-
+  Check-In Date, Check-Out Date, Room #, Villa Name, Bedroom Count,
+  Persons, Source, Reservation Status
 Folder naming:
   - Guests from Guests tab  → journal/{guest_number}/
   - All other folios        → journal/{main_member_number}/ (first token of Member/Guest Name)
-
 Guest table saved per reservation:
   journal/{main_member_num}/{main_member_num}_guests.csv
   Columns: Conf. Code, Member #, Guest Name, Folio, Is Owner,
            Check-In Date, Check-Out Date, Room #
-
 Usage:
     python folio_scraper.py                  # First 10 reservations
     python folio_scraper.py --all            # All reservations
@@ -40,7 +35,6 @@ import sys
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from config import OUTPUT_FOLDER, BASE_URL
 from login import login
-
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
@@ -49,28 +43,26 @@ SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
 REPORTS_FOLDER    = os.path.join(OUTPUT_FOLDER, "reports")
 DONE_LOG          = os.path.join(OUTPUT_FOLDER, "folio_done.txt")
 FOLIO_REPORT_CSV  = os.path.join(REPORTS_FOLDER, "folio_report.csv")
-
 DEFAULT_LIMIT   = 10    # only used if --limit is explicitly passed
 DEFAULT_WORKERS = 4
-
 NAV_TIMEOUT   = 15000
 FRAME_TIMEOUT = 8000
 FOLIO_TIMEOUT = 12000
-
 # Listing columns to carry into every scraped folio row
 LISTING_COLUMNS = [
     "Conf. Code",
-    "Main Member #",   # member number of the reservation holder
-    "Member #",        # derived: first token of Member/Guest Name (folio owner)
-    "Guest Name",      # derived: remainder of Member/Guest Name
+    "Main Member #",        # member number of the reservation holder
+    "Member #",             # derived: first token of Member/Guest Name (folio owner)
+    "Guest Name",           # derived: remainder of Member/Guest Name
     "Check-In Date",
     "Check-Out Date",
-    "Room #",
-    "Villa Name",
-    "Bedroom Count",
+    "Room #",               # unit only  e.g. "V52"
+    "Villa Name",           # from Room Type dropdown e.g. "Little Hill"
+    "Bedroom Count",        # integer stripped from rate name e.g. 4
+    "Persons",              # from noOfPersons input field
+    "Source",               # selected text from businessSource dropdown
     "Reservation Status",
 ]
-
 # ─────────────────────────────────────────────
 # DONE LOG
 # ─────────────────────────────────────────────
@@ -140,32 +132,113 @@ def get_conf_code(row):
             return v
     return "UNKNOWN"
 
-def parse_room_rate(room_rate):
-    if not room_rate:
-        return "", None
-    match = re.search(r'(\d+)\s*BR', room_rate, re.IGNORECASE)
-    if match:
-        bedroom_count = int(match.group(1))
-        room_name = re.sub(r'\s*\d+\s*BR', '', room_rate, flags=re.IGNORECASE).strip()
-        return room_name, bedroom_count
-    return room_rate.strip(), 1
+def parse_bedroom_count_from_rate(rate_text):
+    """
+    Extract bedroom integer from rate name.
+    'Little Hill 4BR' → 4
+    'Three Little Birds 2BR' → 2
+    '1.HO' or any rate with no BR → 1 (default: single bedroom)
+    Returns int.
+    """
+    if not rate_text:
+        return 1
+    m = re.search(r'(\d+)\s*BR', rate_text, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return 1
 
 def extract_room_unit(room_no):
+    """
+    'V52-Little Hill' or 'V52 (Little Hill -V52)' → unit='V52'
+    Plain 'V52' → unit='V52'
+    Also handles 'unit - description' format.
+    Returns the unit token only.
+    """
     if not room_no:
         return ""
-    parts = room_no.split("-", 1)
-    if len(parts) == 2:
-        room = parts[0].strip()
-        unit = parts[1].strip()
-        return unit, room
-    return "", room_no.strip()
+    # Strip parenthetical suffixes like " (Little Hill -V52)"
+    room_no = re.sub(r'\(.*\)', '', room_no).strip()
+    # Split on first dash or space before a dash
+    parts = re.split(r'\s*-\s*', room_no, maxsplit=1)
+    return parts[0].strip()
+
+def scrape_reservation_meta(landing, prefix=""):
+    """
+    Scrape the reservation form fields that aren't in the folio listing:
+      - Villa Name    : selected text of #roomTypeId
+      - Bedroom Count : integer from selected rate text (#rateId)
+      - Persons       : value of #noOfPersons
+      - Source        : selected text of #businessSource
+    Returns a dict with those four keys (empty string if not found).
+    """
+    meta = {
+        "Villa Name":    "",
+        "Bedroom Count": "",
+        "Persons":       "",
+        "Source":        "",
+    }
+    try:
+        # Villa Name — Room Type dropdown selected text
+        villa = landing.evaluate("""
+            () => {
+                const sel = document.querySelector('#roomTypeId');
+                if (!sel) return '';
+                const opt = sel.options[sel.selectedIndex];
+                return opt ? opt.text.trim() : '';
+            }
+        """)
+        if villa and villa != '--Select--':
+            meta["Villa Name"] = villa
+
+        # Bedroom Count — selected rate name, strip the BR number
+        rate_text = landing.evaluate("""
+            () => {
+                const sel = document.querySelector('#rateId');
+                if (!sel) return '';
+                const opt = sel.options[sel.selectedIndex];
+                return opt ? opt.text.trim() : '';
+            }
+        """)
+        # Only trust the rate if it explicitly contains a BR pattern
+        # (e.g. "Little Hill 4BR" → 4). Ambiguous rates like "1.HO" or
+        # "ZZ Comp" leave Bedroom Count empty so the room lookup wins.
+        if rate_text:
+            m_br = re.search(r'(\d+)\s*BR', rate_text, re.IGNORECASE)
+            if m_br:
+                meta["Bedroom Count"] = int(m_br.group(1))
+
+        # Persons — noOfPersons input
+        persons = landing.evaluate("""
+            () => {
+                const el = document.querySelector('#noOfPersons');
+                return el ? el.value.trim() : '';
+            }
+        """)
+        if persons:
+            meta["Persons"] = persons
+
+        # Source — businessSource dropdown selected text
+        source = landing.evaluate("""
+            () => {
+                const sel = document.querySelector('#businessSource');
+                if (!sel) return '';
+                const opt = sel.options[sel.selectedIndex];
+                return (opt && opt.value) ? opt.text.trim() : '';
+            }
+        """)
+        if source and source != '--Select--':
+            meta["Source"] = source
+
+    except Exception as e:
+        pr(prefix, f"  scrape_reservation_meta error: {e}")
+
+    return meta
 
 def save_csv(filepath, rows):
     """Write rows to filepath, always overwriting any existing file."""
     if not rows:
         return None
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-
     all_keys  = []
     seen_keys = set()
     for row in rows:
@@ -173,7 +246,6 @@ def save_csv(filepath, rows):
             if k not in seen_keys:
                 all_keys.append(k)
                 seen_keys.add(k)
-
     with open(filepath, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=all_keys, extrasaction="ignore")
         w.writeheader()
@@ -209,6 +281,12 @@ def get_landing_frame(page, timeout_ms=FRAME_TIMEOUT):
 def session_alive(page):
     return get_landing_frame(page, timeout_ms=1000) is not None
 
+
+def get_content_context(page, timeout_ms=FRAME_TIMEOUT):
+    landing = get_landing_frame(page, timeout_ms=timeout_ms)
+    return landing if landing else page
+
+
 def ensure_session(page, worker_id=0):
     if session_alive(page):
         return False
@@ -216,8 +294,13 @@ def ensure_session(page, worker_id=0):
     pr(prefix, "Session lost — re-logging in...")
     try:
         login(page)
-        page.wait_for_timeout(2000)
-        get_landing_frame(page, timeout_ms=10000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=NAV_TIMEOUT)
+        except Exception:
+            pass
+        page.wait_for_timeout(3000)
+        if not get_landing_frame(page, timeout_ms=FRAME_TIMEOUT):
+            pr(prefix, "No landingFrame found after login; continuing with current page context.")
         pr(prefix, "Re-login complete.")
         return True
     except Exception as e:
@@ -232,18 +315,14 @@ def dismiss_popup(page):
                     "a[onclick*='close'], button[onclick*='close'], "
                     ".ui-dialog-titlebar-close, button.close, .close"
                 )
-
                 if btn:
                     btn.click()
                     page.wait_for_timeout(1000)
                     return
-
             except Exception:
                 continue
-
         page.keyboard.press("Escape")
         page.wait_for_timeout(500)
-
     except Exception:
         pass
 
@@ -287,7 +366,6 @@ def scrape_guests_tab(page, conf_code, listing_row, prefix=""):
     landing = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not landing:
         return {}, []
-
     try:
         for selector in ["#guestSectionTab a", "a[href='#guestSection']", "#ui-id-2"]:
             tab = landing.query_selector(selector)
@@ -297,10 +375,8 @@ def scrape_guests_tab(page, conf_code, listing_row, prefix=""):
                 break
     except Exception:
         pass
-
     folio_to_guest = {}
     guest_rows     = []
-
     try:
         table = landing.query_selector("#guestsForDisplay")
         if not table:
@@ -311,14 +387,11 @@ def scrape_guests_tab(page, conf_code, listing_row, prefix=""):
                 if "folio" in header_text and "guest" in header_text:
                     table = t
                     break
-
         if not table:
             pr(prefix, "Guests table not found")
             return {}, []
-
         rows = table.query_selector_all("tr")
         pr(prefix, f"  Guests tab: {len(rows)-1} guest row(s)")
-
         for tr in rows[1:]:
             cells = tr.query_selector_all("td")
             if len(cells) < 3:
@@ -327,7 +400,6 @@ def scrape_guests_tab(page, conf_code, listing_row, prefix=""):
             name      = cells[1].inner_text().strip() if len(cells) > 1 else ""
             folio     = cells[2].inner_text().strip() if len(cells) > 2 else ""
             is_owner  = cells[3].inner_text().strip() if len(cells) > 3 else ""
-
             if guest_num and folio:
                 parts = folio.split()
                 num   = parts[-1] if parts and parts[-1].isdigit() else None
@@ -335,7 +407,6 @@ def scrape_guests_tab(page, conf_code, listing_row, prefix=""):
                 if num:
                     folio_to_guest[num] = guest_num
                 pr(prefix, f"    {guest_num} → {folio} (owner: {is_owner})")
-
             # Build guest CSV row
             g_member, g_name = split_member_guest(guest_num)
             guest_rows.append({
@@ -348,10 +419,8 @@ def scrape_guests_tab(page, conf_code, listing_row, prefix=""):
                 "Check-Out Date":listing_row.get("Check-Out Date", ""),
                 "Room #":        listing_row.get("Room #", ""),
             })
-
     except Exception as e:
         pr(prefix, f"Guests tab error: {e}")
-
     return folio_to_guest, guest_rows
 
 # ─────────────────────────────────────────────
@@ -361,7 +430,6 @@ def open_folio_management(page, conf_code, prefix=""):
     landing = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not landing:
         return None
-
     res_id = None
     try:
         el = landing.query_selector('input[name="reservationId"], input[id="reservationId"]')
@@ -378,9 +446,7 @@ def open_folio_management(page, conf_code, prefix=""):
             pass
     if not res_id:
         res_id = conf_code
-
     pr(prefix, f"Opening Folio Management (res_id={res_id})...")
-
     try:
         btn = landing.query_selector("input[name='folio'], input[value='Folio Management']")
         if btn:
@@ -393,7 +459,6 @@ def open_folio_management(page, conf_code, prefix=""):
                 return landing
     except Exception as e:
         pr(prefix, f"  Button click error: {e}")
-
     landing = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not landing:
         return None
@@ -409,7 +474,6 @@ def open_folio_management(page, conf_code, prefix=""):
             return landing
     except Exception as e:
         pr(prefix, f"  Direct nav error: {e}")
-
     pr(prefix, "Could not open Folio Management.")
     return None
 
@@ -448,37 +512,32 @@ def scrape_tab_folios(folio_frame, conf_code, folio_to_guest,
     """
     Scrape all folios visible on the current tab.
     Returns {folder_name: {folio_num: [rows]}}
-
     Each row contains:
       Date, Description, Amount  (from the folio table)
       _folio_num, _folio_name, _balance_due, _reservation_folio_id
-      + all LISTING_COLUMNS (Conf. Code, Member #, Guest Name, dates, etc.)
+      + all LISTING_COLUMNS (Conf. Code, Member #, Guest Name, dates, Room #,
+                              Villa Name, Bedroom Count, Persons, Source, etc.)
     """
     results = {}
     try:
         spans = folio_frame.query_selector_all("span.boldWhite")
         pr(prefix, f"    {len(spans)} folio header(s) on this tab")
-
         for span in spans:
             try:
                 raw_text = span.inner_text().strip()
                 lines    = [l.strip() for l in raw_text.split("\n") if l.strip()]
                 header_line  = lines[0] if lines else ""
                 balance_line = lines[1] if len(lines) > 1 else ""
-
                 m = re.match(r'Folio\s+(\d+)\s*[-–]\s*(.*)', header_line, re.IGNORECASE)
                 if not m:
                     continue
                 folio_num  = m.group(1)
                 folio_name = m.group(2).strip()
-
                 balance = ""
                 bm = re.search(r'balance due:\s*(.+)', balance_line, re.IGNORECASE)
                 if bm:
                     balance = bm.group(1).strip()
-
                 pr(prefix, f"    Folio {folio_num} — {folio_name[:30]} | balance: {balance}")
-
                 # Find sibling table via JS DOM walk
                 table_el = folio_frame.evaluate_handle("""
                     (span) => {
@@ -497,14 +556,11 @@ def scrape_tab_folios(folio_frame, conf_code, folio_to_guest,
                         return null;
                     }
                 """, span)
-
                 if not table_el:
                     pr(prefix, f"      No table for Folio {folio_num} — skipping")
                     continue
-
                 table_id     = folio_frame.evaluate("(t) => t.id", table_el)
                 res_folio_id = table_id.replace("folioId_", "") if table_id else ""
-
                 # Scrape tbody rows — only Date, Description, Amount
                 rows = folio_frame.evaluate("""
                     (table) => {
@@ -526,14 +582,10 @@ def scrape_tab_folios(folio_frame, conf_code, folio_to_guest,
                         return rows;
                     }
                 """, table_el)
-
                 if not rows:
                     pr(prefix, f"      Folio {folio_num}: empty — skipping")
                     continue
-
                 # Determine folder name
-                # Guest map takes priority, then always fall back to the
-                # main reservation holder — never use conf_code as a folder.
                 folio_label = f"Folio {folio_num}"
                 if folio_label in folio_to_guest:
                     folder_name = folio_to_guest[folio_label]
@@ -541,8 +593,7 @@ def scrape_tab_folios(folio_frame, conf_code, folio_to_guest,
                     folder_name = folio_to_guest[folio_num]
                 else:
                     folder_name = main_member_num
-
-                # Add metadata — in the exact final column order
+                # Add metadata
                 for row in rows:
                     row["_folio_num"]            = folio_num
                     row["_folio_name"]           = folio_name
@@ -550,17 +601,13 @@ def scrape_tab_folios(folio_frame, conf_code, folio_to_guest,
                     row["_reservation_folio_id"] = res_folio_id
                     for col in LISTING_COLUMNS:
                         row[col] = listing_meta.get(col, "")
-
                 pr(prefix, f"      Folio {folio_num}: {len(rows)} row(s) → folder '{folder_name}'")
                 results.setdefault(folder_name, {})[folio_num] = rows
-
             except Exception as e:
                 pr(prefix, f"    Span error: {e}")
                 continue
-
     except Exception as e:
         pr(prefix, f"    Tab scrape error: {e}")
-
     return results
 
 def scrape_all_folio_tabs(folio_frame, conf_code, folio_to_guest,
@@ -568,7 +615,6 @@ def scrape_all_folio_tabs(folio_frame, conf_code, folio_to_guest,
     """Iterate all tab groups via getTab('N'). Returns {folder: {folio_num: [rows]}}"""
     results    = {}
     num_groups = count_tab_groups(folio_frame, prefix)
-
     for tab_num in range(1, num_groups + 1):
         pr(prefix, f"  Tab group {tab_num}/{num_groups} (getTab('{tab_num}'))...")
         if not call_get_tab(folio_frame, tab_num, prefix):
@@ -579,7 +625,6 @@ def scrape_all_folio_tabs(folio_frame, conf_code, folio_to_guest,
         )
         for folder, folio_dict in tab_data.items():
             results.setdefault(folder, {}).update(folio_dict)
-
     return results
 
 # ─────────────────────────────────────────────
@@ -587,40 +632,53 @@ def scrape_all_folio_tabs(folio_frame, conf_code, folio_to_guest,
 # ─────────────────────────────────────────────
 def scrape_reservation(page, reservation_row, prefix=""):
     """Full pipeline for one reservation. Returns {folder: [filepaths]}"""
-    conf_code      = get_conf_code(reservation_row)
-    conf_href      = reservation_row.get("_conf_href", "")
+    conf_code       = get_conf_code(reservation_row)
+    conf_href       = reservation_row.get("_conf_href", "")
     main_member_num = reservation_row.get("Member #", "")
-    room_rate = reservation_row.get("Room Rate", "")
-    room_name, bedroom_count = parse_room_rate(room_rate)
-    room_no = reservation_row.get("Room #", "")
-    room_unit, room = extract_room_unit(room_no)
     if not main_member_num:
         raw = reservation_row.get("Member/Guest Name", "") or reservation_row.get("_member_name", "")
         main_member_num, _ = split_member_guest(raw)
 
-    # fallback if extract_room_unit didn't actually split properly
-    if "-" not in room_no:
-        room = room_name
-        room_unit = ""
+    # ── Room # ──────────────────────────────────────────────────────────────
+    # Raw value from the listing e.g. "V52 (Little Hill -V52)" or "V52-Little Hill"
+    # We only want the unit token: "V52"
+    raw_room = reservation_row.get("Room #", "")
+    room_unit = extract_room_unit(raw_room)
 
-    # Listing metadata to attach to every folio row
+    # ── Listing metadata stub (will be enriched from the live page below) ───
     listing_meta = {col: reservation_row.get(col, "") for col in LISTING_COLUMNS}
     listing_meta["Main Member #"] = main_member_num
-    listing_meta["Villa Name"] = room
-    listing_meta["Bedroom Count"] = bedroom_count
-    listing_meta["Room #"] = room_unit
+    listing_meta["Room #"]        = room_unit   # cleaned unit only
+    # Villa Name, Bedroom Count, Persons, Source will be filled from the live page
 
     saved_files = {}
     pr(prefix, f"=== Reservation: {conf_code} | {reservation_row.get('Member/Guest Name', '')} ===")
-
     if not conf_href:
         pr(prefix, "No URL — skipping")
         return saved_files
-
     if not navigate_to_reservation(page, conf_href, conf_code, prefix):
         return saved_files
 
-    # Guests tab
+    # ── Scrape live reservation form fields ─────────────────────────────────
+    landing = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+    if landing:
+        pr(prefix, "Reading reservation form fields (Villa, Rate, Persons, Source)...")
+        live_meta = scrape_reservation_meta(landing, prefix)
+        pr(prefix, f"  Villa={live_meta['Villa Name']}  BR={live_meta['Bedroom Count']}  "
+                   f"Persons={live_meta['Persons']}  Source={live_meta['Source']}")
+        # Merge into listing_meta; live page wins over CSV-derived values
+        for k, v in live_meta.items():
+            if v != "":           # keep CSV value if live scrape came back empty
+                listing_meta[k] = v
+
+    # ── Bedroom count: fall back to room lookup if still not resolved ────────
+    if not listing_meta.get("Bedroom Count"):
+        from room_inquiry_scraper import get_bedroom_count_from_lookup
+        bc = get_bedroom_count_from_lookup(room_unit, fallback=1)
+        listing_meta["Bedroom Count"] = bc
+        pr(prefix, f"  Bedroom Count from room lookup: {bc}")
+
+    # ── Guests tab ───────────────────────────────────────────────────────────
     pr(prefix, "Reading Guests tab...")
     folio_to_guest, guest_rows = scrape_guests_tab(
         page, conf_code, reservation_row, prefix
@@ -633,19 +691,18 @@ def scrape_reservation(page, reservation_row, prefix=""):
         save_csv(gp, guest_rows)
         pr(prefix, f"Saved guests: {os.path.basename(gp)} ({len(guest_rows)} row(s))")
 
-    # Open Folio Management
+    # ── Open Folio Management ────────────────────────────────────────────────
     folio_frame = open_folio_management(page, conf_code, prefix)
     if not folio_frame:
         screenshot(page, f"no_folio_{conf_code}")
         return saved_files
 
-    # Scrape all tab groups
+    # ── Scrape all tab groups ────────────────────────────────────────────────
     pr(prefix, "Scraping folio tabs...")
     folio_data = scrape_all_folio_tabs(
         folio_frame, conf_code, folio_to_guest,
         main_member_num, listing_meta, prefix
     )
-
     if not folio_data:
         pr(prefix, "No folio data scraped.")
         screenshot(page, f"empty_{conf_code}")
@@ -658,7 +715,6 @@ def scrape_reservation(page, reservation_row, prefix=""):
             if saved:
                 saved_files.setdefault(folder_name, []).append(saved)
                 pr(prefix, f"Saved: {os.path.basename(saved)} ({len(rows)} rows)")
-
     return saved_files
 
 # ─────────────────────────────────────────────
@@ -670,11 +726,9 @@ def _worker_init():
 def scrape_chunk(args):
     reservations_chunk, worker_id = args
     time.sleep(worker_id * 5)
-
     prefix   = f"[W{worker_id}] "
     results  = {"success": [], "failed": [], "skipped": []}
     done_set = load_done_set()
-
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=False)
         page    = browser.new_page()
@@ -682,39 +736,27 @@ def scrape_chunk(args):
             pr(prefix, "Logging in...")
             login(page)
             try:
-                page.wait_for_selector("body", timeout=5000)
-            except PWTimeout:
+                page.wait_for_load_state("networkidle", timeout=NAV_TIMEOUT)
+            except Exception:
                 pass
+            page.wait_for_timeout(3000)
+            if not get_landing_frame(page, timeout_ms=FRAME_TIMEOUT):
+                pr(prefix, "No landingFrame found after login; continuing with current page context.")
             dismiss_popup(page)
-
-            # Prime iframe hierarchy
-            try:
-                page.goto(f"{BASE_URL}/PMS/default.jsp", timeout=NAV_TIMEOUT)
-                page.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
-                get_landing_frame(page, timeout_ms=8000)
-            except Exception as e:
-                pr(prefix, f"Prime warning: {e}")
-
             pr(prefix, f"Ready. Processing {len(reservations_chunk)} reservation(s)...")
-
             for i, row in enumerate(reservations_chunk, 1):
                 conf_code = get_conf_code(row)
                 pr(prefix, f"[{i}/{len(reservations_chunk)}] {conf_code}")
-
                 ensure_session(page, worker_id)
-
                 if conf_code in done_set:
                     pr(prefix, "Already done — skipping.")
                     results["skipped"].append(conf_code)
                     continue
-
                 saved = scrape_reservation(page, row, prefix)
-
                 if not saved:
                     if ensure_session(page, worker_id):
                         pr(prefix, f"Retrying {conf_code}...")
                         saved = scrape_reservation(page, row, prefix)
-
                 if saved:
                     mark_done(conf_code)
                     done_set.add(conf_code)
@@ -724,13 +766,11 @@ def scrape_chunk(args):
                 else:
                     pr(prefix, "Nothing saved — not marking done, will retry next run.")
                     results["failed"].append(conf_code)
-
         except Exception as e:
             pr(prefix, f"Fatal: {e}")
             screenshot(page, f"worker_{worker_id}_fatal")
         finally:
             browser.close()
-
     return results
 
 # ─────────────────────────────────────────────
@@ -747,29 +787,23 @@ def main():
     parser.add_argument("--reset",   action="store_true",
                         help="Clear done log — reprocess everything")
     args = parser.parse_args()
-
     if args.reset:
         if os.path.exists(DONE_LOG):
             os.remove(DONE_LOG)
             print("Done log cleared.")
-
     done_count = len(load_done_set())
     if done_count:
         print(f"Already done: {done_count} reservation(s) (use --reset to reprocess)")
-
     print("=" * 60)
     print("Folio Scraper — Phase 2: Scrape folio detail pages")
     print("=" * 60)
-
     all_reservations = load_folio_report()
     if not all_reservations:
         return
-
     reservations = all_reservations if args.limit is None else all_reservations[:args.limit]
     print(f"  Reservations to process: {len(reservations)}")
     print(f"  Output folder:           {JOURNAL_FOLDER}")
     print()
-
     if len(reservations) == 1 or args.workers == 1:
         print("Single-worker mode...")
         result      = scrape_chunk((reservations, 1))
@@ -784,7 +818,6 @@ def main():
         print(f"  Workers:    {num_workers}")
         print(f"  Per worker: ~{chunk_size}")
         print()
-
         pool = Pool(processes=num_workers, initializer=_worker_init)
         try:
             all_results = pool.map(scrape_chunk, chunks)
@@ -796,12 +829,10 @@ def main():
         else:
             pool.close()
             pool.join()
-
     success      = sum(len(r["success"]) for r in all_results)
     failed       = sum(len(r["failed"])  for r in all_results)
     skipped      = sum(len(r["skipped"]) for r in all_results)
     failed_codes = [c for r in all_results for c in r["failed"]]
-
     print("\n" + "=" * 60)
     print("Summary")
     print("=" * 60)
@@ -812,12 +843,10 @@ def main():
         print(f"  Failed codes: {failed_codes}")
     print(f"  Journal: {JOURNAL_FOLDER}")
     print("=" * 60)
-
     # Auto-rerun failed reservations
     if failed_codes:
         print(f"\n  Retrying {len(failed_codes)} failed reservation(s)...")
         retry_rows = [r for r in all_reservations if get_conf_code(r) in set(failed_codes)]
-
         if len(retry_rows) == 1 or args.workers == 1:
             retry_result = scrape_chunk((retry_rows, 1))
             retry_results = [retry_result]
@@ -838,11 +867,9 @@ def main():
             else:
                 pool.close()
                 pool.join()
-
         retry_success = sum(len(r["success"]) for r in retry_results)
         retry_failed  = sum(len(r["failed"])  for r in retry_results)
         still_failed  = [c for r in retry_results for c in r["failed"]]
-
         print("\n" + "=" * 60)
         print("Retry Summary")
         print("=" * 60)
