@@ -43,8 +43,14 @@ DB_CONFIG = {
 # ─────────────────────────────────────────────
 # THRESHOLDS (calibrated from real data)
 # ─────────────────────────────────────────────
-HIGH_SPEND = 10000
-LOW_SPEND = 1000
+# ─────────────────────────────────────────────
+# spend THRESHOLDS — loaded from DB, set by frontend
+# ─────────────────────────────────────────────
+def load_thresholds(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT key, value FROM segment_config WHERE key IN ('high_spend_threshold', 'low_spend_threshold')")
+        rows = dict(cur.fetchall())
+    return float(rows.get("high_spend_threshold", 10000)), float(rows.get("low_spend_threshold", 1000))
 
 FREQUENT_MIN = 4
 LAPSED_DAYS = 18 * 30  # ~18 months
@@ -56,60 +62,103 @@ LAPSED_DAYS = 18 * 30  # ~18 months
 def get_conn():
     return psycopg.connect(**DB_CONFIG)
 
-#Actually create tables if they don't exist (idempotent)
+
 # ─────────────────────────────────────────────
-# DDL
+# DDL — drop and recreate so schema changes always apply cleanly
 # ─────────────────────────────────────────────
 DDL = """
-CREATE TABLE IF NOT EXISTS segment_spenders (
-    id SERIAL PRIMARY KEY,
-    member_number VARCHAR,
-    name VARCHAR,
-    email VARCHAR,
-    tier VARCHAR,
-    net_spend NUMERIC,
-    spend_categories TEXT[],
-    check_in_date DATE,
-    check_out_date DATE,
-    season VARCHAR,
-    created_at TIMESTAMP DEFAULT NOW()
+DROP TABLE IF EXISTS segment_spenders;
+CREATE TABLE segment_spenders (
+    id                  SERIAL PRIMARY KEY,
+    member_number       VARCHAR,
+    title               VARCHAR,
+    name                VARCHAR,
+    email               VARCHAR,
+    date_of_birth       DATE,
+    phone_number        VARCHAR,
+    address_line1       VARCHAR,
+    address_line2       VARCHAR,
+    city                VARCHAR,
+    state               VARCHAR,
+    postal_code         VARCHAR,
+    country             VARCHAR,
+    tier                VARCHAR,
+    net_spend           NUMERIC,
+    spend_categories    TEXT[],
+    check_in_date       DATE,
+    check_out_date      DATE,
+    season              VARCHAR,
+    created_at          TIMESTAMP DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS segment_visitors (
-    id SERIAL PRIMARY KEY,
-    member_number VARCHAR,
-    name VARCHAR,
-    email VARCHAR,
-    visitor_type VARCHAR,
-    total_reservations INTEGER,
-    last_visit DATE,
-    check_in_date DATE,
-    check_out_date DATE,
-    season VARCHAR,
-    created_at TIMESTAMP DEFAULT NOW()
+DROP TABLE IF EXISTS segment_visitors;
+CREATE TABLE segment_visitors (
+    id                  SERIAL PRIMARY KEY,
+    member_number       VARCHAR,
+    title               VARCHAR,
+    name                VARCHAR,
+    email               VARCHAR,
+    date_of_birth       DATE,
+    phone_number        VARCHAR,
+    address_line1       VARCHAR,
+    address_line2       VARCHAR,
+    city                VARCHAR,
+    state               VARCHAR,
+    postal_code         VARCHAR,
+    country             VARCHAR,
+    visitor_type        VARCHAR,
+    total_reservations  INTEGER,
+    last_visit          DATE,
+    check_in_date       DATE,
+    check_out_date      DATE,
+    season              VARCHAR,
+    created_at          TIMESTAMP DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS segment_amenities (
-    id SERIAL PRIMARY KEY,
-    member_number VARCHAR,
-    name VARCHAR,
-    email VARCHAR,
-    top_amenity VARCHAR,
-    top_amenity_spend NUMERIC,
+DROP TABLE IF EXISTS segment_amenities;
+CREATE TABLE segment_amenities (
+    id                  SERIAL PRIMARY KEY,
+    member_number       VARCHAR,
+    title               VARCHAR,
+    name                VARCHAR,
+    email               VARCHAR,
+    date_of_birth       DATE,
+    phone_number        VARCHAR,
+    address_line1       VARCHAR,
+    address_line2       VARCHAR,
+    city                VARCHAR,
+    state               VARCHAR,
+    postal_code         VARCHAR,
+    country             VARCHAR,
+    top_amenity         VARCHAR,
+    top_amenity_spend   NUMERIC,
     total_amenity_spend NUMERIC,
-    check_in_date DATE,
-    check_out_date DATE,
-    season VARCHAR,
-    created_at TIMESTAMP DEFAULT NOW()
+    check_in_date       DATE,
+    check_out_date      DATE,
+    season              VARCHAR,
+    created_at          TIMESTAMP DEFAULT NOW()
+)
+
+
+CREATE TABLE IF NOT EXISTS segment_config (
+    key   VARCHAR PRIMARY KEY,
+    value NUMERIC NOT NULL
 );
+
+-- Seed defaults if not already set
+INSERT INTO segment_config (key, value)
+VALUES ('high_spend_threshold', 10000),
+       ('low_spend_threshold',  1000)
+ON CONFLICT (key) DO NOTHING;
 """
-# Execute DDL on startup to ensure tables exist
+
 with get_conn() as conn:
     with conn.cursor() as cur:
         for stmt in DDL.split(";"):
             if stmt.strip():
                 cur.execute(stmt)
     conn.commit()
+
 
 # ─────────────────────────────────────────────
 # UTIL: SPEND CATEGORIZATION
@@ -146,11 +195,10 @@ def truncate_tables(conn):
         cur.execute("TRUNCATE segment_spenders, segment_visitors, segment_amenities")
 
 
-
 # ─────────────────────────────────────────────
 # 1. SPENDERS
 # ─────────────────────────────────────────────
-def build_spenders(conn, seasons):
+def  build_spenders(conn, seasons, high_spend, low_spend):
     sql = """
         WITH spend AS (
             SELECT
@@ -173,15 +221,35 @@ def build_spenders(conn, seasons):
         )
         SELECT
             s.member_number,
-            s.guest_name AS name,
+            m.prefix           AS title,
+            s.guest_name       AS name,
             m.email,
+            m.date_of_birth,
+            p.phone_number,
+            a.address_line1,
+            a.address_line2,
+            a.city,
+            a.state,
+            a.postal_code,
+            a.country,
             s.net_spend,
             s.spend_items,
             ls.check_in_date,
             ls.check_out_date
         FROM spend s
-        LEFT JOIN latest_stay ls ON ls.member_number = s.member_number
-        LEFT JOIN members m ON m.member_number = s.member_number;
+        LEFT JOIN latest_stay ls
+            ON ls.member_number = s.member_number
+        LEFT JOIN members m
+            ON m.member_number = s.member_number
+        LEFT JOIN member_addresses a
+            ON a.member_number = s.member_number
+        LEFT JOIN LATERAL (
+            SELECT phone_number
+            FROM member_phones mp
+            WHERE mp.member_number = s.member_number
+            ORDER BY id
+            LIMIT 1
+        ) p ON TRUE
     """
 
     with conn.cursor() as cur:
@@ -193,35 +261,45 @@ def build_spenders(conn, seasons):
         for r in rows:
             spend = r["net_spend"] or 0
 
-            if spend > HIGH_SPEND:
+            if spend > high_spend:
                 tier = "High Spender"
-            elif spend >= LOW_SPEND:
+            elif spend >= low_spend:
                 tier = "Medium Spender"
             else:
                 tier = "Low Spender"
 
             categories = categorize_spend(r.get("spend_items"))
-            
-            #get season for check-in date (if available)
+
             season = None
             if r["check_in_date"]:
                 _, season = season_for_date(r["check_in_date"], seasons)
 
             cur.execute("""
                 INSERT INTO segment_spenders
-                (member_number, name, email, tier, net_spend,
-                 spend_categories, check_in_date, check_out_date, season)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    (member_number, title, name, email, date_of_birth, phone_number,
+                     address_line1, address_line2, city, state, postal_code, country,
+                     tier, net_spend, spend_categories,
+                     check_in_date, check_out_date, season)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (
                 r["member_number"],
+                r["title"],
                 r["name"],
                 r["email"],
-                tier,
-                spend,
-                categories,
+                r["date_of_birth"],
+                r["phone_number"],
+                r["address_line1"],
+                r["address_line2"],
+                r["city"],
+                r["state"],
+                r["postal_code"],
+                r["country"],
+                tier,           # VARCHAR  — "High / Medium / Low Spender"
+                spend,          # NUMERIC  — actual spend value
+                categories,     # TEXT[]   — spend category labels
                 r["check_in_date"],
                 r["check_out_date"],
-                season
+                season,
             ))
 
 
@@ -237,7 +315,7 @@ def build_visitors(conn, seasons):
                 member_number,
                 guest_name,
                 COUNT(DISTINCT conf_code) AS total_reservations,
-                MAX(check_out_date) AS last_visit
+                MAX(check_out_date)       AS last_visit
             FROM folios
             WHERE member_number IS NOT NULL
             GROUP BY member_number, guest_name
@@ -253,15 +331,35 @@ def build_visitors(conn, seasons):
         )
         SELECT
             v.member_number,
-            v.guest_name AS name,
+            m.prefix           AS title,
+            v.guest_name       AS name,
             m.email,
+            m.date_of_birth,
+            p.phone_number,
+            a.address_line1,
+            a.address_line2,
+            a.city,
+            a.state,
+            a.postal_code,
+            a.country,
             v.total_reservations,
             v.last_visit,
             ls.check_in_date,
             ls.check_out_date
         FROM visits v
-        LEFT JOIN latest_stay ls ON ls.member_number = v.member_number
-        LEFT JOIN members m ON m.member_number = v.member_number;
+        LEFT JOIN latest_stay ls
+            ON ls.member_number = v.member_number
+        LEFT JOIN members m
+            ON m.member_number = v.member_number
+        LEFT JOIN member_addresses a
+            ON a.member_number = v.member_number
+        LEFT JOIN LATERAL (
+            SELECT phone_number
+            FROM member_phones mp
+            WHERE mp.member_number = v.member_number
+            ORDER BY id
+            LIMIT 1
+        ) p ON TRUE
     """
 
     with conn.cursor() as cur:
@@ -271,7 +369,7 @@ def build_visitors(conn, seasons):
         rows = [dict(zip(cols, r)) for r in rows]
 
         for r in rows:
-            res = r["total_reservations"] or 0
+            res  = r["total_reservations"] or 0
             last = r["last_visit"]
 
             if res >= FREQUENT_MIN:
@@ -283,57 +381,81 @@ def build_visitors(conn, seasons):
             else:
                 vtype = "Regular"
 
-            #get season for check-in date (if available)
             season = None
             if r["check_in_date"]:
                 _, season = season_for_date(r["check_in_date"], seasons)
 
             cur.execute("""
                 INSERT INTO segment_visitors
-                (member_number, name, email, visitor_type,
-                 total_reservations, last_visit,
-                 check_in_date, check_out_date, season)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    (member_number, title, name, email, date_of_birth, phone_number,
+                     address_line1, address_line2, city, state, postal_code, country,
+                     visitor_type, total_reservations, last_visit,
+                     check_in_date, check_out_date, season)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (
                 r["member_number"],
+                r["title"],
                 r["name"],
                 r["email"],
+                r["date_of_birth"],
+                r["phone_number"],
+                r["address_line1"],
+                r["address_line2"],
+                r["city"],
+                r["state"],
+                r["postal_code"],
+                r["country"],
                 vtype,
                 res,
                 r["last_visit"],
                 r["check_in_date"],
                 r["check_out_date"],
-                season
+                season,
             ))
 
 
 # ─────────────────────────────────────────────
-# 3. AMENITIES (NO GROUPING — AS REQUESTED)
+# 3. AMENITIES
 # ─────────────────────────────────────────────
 def build_amenities(conn, seasons):
     sql = """
-    SELECT
-        a.member_id AS member_number,
-        a.member_full_name AS name,
-        m.email,
-        a.top_amenity,
-        a.top_amenity_spend,
-        a.total_amenity_spend,
-        f.check_in_date,
-        f.check_out_date
-    FROM member_amenity_profile a
-
-    LEFT JOIN LATERAL (
         SELECT
-            check_in_date,
-            check_out_date
-        FROM folios
-        WHERE member_number = a.member_id
-        ORDER BY check_in_date DESC
-        LIMIT 1
-    ) f ON TRUE
-    LEFT JOIN members m
-        ON m.member_number = a.member_id;
+            a.member_id          AS member_number,
+            m.prefix             AS title,
+            a.member_full_name   AS name,
+            m.email,
+            m.date_of_birth,
+            p.phone_number,
+            addr.address_line1,
+            addr.address_line2,
+            addr.city,
+            addr.state,
+            addr.postal_code,
+            addr.country,
+            a.top_amenity,
+            a.top_amenity_spend,
+            a.total_amenity_spend,
+            f.check_in_date,
+            f.check_out_date
+        FROM member_amenity_profile a
+        LEFT JOIN members m
+            ON m.member_number = a.member_id
+        LEFT JOIN member_addresses addr
+            ON addr.member_number = a.member_id
+        LEFT JOIN LATERAL (
+            SELECT phone_number
+            FROM member_phones mp
+            WHERE mp.member_number = a.member_id
+            ORDER BY id
+            LIMIT 1
+        ) p ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT check_in_date, check_out_date
+            FROM folios
+            WHERE member_number = a.member_id
+            ORDER BY check_in_date DESC
+            LIMIT 1
+        ) f ON TRUE
     """
 
     with conn.cursor() as cur:
@@ -343,55 +465,58 @@ def build_amenities(conn, seasons):
         rows = [dict(zip(cols, r)) for r in rows]
 
         for r in rows:
-            #get season for check-in date (if available)
             season = None
             if r["check_in_date"]:
                 _, season = season_for_date(r["check_in_date"], seasons)
 
             cur.execute("""
                 INSERT INTO segment_amenities
-                (member_number, name, email, top_amenity,
-                 top_amenity_spend, total_amenity_spend,
-                 check_in_date, check_out_date, season)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    (member_number, title, name, email, date_of_birth, phone_number,
+                     address_line1, address_line2, city, state, postal_code, country,
+                     top_amenity, top_amenity_spend, total_amenity_spend,
+                     check_in_date, check_out_date, season)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (
                 r["member_number"],
+                r["title"],
                 r["name"],
                 r["email"],
+                r["date_of_birth"],
+                r["phone_number"],
+                r["address_line1"],
+                r["address_line2"],
+                r["city"],
+                r["state"],
+                r["postal_code"],
+                r["country"],
                 r["top_amenity"],
                 r["top_amenity_spend"],
                 r["total_amenity_spend"],
                 r["check_in_date"],
                 r["check_out_date"],
-                season
+                season,
             ))
+
 
 # ─────────────────────────────────────────────
 # MASTER PIPELINE
 # ─────────────────────────────────────────────
 def refresh_all_segments():
     conn = get_conn()
-
     try:
         log.info("Refreshing segment tables...")
-
         truncate_tables(conn)
-        
         seasons = load_active_seasons(conn)
-
-        build_spenders(conn, seasons)
+        high_spend, low_spend = load_thresholds(conn)   # ← add this
+        build_spenders(conn, seasons, high_spend, low_spend)  # ← pass them in
         build_visitors(conn, seasons)
         build_amenities(conn, seasons)
-
         conn.commit()
-
         log.info("Segment refresh complete.")
-
     except Exception as e:
         conn.rollback()
         log.error(f"Segment refresh failed: {e}")
         raise
-
     finally:
         conn.close()
 
@@ -401,5 +526,3 @@ def refresh_all_segments():
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
     refresh_all_segments()
-
-
