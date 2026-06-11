@@ -137,7 +137,7 @@ CREATE TABLE segment_amenities (
     check_out_date      DATE,
     season              VARCHAR,
     created_at          TIMESTAMP DEFAULT NOW()
-)
+);
 
 
 CREATE TABLE IF NOT EXISTS segment_config (
@@ -158,7 +158,6 @@ with get_conn() as conn:
             if stmt.strip():
                 cur.execute(stmt)
     conn.commit()
-
 
 # ─────────────────────────────────────────────
 # UTIL: SPEND CATEGORIZATION

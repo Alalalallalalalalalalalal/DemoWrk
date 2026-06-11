@@ -80,4 +80,8 @@ export const analyticsApi = {
 
   // Member segments
   memberSegments: () => fetchData("/analytics/ml/member-segments"),
+  // Inside the analyticsApi object, add alongside memberSegments:
+  getSegmentConfig: () => fetchData("/analytics/ml/segment-config"),
+  updateSegmentConfig: (payload) =>
+    fetchData("/analytics/ml/segment-config", jsonRequest("PATCH", payload)),
 };

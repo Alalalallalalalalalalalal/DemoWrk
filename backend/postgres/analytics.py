@@ -1158,3 +1158,31 @@ def member_segments(db: Session = Depends(get_db)):
         "amenities": [dict(r) for r in amenities]
     }
 
+@router.get("/ml/segment-config")
+def get_segment_config(db: Session = Depends(get_db)):
+    rows = db.execute(
+        text("SELECT key, value FROM segment_config WHERE key IN ('high_spend_threshold', 'low_spend_threshold')")
+    ).mappings().all()
+    return {row["key"]: float(row["value"]) for row in rows}
+
+
+@router.patch("/ml/segment-config")
+def update_segment_config(payload: dict, db: Session = Depends(get_db)):
+    allowed_keys = {"high_spend_threshold", "low_spend_threshold"}
+    updates = {k: v for k, v in payload.items() if k in allowed_keys}
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid keys provided")
+
+    for key, value in updates.items():
+        db.execute(
+            text("""
+                INSERT INTO segment_config (key, value) VALUES (:key, :value)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """),
+            {"key": key, "value": value},
+        )
+
+    db.commit()
+    return {"ok": True, "updated": updates}
+
