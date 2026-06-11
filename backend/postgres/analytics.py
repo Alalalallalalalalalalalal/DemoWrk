@@ -701,61 +701,63 @@ def search_table(
 
 AMENITY_CASE_SQL = """
     CASE
-        WHEN description ~* '\m(spa|massage|facial)\M' THEN 'Spa'
-        WHEN description ~* '\m(golf|pro shop|cart)\M' THEN 'Golf'
-        WHEN description ~* '\mgrill\M' THEN 'Grill'
-        WHEN description ~* '\mbar\M' THEN 'Bar'
-        WHEN description ~* '\m(restaurant|dinner|lunch|breakfast)\M' THEN 'Restaurant'
-        WHEN description ~* '\mtennis\M' THEN 'Tennis'
-        WHEN description ~* '\mboutique\M' THEN 'Boutique'
-        WHEN description ~* '\mshop\M' THEN 'Shop'
-        WHEN description ~* '\mcommissary\M' THEN 'Commissary'
+        WHEN description ~* '\\m(spa|massage|facial)\\M' THEN 'Spa'
+        WHEN description ~* '\\m(golf|pro shop|cart)\\M' THEN 'Golf'
+        WHEN description ~* '\\mgrill\\M' THEN 'Grill'
+        WHEN description ~* '\\mbar\\M' THEN 'Bar'
+        WHEN description ~* '\\m(restaurant|dinner|lunch|breakfast)\\M' THEN 'Restaurant'
+        WHEN description ~* '\\mtennis\\M' THEN 'Tennis'
+        WHEN description ~* '\\mboutique\\M' THEN 'Boutique'
+        WHEN description ~* '\\mshop\\M' THEN 'Shop'
+        WHEN description ~* '\\mcommissary\\M' THEN 'Commissary'
         ELSE NULL
     END
 """
 
 AMENITY_EXCLUDED_SQL = """
-    description !~* '\m(villa|rental|airport|transfer|shuttle|transport|transportation|membership|dues|fee)\M'
+    description !~* '\\m(villa|rental|airport|transfer|shuttle|transport|transportation|membership|dues|fee)\\M'
 """
 
 SEASON_JOIN_SQL = """
     JOIN active_seasons s
       ON (
-        s.start_month < s.end_month
-        OR (s.start_month = s.end_month AND s.start_day <= s.end_day)
-      )
-      AND (
-        EXTRACT(MONTH FROM ref_date)::INT > s.start_month
-        OR (
-          EXTRACT(MONTH FROM ref_date)::INT = s.start_month
-          AND EXTRACT(DAY FROM ref_date)::INT >= s.start_day
+        (
+          s.start_month < s.end_month
+          OR (s.start_month = s.end_month AND s.start_day <= s.end_day)
+        )
+        AND (
+          EXTRACT(MONTH FROM ref_date)::INT > s.start_month
+          OR (
+            EXTRACT(MONTH FROM ref_date)::INT = s.start_month
+            AND EXTRACT(DAY FROM ref_date)::INT >= s.start_day
+          )
+        )
+        AND (
+          EXTRACT(MONTH FROM ref_date)::INT < s.end_month
+          OR (
+            EXTRACT(MONTH FROM ref_date)::INT = s.end_month
+            AND EXTRACT(DAY FROM ref_date)::INT <= s.end_day
+          )
         )
       )
-      AND (
-        EXTRACT(MONTH FROM ref_date)::INT < s.end_month
-        OR (
-          EXTRACT(MONTH FROM ref_date)::INT = s.end_month
-          AND EXTRACT(DAY FROM ref_date)::INT <= s.end_day
+      OR (
+        (
+          s.start_month > s.end_month
+          OR (s.start_month = s.end_month AND s.start_day > s.end_day)
+        )
+        AND (
+          EXTRACT(MONTH FROM ref_date)::INT > s.start_month
+          OR (
+            EXTRACT(MONTH FROM ref_date)::INT = s.start_month
+            AND EXTRACT(DAY FROM ref_date)::INT >= s.start_day
+          )
+          OR EXTRACT(MONTH FROM ref_date)::INT < s.end_month
+          OR (
+            EXTRACT(MONTH FROM ref_date)::INT = s.end_month
+            AND EXTRACT(DAY FROM ref_date)::INT <= s.end_day
+          )
         )
       )
-    OR (
-      (
-        s.start_month > s.end_month
-        OR (s.start_month = s.end_month AND s.start_day > s.end_day)
-      )
-      AND (
-        EXTRACT(MONTH FROM ref_date)::INT > s.start_month
-        OR (
-          EXTRACT(MONTH FROM ref_date)::INT = s.start_month
-          AND EXTRACT(DAY FROM ref_date)::INT >= s.start_day
-        )
-        OR EXTRACT(MONTH FROM ref_date)::INT < s.end_month
-        OR (
-          EXTRACT(MONTH FROM ref_date)::INT = s.end_month
-          AND EXTRACT(DAY FROM ref_date)::INT <= s.end_day
-        )
-      )
-    )
 """
 
 
@@ -799,6 +801,25 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                     NULLIF(TRIM(m.member_full_name), ''),
                     NULLIF(TRIM(m.member_name), '')
                 ) AS member_full_name,
+
+                m.email,
+                mp.phone_number AS telephone,
+                TRIM(
+                    CONCAT_WS(
+                        ', ',
+                        NULLIF(a.address_line1, ''),
+                        NULLIF(a.address_line2, ''),
+                        NULLIF(a.city, ''),
+                        NULLIF(a.state, ''),
+                        NULLIF(a.postal_code, ''),
+                        NULLIF(a.country, '')
+                    )
+                ) AS address,
+                a.country,
+                a.state,
+                m.prefix AS title,
+                m.date_of_birth AS dob,
+
                 f.description,
                 COALESCE(f.amount, 0) AS amount,
                 COALESCE(f.check_in_date, f.transaction_date)::DATE AS ref_date,
@@ -806,7 +827,26 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                 f.check_out_date,
                 {AMENITY_CASE_SQL} AS amenity
             FROM folios f
-            LEFT JOIN members m ON f.member_number = m.member_number
+            LEFT JOIN members m
+                ON f.member_number = m.member_number
+            LEFT JOIN member_addresses a
+                ON f.member_number = a.member_number
+            LEFT JOIN (
+                SELECT DISTINCT ON (member_number)
+                    member_number,
+                    phone_number
+                FROM member_phones
+                WHERE phone_number IS NOT NULL
+                ORDER BY
+                    member_number,
+                    CASE phone_type
+                        WHEN 'cell' THEN 1
+                        WHEN 'home' THEN 2
+                        WHEN 'business' THEN 3
+                        ELSE 4
+                    END
+            ) mp
+                ON f.member_number = mp.member_number
             WHERE f.member_number IS NOT NULL
               AND f.description IS NOT NULL
               AND COALESCE(f.check_in_date, f.transaction_date) IS NOT NULL
@@ -816,6 +856,13 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
             SELECT
                 ar.member_id,
                 ar.member_full_name,
+                ar.email,
+                ar.telephone,
+                ar.address,
+                ar.country,
+                ar.state,
+                ar.title,
+                ar.dob,
                 ar.description,
                 ar.amount,
                 ar.ref_date,
@@ -882,6 +929,13 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
         SELECT year,
                member_id,
                member_full_name,
+               email,
+               telephone,
+               address,
+               country,
+               state,
+               title,
+               TO_CHAR(dob, 'Mon DD, YYYY') AS dob,
                season,
                amenity,
                COUNT(*)::INT AS usage_count,
@@ -889,7 +943,20 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                TO_CHAR(check_in_date, 'Mon DD, YYYY') AS check_in_fmt,
                TO_CHAR(check_out_date, 'Mon DD, YYYY') AS check_out_fmt
         FROM season_amenity_rows
-        GROUP BY year, member_id, member_full_name, season, check_in_date, check_out_date, amenity
+        GROUP BY year,
+                 member_id,
+                 member_full_name,
+                 email,
+                 telephone,
+                 address,
+                 country,
+                 state,
+                 title,
+                 dob,
+                 season,
+                 check_in_date,
+                 check_out_date,
+                 amenity
         ORDER BY check_in_date DESC NULLS LAST
         LIMIT 2000
     """)
@@ -1002,7 +1069,8 @@ def ml_amenity_season_insights(
         return [dict(row) for row in db.execute(text(sql)).mappings().all()]
 
     spend_raw = rows("""
-        SELECT amenity, season,
+        SELECT amenity,
+               season,
                total_spend,
                transaction_count,
                avg_spend_per_visit,
@@ -1025,6 +1093,13 @@ def ml_amenity_season_insights(
     visits_raw = rows("""
         SELECT member_id,
                member_full_name,
+               email,
+               telephone,
+               address,
+               country,
+               state,
+               title,
+               dob,
                season,
                amenity,
                usage_count,
@@ -1056,7 +1131,6 @@ def ml_amenity_season_insights(
         "seasonVillaBedroom": villa_raw,
     }
 
-    
 #-----------------------------#
 # Endpoints for Segmentation
 #-----------------------------#

@@ -29,7 +29,9 @@ import {
   Home,
   TrendingUp,
   Users,
+  Download,
 } from "lucide-react";
+import * as XLSX from "xlsx";
 import { analyticsApi } from "../api/analytics";
 
 /* ── Design tokens (match existing dashboard palette) ──────────── */
@@ -173,6 +175,52 @@ function getRowYear(row) {
 function rowMatchesYear(row, year) {
   if (year === "All") return true;
   return String(getRowYear(row)) === String(year);
+}
+
+function getYearOptionsFromRows(rows = []) {
+  return [
+    "All",
+    ...Array.from(new Set(rows.map((row) => getRowYear(row)).filter(Boolean)))
+      .sort((a, b) => b - a)
+      .map(String),
+  ];
+}
+
+function YearFilterControl({ value, onChange, years, label = "Year" }) {
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+      }}
+    >
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.07em",
+          color: C.textMuted,
+          fontFamily: "sans-serif",
+        }}
+      >
+        {label}
+      </span>
+      <select
+        style={{ ...select, minWidth: 125 }}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {years.map((year) => (
+          <option key={year} value={year}>
+            {year === "All" ? "All Years" : year}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 /* ── SearchInput ────────────────────────────────────────────────── */
@@ -548,6 +596,7 @@ function AmenitySeasonHeatmap({ data, onCellClick }) {
 function MemberAmenityProfileTable({ data }) {
   const [search, setSearch] = useState("");
   const [amenity, setAmenity] = useState("All");
+  const [period, setPeriod] = useState("4");
   const [sort, setSort] = useState({ col: "total_amenity_spend", dir: "desc" });
   const [page, setPage] = useState(1);
   const PAGE = 25;
@@ -559,7 +608,26 @@ function MemberAmenityProfileTable({ data }) {
 
   const filtered = useMemo(() => {
     let rows = data;
+
+    if (period !== "All") {
+      const years = data
+        .map((r) => getRowYear(r))
+        .filter(Boolean)
+        .sort((a, b) => b - a);
+
+      const latestYear = years[0];
+
+      if (latestYear) {
+        const minYear = latestYear - Number(period) + 1;
+        rows = rows.filter((r) => {
+          const year = getRowYear(r);
+          return year && year >= minYear && year <= latestYear;
+        });
+      }
+    }
+
     if (amenity !== "All") rows = rows.filter((r) => r.top_amenity === amenity);
+
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(
@@ -570,15 +638,30 @@ function MemberAmenityProfileTable({ data }) {
             .includes(q),
       );
     }
+
     return [...rows].sort((a, b) => {
       const av = a[sort.col] ?? 0;
       const bv = b[sort.col] ?? 0;
       return sort.dir === "asc" ? (av > bv ? 1 : -1) : av < bv ? 1 : -1;
     });
-  }, [data, search, amenity, sort]);
+  }, [data, search, amenity, period, sort]);
 
   const totalPages = Math.ceil(filtered.length / PAGE);
   const visible = filtered.slice((page - 1) * PAGE, page * PAGE);
+
+  const exportFilteredProfiles = () => {
+    const rows = filtered.map((r) => ({
+      Year: getRowYear(r) ?? "",
+      "Member Name": r.member_full_name ?? "",
+      "Member ID": r.member_id ?? "",
+      "Preferred Amenity": r.top_amenity ?? "",
+      "Preferred Amenity Spend (USD)": r.top_amenity_spend ?? "",
+      "Total Amenity Spend (USD)": r.total_amenity_spend ?? "",
+    }));
+
+    const date = new Date().toISOString().split("T")[0];
+    downloadRowsAsCsv(rows, `member_amenity_profiles_${date}.csv`);
+  };
 
   const sortBy = (col) =>
     setSort((s) => ({
@@ -608,7 +691,6 @@ function MemberAmenityProfileTable({ data }) {
         ]}
       />
 
-      {/* Filters */}
       <div
         style={{
           display: "flex",
@@ -626,6 +708,7 @@ function MemberAmenityProfileTable({ data }) {
           }}
           placeholder="Search name or ID…"
         />
+
         <select
           style={select}
           value={amenity}
@@ -638,6 +721,44 @@ function MemberAmenityProfileTable({ data }) {
             <option key={a}>{a}</option>
           ))}
         </select>
+
+        <select
+          style={select}
+          value={period}
+          onChange={(e) => {
+            setPeriod(e.target.value);
+            setPage(1);
+          }}
+        >
+          <option value="4">Last 4 Years</option>
+          <option value="3">Last 3 Years</option>
+          <option value="2">Last 2 Years</option>
+          <option value="1">Latest Year</option>
+          <option value="All">All Years</option>
+        </select>
+
+        <button
+          onClick={exportFilteredProfiles}
+          disabled={filtered.length === 0}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 12px",
+            borderRadius: 8,
+            border: `1px solid ${C.borderHover}`,
+            background: C.accentLight,
+            color: C.accent,
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: filtered.length === 0 ? "not-allowed" : "pointer",
+            fontFamily: "sans-serif",
+          }}
+        >
+          <Download size={13} />
+          Export Filtered
+        </button>
+
         <span
           style={{
             fontSize: 12,
@@ -650,7 +771,6 @@ function MemberAmenityProfileTable({ data }) {
         </span>
       </div>
 
-      {/* Table */}
       <div
         style={{
           overflowX: "auto",
@@ -669,6 +789,7 @@ function MemberAmenityProfileTable({ data }) {
           >
             <thead>
               <tr>
+                <th style={th}>Year</th>
                 <th style={th}>Member Name</th>
                 <th style={th}>Member ID</th>
                 <th style={th}>Preferred Amenity</th>
@@ -692,7 +813,7 @@ function MemberAmenityProfileTable({ data }) {
               {visible.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={6}
                     style={{
                       ...td,
                       textAlign: "center",
@@ -711,6 +832,9 @@ function MemberAmenityProfileTable({ data }) {
                       background: i % 2 === 0 ? "transparent" : C.rowAlt,
                     }}
                   >
+                    <td style={{ ...td, color: C.textMuted }}>
+                      {getRowYear(r) ?? "—"}
+                    </td>
                     <td style={{ ...td, fontWeight: 600 }}>
                       {r.member_full_name ?? "—"}
                     </td>
@@ -740,7 +864,6 @@ function MemberAmenityProfileTable({ data }) {
         </div>
       </div>
 
-      {/* Pagination */}
       {totalPages > 1 && (
         <div
           style={{
@@ -793,45 +916,257 @@ function MemberAmenityProfileTable({ data }) {
   );
 }
 
+function downloadRowsAsCsv(rows, filename) {
+  if (!rows.length) return;
+
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  const csv = XLSX.utils.sheet_to_csv(worksheet);
+
+  const blob = new Blob([csv], {
+    type: "text/csv;charset=utf-8;",
+  });
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  link.click();
+
+  URL.revokeObjectURL(url);
+}
+
+function VisitSidePanel({ visit, onClose }) {
+  if (!visit) return null;
+
+  const rows = [
+    { label: "Member ID", value: visit.member_id },
+    { label: "Email", value: visit.email },
+    { label: "Telephone", value: visit.telephone },
+    { label: "Address", value: visit.address },
+    { label: "Country", value: visit.country },
+    { label: "State", value: visit.state },
+    { label: "Title", value: visit.title },
+    { label: "DOB", value: visit.dob },
+    { label: "Season", value: visit.season },
+    { label: "Amenity", value: visit.amenity },
+    { label: "Check-In", value: visit.check_in_fmt },
+    { label: "Check-Out", value: visit.check_out_fmt },
+    { label: "Usage Count", value: visit.usage_count },
+    {
+      label: "Total Spend",
+      value: `$${Number(visit.total_spend ?? 0).toLocaleString()}`,
+    },
+  ];
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(30,18,10,0.38)",
+          zIndex: 900,
+          backdropFilter: "blur(2px)",
+        }}
+      />
+
+      <div
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: "min(420px, 92vw)",
+          background: C.bg,
+          boxShadow: "-6px 0 36px rgba(0,0,0,0.13)",
+          zIndex: 901,
+          display: "flex",
+          flexDirection: "column",
+          overflowY: "auto",
+          borderLeft: `3px solid ${amenityColor(visit.amenity)}`,
+        }}
+      >
+        <div
+          style={{
+            background: C.accentLight,
+            borderBottom: `1px solid ${C.border}`,
+            padding: "22px 22px 18px",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <div>
+              <div
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.12em",
+                  color: amenityColor(visit.amenity),
+                  fontFamily: "sans-serif",
+                  marginBottom: 5,
+                }}
+              >
+                {visit.amenity || "Amenity Visit"}
+              </div>
+              <div
+                style={{
+                  fontSize: 19,
+                  fontWeight: 700,
+                  color: C.textPrimary,
+                  fontFamily: "sans-serif",
+                  lineHeight: 1.25,
+                }}
+              >
+                {visit.member_full_name || "Unknown Member"}
+              </div>
+            </div>
+
+            <button
+              onClick={onClose}
+              style={{
+                border: `1px solid ${C.border}`,
+                background: C.bg,
+                color: C.textMuted,
+                fontSize: 14,
+                cursor: "pointer",
+                padding: "3px 8px",
+                borderRadius: 6,
+                fontFamily: "sans-serif",
+                lineHeight: 1,
+              }}
+            >
+              close
+            </button>
+          </div>
+
+          <div style={{ marginTop: 14, display: "flex", gap: 24 }}>
+            <div>
+              <div style={{ fontSize: 10, color: C.textMuted }}>SPEND</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.accent }}>
+                ${Number(visit.total_spend ?? 0).toLocaleString()}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: C.textMuted }}>SEASON</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: C.teal }}>
+                {visit.season || "—"}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ padding: "18px 22px", flex: 1 }}>
+          <p
+            style={{
+              margin: "0 0 12px",
+              fontSize: 10,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              color: C.textMuted,
+              fontFamily: "sans-serif",
+            }}
+          >
+            Visit & Member Details
+          </p>
+
+          {rows.map(({ label, value }) => (
+            <div
+              key={label}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                padding: "9px 0",
+                borderBottom: `1px solid ${C.border}`,
+                gap: 12,
+              }}
+            >
+              <span style={{ fontSize: 12, color: C.textMuted }}>{label}</span>
+              <span
+                style={{
+                  fontSize: 12,
+                  color: C.textPrimary,
+                  fontWeight: 600,
+                  textAlign: "right",
+                }}
+              >
+                {String(value ?? "—")}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  );
+}
+
 /* ── MemberSeasonVisitsTable ────────────────────────────────────── */
 function MemberSeasonVisitsTable({
   data,
   initialSeason = "",
   initialAmenity = "",
+  initialYear = "All",
 }) {
   const [search, setSearch] = useState("");
   const [season, setSeason] = useState(initialSeason);
   const [amenity, setAmenity] = useState(initialAmenity);
+  const [year, setYear] = useState(initialYear || "All");
   const [page, setPage] = useState(1);
+  const [selectedVisit, setSelectedVisit] = useState(null);
   const PAGE = 30;
 
-  // Reset page when filters change
   useEffect(() => {
     setPage(1);
-  }, [search, season, amenity]);
-  // Sync external drill-down
+  }, [search, season, amenity, year]);
+
   useEffect(() => {
     setSeason(initialSeason);
   }, [initialSeason]);
+
   useEffect(() => {
     setAmenity(initialAmenity);
   }, [initialAmenity]);
+
+  useEffect(() => {
+    setYear(initialYear || "All");
+  }, [initialYear]);
 
   const seasons = useMemo(
     () => ["All", ...new Set(data.map((d) => d.season).filter(Boolean))],
     [data],
   );
+
   const amenities = useMemo(
     () => ["All", ...new Set(data.map((d) => d.amenity).filter(Boolean))],
     [data],
   );
 
+  const years = useMemo(
+    () => [
+      "All",
+      ...Array.from(new Set(data.map((d) => getRowYear(d)).filter(Boolean)))
+        .sort((a, b) => b - a)
+        .map(String),
+    ],
+    [data],
+  );
+
   const filtered = useMemo(() => {
     let rows = data;
+
+    if (year !== "All") {
+      rows = rows.filter((r) => String(getRowYear(r)) === String(year));
+    }
+
     if (season !== "All" && season)
       rows = rows.filter((r) => r.season === season);
+
     if (amenity !== "All" && amenity)
       rows = rows.filter((r) => r.amenity === amenity);
+
     if (search) {
       const q = search.toLowerCase();
       rows = rows.filter(
@@ -842,11 +1177,36 @@ function MemberSeasonVisitsTable({
             .includes(q),
       );
     }
+
     return rows;
-  }, [data, search, season, amenity]);
+  }, [data, search, season, amenity, year]);
 
   const totalPages = Math.ceil(filtered.length / PAGE);
   const visible = filtered.slice((page - 1) * PAGE, page * PAGE);
+
+  const exportFilteredVisits = () => {
+    const rows = filtered.map((r) => ({
+      Year: getRowYear(r) ?? "",
+      "Member Name": r.member_full_name ?? "",
+      "Member ID": r.member_id ?? "",
+      Email: r.email ?? "",
+      Telephone: r.telephone ?? "",
+      Address: r.address ?? "",
+      Country: r.country ?? "",
+      State: r.state ?? "",
+      Title: r.title ?? "",
+      DOB: r.dob ?? "",
+      "Business Season": r.season ?? "",
+      Amenity: r.amenity ?? "",
+      "Check-In Date": r.check_in_fmt ?? "",
+      "Check-Out Date": r.check_out_fmt ?? "",
+      "Usage Count": r.usage_count ?? "",
+      "Total Spend (USD)": r.total_spend ?? "",
+    }));
+
+    const date = new Date().toISOString().split("T")[0];
+    downloadRowsAsCsv(rows, `amenity_season_visits_${date}.csv`);
+  };
 
   return (
     <div style={card}>
@@ -882,7 +1242,6 @@ function MemberSeasonVisitsTable({
         </span>
       </div>
 
-      {/* Filters */}
       <div
         style={{
           display: "flex",
@@ -897,6 +1256,19 @@ function MemberSeasonVisitsTable({
           onChange={setSearch}
           placeholder="Search name or ID…"
         />
+
+        <select
+          style={select}
+          value={year}
+          onChange={(e) => setYear(e.target.value)}
+        >
+          {years.map((y) => (
+            <option key={y} value={y}>
+              {y === "All" ? "All Years" : y}
+            </option>
+          ))}
+        </select>
+
         <select
           style={select}
           value={season || "All"}
@@ -908,6 +1280,7 @@ function MemberSeasonVisitsTable({
             <option key={s}>{s}</option>
           ))}
         </select>
+
         <select
           style={select}
           value={amenity || "All"}
@@ -919,10 +1292,12 @@ function MemberSeasonVisitsTable({
             <option key={a}>{a}</option>
           ))}
         </select>
-        {(season || amenity || search) && (
+
+        {(year !== "All" || season || amenity || search) && (
           <button
             onClick={() => {
               setSearch("");
+              setYear("All");
               setSeason("");
               setAmenity("");
             }}
@@ -940,9 +1315,30 @@ function MemberSeasonVisitsTable({
             Clear filters
           </button>
         )}
+
+        <button
+          onClick={exportFilteredVisits}
+          disabled={filtered.length === 0}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 12px",
+            borderRadius: 8,
+            border: `1px solid ${C.borderHover}`,
+            background: C.accentLight,
+            color: C.accent,
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: filtered.length === 0 ? "not-allowed" : "pointer",
+            fontFamily: "sans-serif",
+          }}
+        >
+          <Download size={13} />
+          Export Filtered
+        </button>
       </div>
 
-      {/* Table */}
       <div
         style={{
           overflowX: "auto",
@@ -962,6 +1358,7 @@ function MemberSeasonVisitsTable({
             <thead>
               <tr>
                 {[
+                  "Year",
                   "Member Name",
                   "Member ID",
                   "Business Season",
@@ -981,7 +1378,7 @@ function MemberSeasonVisitsTable({
               {visible.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     style={{
                       ...td,
                       textAlign: "center",
@@ -996,10 +1393,22 @@ function MemberSeasonVisitsTable({
                 visible.map((r, i) => (
                   <tr
                     key={i}
+                    onClick={() => setSelectedVisit(r)}
                     style={{
+                      cursor: "pointer",
                       background: i % 2 === 0 ? "transparent" : C.rowAlt,
                     }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = C.accentLight)
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background =
+                        i % 2 === 0 ? "transparent" : C.rowAlt)
+                    }
                   >
+                    <td style={{ ...td, color: C.textMuted }}>
+                      {getRowYear(r) ?? "—"}
+                    </td>
                     <td style={{ ...td, fontWeight: 600 }}>
                       {r.member_full_name ?? "—"}
                     </td>
@@ -1060,7 +1469,11 @@ function MemberSeasonVisitsTable({
         </div>
       </div>
 
-      {/* Pagination */}
+      <VisitSidePanel
+        visit={selectedVisit}
+        onClose={() => setSelectedVisit(null)}
+      />
+
       {totalPages > 1 && (
         <div
           style={{
@@ -1116,10 +1529,24 @@ function MemberSeasonVisitsTable({
 /* ── SeasonCapacityCards ─────────────────────────────────────────── */
 function SeasonCapacityCards({ data }) {
   const [expanded, setExpanded] = useState(null);
+  const [year, setYear] = useState("All");
+
+  const years = useMemo(() => getYearOptionsFromRows(data), [data]);
+
+  useEffect(() => {
+    if (!years.includes(year)) {
+      setYear("All");
+    }
+  }, [year, years]);
+
+  const filteredData = useMemo(
+    () => data.filter((row) => rowMatchesYear(row, year)),
+    [data, year],
+  );
 
   useEffect(() => {
     setExpanded(null);
-  }, [data]);
+  }, [filteredData]);
 
   if (!data?.length)
     return (
@@ -1137,241 +1564,304 @@ function SeasonCapacityCards({ data }) {
     }
   };
 
+  const exportSeasonCapacity = () => {
+    const rows = filteredData.map((r) => ({
+      Year: getRowYear(r) ?? "",
+      Season: r.season ?? "",
+      "Total Bookings": r.total_bookings ?? "",
+      "Total Nights": r.total_nights ?? "",
+      "Average Nights": r.avg_nights ?? "",
+      "Unique Members": r.unique_members ?? "",
+      "Top Villa": r.top_villa ?? "",
+      "Top Bedroom Count": r.top_bedroom_count ?? "",
+      "Bedroom Distribution": r.bedroom_distribution ?? "",
+    }));
+
+    const date = new Date().toISOString().split("T")[0];
+    downloadRowsAsCsv(rows, `season_villa_bedroom_summary_${date}.csv`);
+  };
+
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))",
-        gap: 14,
-      }}
-    >
-      {data.map((s, i) => {
-        const dist = parseDist(s.bedroom_distribution);
-        const isOpen = expanded === i;
-        const distEntries = Object.entries(dist).sort(
-          (a, b) => Number(b[1]) - Number(a[1]),
-        );
-        const year = getRowYear(s);
+    <>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 10,
+          flexWrap: "wrap",
+          marginBottom: 14,
+        }}
+      >
+        <YearFilterControl value={year} onChange={setYear} years={years} />
+        <button
+          onClick={exportSeasonCapacity}
+          disabled={!filteredData.length}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "6px 12px",
+            borderRadius: 8,
+            border: `1px solid ${C.borderHover}`,
+            background: C.accentLight,
+            color: C.accent,
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: !filteredData.length ? "not-allowed" : "pointer",
+            fontFamily: "sans-serif",
+          }}
+        >
+          <Download size={13} />
+          Export Summary
+        </button>
+      </div>
 
-        return (
-          <div
-            key={`${year ?? "all"}-${s.season}-${i}`}
-            style={{
-              ...card,
-              borderTop: `3px solid ${CHART_COLORS[i % CHART_COLORS.length]}`,
-              cursor: "pointer",
-            }}
-            onClick={() => setExpanded(isOpen ? null : i)}
-          >
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(280px,1fr))",
+          gap: 14,
+        }}
+      >
+        {filteredData.map((s, i) => {
+          const dist = parseDist(s.bedroom_distribution);
+          const isOpen = expanded === i;
+          const distEntries = Object.entries(dist).sort(
+            (a, b) => Number(b[1]) - Number(a[1]),
+          );
+          const year = getRowYear(s);
+
+          return (
             <div
+              key={`${year ?? "all"}-${s.season}-${i}`}
               style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                marginBottom: 10,
+                ...card,
+                borderTop: `3px solid ${CHART_COLORS[i % CHART_COLORS.length]}`,
+                cursor: "pointer",
               }}
+              onClick={() => setExpanded(isOpen ? null : i)}
             >
-              <p
-                style={{
-                  margin: 0,
-                  fontSize: 13,
-                  fontWeight: 700,
-                  color: C.textPrimary,
-                  fontFamily: "sans-serif",
-                }}
-              >
-                {s.season} {year ? `· ${year}` : ""}
-              </p>
-              {isOpen ? (
-                <ChevronUp size={14} color={C.textMuted} />
-              ) : (
-                <ChevronDown size={14} color={C.textMuted} />
-              )}
-            </div>
-
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 8,
-                marginBottom: isOpen ? 14 : 0,
-              }}
-            >
-              {[
-                {
-                  label: "Bookings",
-                  value: s.total_bookings?.toLocaleString() ?? "—",
-                },
-                {
-                  label: "Nights",
-                  value: s.total_nights?.toLocaleString() ?? "—",
-                },
-                {
-                  label: "Avg Stay",
-                  value: s.avg_nights != null ? `${s.avg_nights}n` : "—",
-                },
-                {
-                  label: "Members",
-                  value: s.unique_members?.toLocaleString() ?? "—",
-                },
-              ].map(({ label, value }) => (
-                <div
-                  key={label}
-                  style={{
-                    background: C.headerBg,
-                    borderRadius: 8,
-                    padding: "6px 10px",
-                  }}
-                >
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 10,
-                      color: C.textMuted,
-                      fontFamily: "sans-serif",
-                      textTransform: "uppercase",
-                      letterSpacing: "0.07em",
-                    }}
-                  >
-                    {label}
-                  </p>
-                  <p
-                    style={{
-                      margin: 0,
-                      fontSize: 14,
-                      fontWeight: 700,
-                      color: C.textPrimary,
-                      fontFamily: "sans-serif",
-                    }}
-                  >
-                    {value}
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            {isOpen && (
               <div
                 style={{
-                  borderTop: `1px solid ${C.border}`,
-                  paddingTop: 12,
                   display: "flex",
-                  flexDirection: "column",
-                  gap: 10,
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 10,
                 }}
               >
-                {s.top_villa && (
-                  <div
-                    style={{ display: "flex", alignItems: "center", gap: 8 }}
-                  >
-                    <Home size={14} color={C.accent} />
-                    <div>
-                      <p
-                        style={{ margin: 0, fontSize: 10, color: C.textMuted }}
-                      >
-                        Most Requested Villa
-                      </p>
-                      <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
-                        {s.top_villa}
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {s.top_bedroom_count != null && (
-                  <div
-                    style={{ display: "flex", alignItems: "center", gap: 8 }}
-                  >
-                    <Bed size={14} color={C.teal} />
-                    <div>
-                      <p
-                        style={{ margin: 0, fontSize: 10, color: C.textMuted }}
-                      >
-                        Most Booked Bedroom Count
-                      </p>
-                      <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
-                        {s.top_bedroom_count} bedrooms
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {distEntries.length > 0 && (
-                  <div>
-                    <p
-                      style={{
-                        margin: "0 0 6px",
-                        fontSize: 10,
-                        color: C.textMuted,
-                      }}
-                    >
-                      Bedroom Distribution
-                    </p>
-
-                    {distEntries.map(([bedrooms, count]) => {
-                      const maxCount = Math.max(
-                        ...distEntries.map((e) => Number(e[1])),
-                      );
-                      const pct = Math.round((Number(count) / maxCount) * 100);
-
-                      return (
-                        <div
-                          key={bedrooms}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
-                            marginBottom: 5,
-                          }}
-                        >
-                          <span
-                            style={{
-                              fontSize: 11,
-                              color: C.textMid,
-                              width: 70,
-                            }}
-                          >
-                            {bedrooms} bed
-                          </span>
-                          <div
-                            style={{
-                              flex: 1,
-                              height: 8,
-                              background: C.border,
-                              borderRadius: 4,
-                              overflow: "hidden",
-                            }}
-                          >
-                            <div
-                              style={{
-                                width: `${pct}%`,
-                                height: "100%",
-                                background: C.teal,
-                                borderRadius: 4,
-                              }}
-                            />
-                          </div>
-                          <span
-                            style={{
-                              fontSize: 11,
-                              color: C.textMuted,
-                              width: 28,
-                              textAlign: "right",
-                            }}
-                          >
-                            {count}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: C.textPrimary,
+                    fontFamily: "sans-serif",
+                  }}
+                >
+                  {s.season} {year ? `· ${year}` : ""}
+                </p>
+                {isOpen ? (
+                  <ChevronUp size={14} color={C.textMuted} />
+                ) : (
+                  <ChevronDown size={14} color={C.textMuted} />
                 )}
               </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 8,
+                  marginBottom: isOpen ? 14 : 0,
+                }}
+              >
+                {[
+                  {
+                    label: "Bookings",
+                    value: s.total_bookings?.toLocaleString() ?? "—",
+                  },
+                  {
+                    label: "Nights",
+                    value: s.total_nights?.toLocaleString() ?? "—",
+                  },
+                  {
+                    label: "Avg Stay",
+                    value: s.avg_nights != null ? `${s.avg_nights}n` : "—",
+                  },
+                  {
+                    label: "Members",
+                    value: s.unique_members?.toLocaleString() ?? "—",
+                  },
+                ].map(({ label, value }) => (
+                  <div
+                    key={label}
+                    style={{
+                      background: C.headerBg,
+                      borderRadius: 8,
+                      padding: "6px 10px",
+                    }}
+                  >
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: 10,
+                        color: C.textMuted,
+                        fontFamily: "sans-serif",
+                        textTransform: "uppercase",
+                        letterSpacing: "0.07em",
+                      }}
+                    >
+                      {label}
+                    </p>
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: 14,
+                        fontWeight: 700,
+                        color: C.textPrimary,
+                        fontFamily: "sans-serif",
+                      }}
+                    >
+                      {value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              {isOpen && (
+                <div
+                  style={{
+                    borderTop: `1px solid ${C.border}`,
+                    paddingTop: 12,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}
+                >
+                  {s.top_villa && (
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: 8 }}
+                    >
+                      <Home size={14} color={C.accent} />
+                      <div>
+                        <p
+                          style={{
+                            margin: 0,
+                            fontSize: 10,
+                            color: C.textMuted,
+                          }}
+                        >
+                          Most Requested Villa
+                        </p>
+                        <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
+                          {s.top_villa}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {s.top_bedroom_count != null && (
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: 8 }}
+                    >
+                      <Bed size={14} color={C.teal} />
+                      <div>
+                        <p
+                          style={{
+                            margin: 0,
+                            fontSize: 10,
+                            color: C.textMuted,
+                          }}
+                        >
+                          Most Booked Bedroom Count
+                        </p>
+                        <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
+                          {s.top_bedroom_count} bedrooms
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {distEntries.length > 0 && (
+                    <div>
+                      <p
+                        style={{
+                          margin: "0 0 6px",
+                          fontSize: 10,
+                          color: C.textMuted,
+                        }}
+                      >
+                        Bedroom Distribution
+                      </p>
+
+                      {distEntries.map(([bedrooms, count]) => {
+                        const maxCount = Math.max(
+                          ...distEntries.map((e) => Number(e[1])),
+                        );
+                        const pct = Math.round(
+                          (Number(count) / maxCount) * 100,
+                        );
+
+                        return (
+                          <div
+                            key={bedrooms}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              marginBottom: 5,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 11,
+                                color: C.textMid,
+                                width: 70,
+                              }}
+                            >
+                              {bedrooms} bed
+                            </span>
+                            <div
+                              style={{
+                                flex: 1,
+                                height: 8,
+                                background: C.border,
+                                borderRadius: 4,
+                                overflow: "hidden",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: `${pct}%`,
+                                  height: "100%",
+                                  background: C.teal,
+                                  borderRadius: 4,
+                                }}
+                              />
+                            </div>
+                            <span
+                              style={{
+                                fontSize: 11,
+                                color: C.textMuted,
+                                width: 28,
+                                textAlign: "right",
+                              }}
+                            >
+                              {count}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 
@@ -1465,6 +1955,179 @@ function AmenitySpendBarChart({ spendData, onBarClick }) {
   );
 }
 
+function SummaryStats({ amenitySeasonSpend, memberAmenityProfile }) {
+  const [year, setYear] = useState("All");
+  const years = useMemo(
+    () =>
+      getYearOptionsFromRows([...amenitySeasonSpend, ...memberAmenityProfile]),
+    [amenitySeasonSpend, memberAmenityProfile],
+  );
+
+  useEffect(() => {
+    if (!years.includes(year)) setYear("All");
+  }, [year, years]);
+
+  const filteredAmenitySeasonSpend = useMemo(
+    () => amenitySeasonSpend.filter((row) => rowMatchesYear(row, year)),
+    [amenitySeasonSpend, year],
+  );
+
+  const filteredMemberAmenityProfile = useMemo(
+    () => memberAmenityProfile.filter((row) => rowMatchesYear(row, year)),
+    [memberAmenityProfile, year],
+  );
+
+  const totalAmenitySpend = useMemo(
+    () => filteredAmenitySeasonSpend.reduce((s, d) => s + d.total_spend, 0),
+    [filteredAmenitySeasonSpend],
+  );
+
+  const totalTxns = useMemo(
+    () =>
+      filteredAmenitySeasonSpend.reduce((s, d) => s + d.transaction_count, 0),
+    [filteredAmenitySeasonSpend],
+  );
+
+  const uniqueMembers = useMemo(
+    () => new Set(filteredMemberAmenityProfile.map((m) => m.member_id)).size,
+    [filteredMemberAmenityProfile],
+  );
+
+  const topAmenity = useMemo(() => {
+    if (!filteredAmenitySeasonSpend.length) return "—";
+    const agg = {};
+    filteredAmenitySeasonSpend.forEach((d) => {
+      agg[d.amenity] = (agg[d.amenity] ?? 0) + d.total_spend;
+    });
+    return Object.entries(agg).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
+  }, [filteredAmenitySeasonSpend]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <YearFilterControl value={year} onChange={setYear} years={years} />
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))",
+          gap: 12,
+        }}
+      >
+        <StatMini
+          icon={TrendingUp}
+          label="Total Amenity Revenue"
+          color={C.accent}
+          value={`$${Number(totalAmenitySpend).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+        />
+        <StatMini
+          icon={Users}
+          label="Members Using Amenities"
+          color={C.teal}
+          value={uniqueMembers.toLocaleString()}
+        />
+        <StatMini
+          icon={TrendingUp}
+          label="Transactions"
+          color={C.gold}
+          value={totalTxns.toLocaleString()}
+        />
+        <StatMini
+          icon={TrendingUp}
+          label="Top Earning Amenity"
+          color={amenityColor(topAmenity)}
+          value={topAmenity}
+        />
+      </div>
+    </div>
+  );
+}
+
+function AmenityRevenueSection({ data, onBarClick }) {
+  const [year, setYear] = useState("All");
+  const years = useMemo(() => getYearOptionsFromRows(data), [data]);
+
+  useEffect(() => {
+    if (!years.includes(year)) setYear("All");
+  }, [year, years]);
+
+  const filteredData = useMemo(
+    () => data.filter((row) => rowMatchesYear(row, year)),
+    [data, year],
+  );
+
+  return (
+    <div style={card}>
+      <InsightGuide
+        title="Amenity Revenue Ranking"
+        description="Ranks amenities by total revenue generated during the selected year. Use this chart to quickly identify the strongest-performing amenities and compare revenue contribution across amenity categories."
+        meta={[
+          { label: "X-Axis", value: "Total Revenue (USD)" },
+          { label: "Y-Axis", value: "Amenity Name" },
+          { label: "Sort Order", value: "Highest to lowest revenue" },
+        ]}
+        action="Select a bar to filter the visit table by amenity."
+      />
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          marginBottom: 12,
+        }}
+      >
+        <YearFilterControl value={year} onChange={setYear} years={years} />
+      </div>
+      <AmenitySpendBarChart
+        spendData={filteredData}
+        onBarClick={(amenity) => onBarClick(amenity, year)}
+      />
+    </div>
+  );
+}
+
+function AmenityHeatmapSection({ data, onCellClick }) {
+  const [year, setYear] = useState("All");
+  const years = useMemo(() => getYearOptionsFromRows(data), [data]);
+
+  useEffect(() => {
+    if (!years.includes(year)) setYear("All");
+  }, [year, years]);
+
+  const filteredData = useMemo(
+    () => data.filter((row) => rowMatchesYear(row, year)),
+    [data, year],
+  );
+
+  return (
+    <div style={card}>
+      <InsightGuide
+        title="Amenity Spend Heatmap"
+        description="Shows how total amenity revenue changes across business seasons. Each cell represents one amenity during one season, making it easy to spot seasonal demand patterns and high-value amenity periods."
+        meta={[
+          { label: "Columns", value: "Business Seasons" },
+          { label: "Rows", value: "Amenity Names" },
+          { label: "Cell Value", value: "Total Revenue (USD)" },
+          { label: "Color", value: "Darker shading = higher revenue" },
+        ]}
+        action="Select a cell to filter the visit table by both season and amenity."
+      />
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          marginBottom: 12,
+        }}
+      >
+        <YearFilterControl value={year} onChange={setYear} years={years} />
+      </div>
+      <AmenitySeasonHeatmap
+        data={filteredData}
+        onCellClick={(amenity, season) => onCellClick(amenity, season, year)}
+      />
+    </div>
+  );
+}
+
 /* ── Main exported component ─────────────────────────────────────── */
 export default function AmenitySeasonPanel({ seasonGroupId = null }) {
   const [data, setData] = useState(null);
@@ -1473,7 +2136,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
 
   const [drillAmenity, setDrillAmenity] = useState("");
   const [drillSeason, setDrillSeason] = useState("");
-  const [selectedYear, setSelectedYear] = useState("All");
+  const [drillYear, setDrillYear] = useState("All");
   const visitsRef = useRef(null);
 
   useEffect(() => {
@@ -1483,6 +2146,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
     setError(null);
     setDrillAmenity("");
     setDrillSeason("");
+    setDrillYear("All");
 
     analyticsApi
       .amenitySeasonInsights({ group_id: seasonGroupId })
@@ -1512,93 +2176,10 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
     seasonVillaBedroom = [],
   } = data ?? {};
 
-  const yearOptions = useMemo(() => {
-    const years = new Set();
-
-    [
-      ...amenitySeasonSpend,
-      ...memberAmenityProfile,
-      ...memberAmenitySeasonVisits,
-      ...seasonVillaBedroom,
-    ].forEach((row) => {
-      const year = getRowYear(row);
-      if (year) years.add(year);
-    });
-
-    return [
-      "All",
-      ...Array.from(years)
-        .sort((a, b) => b - a)
-        .map(String),
-    ];
-  }, [
-    amenitySeasonSpend,
-    memberAmenityProfile,
-    memberAmenitySeasonVisits,
-    seasonVillaBedroom,
-  ]);
-
-  useEffect(() => {
-    if (!yearOptions.includes(selectedYear)) {
-      setSelectedYear("All");
-    }
-  }, [selectedYear, yearOptions]);
-
-  useEffect(() => {
-    setDrillAmenity("");
-    setDrillSeason("");
-  }, [selectedYear]);
-
-  const filteredAmenitySeasonSpend = useMemo(
-    () => amenitySeasonSpend.filter((row) => rowMatchesYear(row, selectedYear)),
-    [amenitySeasonSpend, selectedYear],
-  );
-
-  const filteredMemberAmenityProfile = useMemo(
-    () =>
-      memberAmenityProfile.filter((row) => rowMatchesYear(row, selectedYear)),
-    [memberAmenityProfile, selectedYear],
-  );
-
-  const filteredMemberAmenitySeasonVisits = useMemo(
-    () =>
-      memberAmenitySeasonVisits.filter((row) =>
-        rowMatchesYear(row, selectedYear),
-      ),
-    [memberAmenitySeasonVisits, selectedYear],
-  );
-
-  const filteredSeasonVillaBedroom = useMemo(
-    () => seasonVillaBedroom.filter((row) => rowMatchesYear(row, selectedYear)),
-    [seasonVillaBedroom, selectedYear],
-  );
-
-  // Summary stats
-  const totalAmenitySpend = useMemo(
-    () => filteredAmenitySeasonSpend.reduce((s, d) => s + d.total_spend, 0),
-    [filteredAmenitySeasonSpend],
-  );
-  const totalTxns = useMemo(
-    () =>
-      filteredAmenitySeasonSpend.reduce((s, d) => s + d.transaction_count, 0),
-    [filteredAmenitySeasonSpend],
-  );
-  const uniqueMembers = useMemo(
-    () => new Set(filteredMemberAmenityProfile.map((m) => m.member_id)).size,
-    [filteredMemberAmenityProfile],
-  );
-  const topAmenity = useMemo(() => {
-    if (!filteredAmenitySeasonSpend.length) return "—";
-    const agg = {};
-    filteredAmenitySeasonSpend.forEach((d) => {
-      agg[d.amenity] = (agg[d.amenity] ?? 0) + d.total_spend;
-    });
-    return Object.entries(agg).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
-  }, [filteredAmenitySeasonSpend]);
-
-  const handleCellClick = (amenity, season) => {
+  const handleCellClick = (amenity, season, year = "All") => {
     setDrillAmenity(amenity);
     setDrillSeason(season);
+    setDrillYear(year || "All");
     setTimeout(
       () =>
         visitsRef.current?.scrollIntoView({
@@ -1609,9 +2190,10 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
     );
   };
 
-  const handleBarClick = (amenity) => {
+  const handleBarClick = (amenity, year = "All") => {
     setDrillAmenity(amenity);
     setDrillSeason("");
+    setDrillYear(year || "All");
     setTimeout(
       () =>
         visitsRef.current?.scrollIntoView({
@@ -1652,126 +2234,34 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div
-        style={{
-          ...card,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          flexWrap: "wrap",
-          padding: "12px 16px",
-        }}
-      >
-        <div>
-          <p style={{ ...sectionTitle, marginBottom: 2 }}>
-            Amenity year filter
-          </p>
-          <p
-            style={{
-              margin: 0,
-              fontSize: 12,
-              color: C.textMuted,
-              fontFamily: "sans-serif",
-            }}
-          >
-            Applies to cards, revenue ranking, heatmap, and visit details.
-          </p>
-        </div>
-        <select
-          style={{ ...select, minWidth: 130 }}
-          value={selectedYear}
-          onChange={(e) => setSelectedYear(e.target.value)}
-        >
-          {yearOptions.map((year) => (
-            <option key={year} value={year}>
-              {year === "All" ? "All Years" : year}
-            </option>
-          ))}
-        </select>
-      </div>
-
       {/* ── Summary stat row ── */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))",
-          gap: 12,
-        }}
-      >
-        <StatMini
-          icon={TrendingUp}
-          label="Total Amenity Revenue"
-          color={C.accent}
-          value={`$${Number(totalAmenitySpend).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
-        />
-        <StatMini
-          icon={Users}
-          label="Members Using Amenities"
-          color={C.teal}
-          value={uniqueMembers.toLocaleString()}
-        />
-        <StatMini
-          icon={TrendingUp}
-          label="Transactions"
-          color={C.gold}
-          value={totalTxns.toLocaleString()}
-        />
-        <StatMini
-          icon={TrendingUp}
-          label="Top Earning Amenity"
-          color={amenityColor(topAmenity)}
-          value={topAmenity}
-        />
-      </div>
+      <SummaryStats
+        amenitySeasonSpend={amenitySeasonSpend}
+        memberAmenityProfile={memberAmenityProfile}
+      />
 
       {/* ── Spend by amenity bar ── */}
-      <div style={card}>
-        <InsightGuide
-          title="Amenity Revenue Ranking"
-          description="Ranks amenities by total revenue generated during the selected year. Use this chart to quickly identify the strongest-performing amenities and compare revenue contribution across amenity categories."
-          meta={[
-            { label: "X-Axis", value: "Total Revenue (USD)" },
-            { label: "Y-Axis", value: "Amenity Name" },
-            { label: "Sort Order", value: "Highest to lowest revenue" },
-          ]}
-          action="Select a bar to filter the visit table by amenity."
-        />
-        <AmenitySpendBarChart
-          spendData={filteredAmenitySeasonSpend}
-          onBarClick={handleBarClick}
-        />
-      </div>
+      <AmenityRevenueSection
+        data={amenitySeasonSpend}
+        onBarClick={handleBarClick}
+      />
 
       {/* ── Heatmap ── */}
-      <div style={card}>
-        <InsightGuide
-          title="Amenity Spend Heatmap"
-          description="Shows how total amenity revenue changes across business seasons. Each cell represents one amenity during one season, making it easy to spot seasonal demand patterns and high-value amenity periods."
-          meta={[
-            { label: "Columns", value: "Business Seasons" },
-            { label: "Rows", value: "Amenity Names" },
-            { label: "Cell Value", value: "Total Revenue (USD)" },
-            { label: "Color", value: "Darker shading = higher revenue" },
-          ]}
-          action="Select a cell to filter the visit table by both season and amenity."
-        />
-        <AmenitySeasonHeatmap
-          data={filteredAmenitySeasonSpend}
-          onCellClick={handleCellClick}
-        />
-      </div>
+      <AmenityHeatmapSection
+        data={amenitySeasonSpend}
+        onCellClick={handleCellClick}
+      />
 
       <SectionDivider>Member Profiles</SectionDivider>
 
       {/* ── Member amenity profile table ── */}
-      <MemberAmenityProfileTable data={filteredMemberAmenityProfile} />
+      <MemberAmenityProfileTable data={memberAmenityProfile} />
 
       <SectionDivider>Visit Details</SectionDivider>
 
       {/* ── Season visits table (drill-down target) ── */}
       <div ref={visitsRef}>
-        {(drillAmenity || drillSeason) && (
+        {(drillAmenity || drillSeason || drillYear !== "All") && (
           <div
             style={{
               display: "flex",
@@ -1802,10 +2292,14 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
             {drillSeason && (
               <span style={{ ...pill("#5B9EAD") }}>{drillSeason}</span>
             )}
+            {drillYear !== "All" && (
+              <span style={{ ...pill(C.gold) }}>{drillYear}</span>
+            )}
             <button
               onClick={() => {
                 setDrillAmenity("");
                 setDrillSeason("");
+                setDrillYear("All");
               }}
               style={{
                 marginLeft: "auto",
@@ -1821,9 +2315,10 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
           </div>
         )}
         <MemberSeasonVisitsTable
-          data={filteredMemberAmenitySeasonVisits}
+          data={memberAmenitySeasonVisits}
           initialSeason={drillSeason}
           initialAmenity={drillAmenity}
+          initialYear={drillYear}
         />
       </div>
 
@@ -1847,7 +2342,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
           ]}
           action="Select a season card to expand detailed accommodation demand insights."
         />
-        <SeasonCapacityCards data={filteredSeasonVillaBedroom} />
+        <SeasonCapacityCards data={seasonVillaBedroom} />
       </div>
     </div>
   );

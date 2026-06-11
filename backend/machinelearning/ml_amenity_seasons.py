@@ -182,17 +182,36 @@ def _fmt_date(dt) -> str | None:
 
 def _load_folios_with_names() -> pd.DataFrame:
     """
-    Load amenity folios joined to member names.
+    Load amenity folios joined to member contact/address details.
     Member full name comes from folios.guest_name first, then members table.
     """
     df = _query("""
         SELECT
-            f.member_number                        AS member_id,
+            f.member_number AS member_id,
             COALESCE(
                 NULLIF(TRIM(f.guest_name), ''),
                 NULLIF(TRIM(m.member_full_name), ''),
                 NULLIF(TRIM(m.member_name), '')
-            )                                      AS member_full_name,
+            ) AS member_full_name,
+
+            m.email,
+            mp.phone_number AS telephone,
+            TRIM(
+                CONCAT_WS(
+                    ', ',
+                    NULLIF(a.address_line1, ''),
+                    NULLIF(a.address_line2, ''),
+                    NULLIF(a.city, ''),
+                    NULLIF(a.state, ''),
+                    NULLIF(a.postal_code, ''),
+                    NULLIF(a.country, '')
+                )
+            ) AS address,
+            a.country,
+            a.state,
+            m.prefix AS title,
+            m.date_of_birth AS dob,
+
             f.description,
             f.amount,
             f.transaction_date,
@@ -201,7 +220,26 @@ def _load_folios_with_names() -> pd.DataFrame:
             f.villa_name,
             f.bedroom_count
         FROM folios f
-        LEFT JOIN members m ON f.member_number = m.member_number
+        LEFT JOIN members m
+            ON f.member_number = m.member_number
+        LEFT JOIN member_addresses a
+            ON f.member_number = a.member_number
+        LEFT JOIN (
+            SELECT DISTINCT ON (member_number)
+                member_number,
+                phone_number
+            FROM member_phones
+            WHERE phone_number IS NOT NULL
+            ORDER BY
+                member_number,
+                CASE phone_type
+                    WHEN 'cell' THEN 1
+                    WHEN 'home' THEN 2
+                    WHEN 'business' THEN 3
+                    ELSE 4
+                END
+        ) mp
+            ON f.member_number = mp.member_number
         WHERE f.member_number IS NOT NULL
     """)
 
@@ -209,6 +247,7 @@ def _load_folios_with_names() -> pd.DataFrame:
     df["transaction_date"] = pd.to_datetime(df["transaction_date"], errors="coerce")
     df["check_in_date"]    = pd.to_datetime(df["check_in_date"], errors="coerce")
     df["check_out_date"]   = pd.to_datetime(df["check_out_date"], errors="coerce")
+    df["dob"]              = pd.to_datetime(df["dob"], errors="coerce")
     df["amenity"]          = df["description"].apply(classify_amenity)
 
     amenity_df = df[df["amenity"].notna()].copy()
@@ -276,21 +315,40 @@ def build_amenity_season_spend(
     _save(agg, "amenity_season_spend")
     return agg
 
-
 def build_member_amenity_profile(amenity_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Per member: top amenity, spend at that amenity, total spend across all amenities.
+    Per member: full name, top amenity, spend at that amenity,
+    and total spend across all amenities.
     """
     per_member_amenity = (
-        amenity_df.groupby(["member_id", "member_full_name", "amenity"])
-        .agg(usage_count=("description", "count"), amenity_spend=("amount", "sum"))
+        amenity_df.groupby(
+            ["member_id", "member_full_name", "amenity"],
+            dropna=False,
+        )
+        .agg(
+            usage_count=("description", "count"),
+            amenity_spend=("amount", "sum"),
+        )
         .reset_index()
     )
 
-    # Top amenity per member = highest spend
     idx = per_member_amenity.groupby("member_id")["amenity_spend"].idxmax()
-    top_amenity = per_member_amenity.loc[idx, ["member_id", "amenity", "amenity_spend"]].rename(
-        columns={"amenity": "top_amenity", "amenity_spend": "top_amenity_spend"}
+
+    top_amenity = per_member_amenity.loc[
+        idx,
+        [
+            "member_id",
+            "member_full_name",
+            "amenity",
+            "amenity_spend",
+            "usage_count",
+        ],
+    ].rename(
+        columns={
+            "amenity": "top_amenity",
+            "amenity_spend": "top_amenity_spend",
+            "usage_count": "top_amenity_usage_count",
+        }
     )
 
     total_spend = (
@@ -300,25 +358,18 @@ def build_member_amenity_profile(amenity_df: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"amount": "total_amenity_spend"})
     )
 
-    # Stable name per member
-    name_map = (
-        amenity_df.dropna(subset=["member_full_name"])
-        .groupby("member_id")["member_full_name"]
-        .first()
-        .reset_index()
-    )
+    profile = top_amenity.merge(total_spend, on="member_id", how="left")
 
-    profile = (
-        name_map
-        .merge(top_amenity, on="member_id", how="left")
-        .merge(total_spend, on="member_id", how="left")
+    profile["top_amenity_spend"] = profile["top_amenity_spend"].round(2)
+    profile["total_amenity_spend"] = profile["total_amenity_spend"].round(2)
+
+    profile = profile.sort_values(
+        ["total_amenity_spend", "member_id"],
+        ascending=[False, True],
     )
-    profile["top_amenity_spend"]    = profile["top_amenity_spend"].round(2)
-    profile["total_amenity_spend"]  = profile["total_amenity_spend"].round(2)
 
     _save(profile, "member_amenity_profile")
     return profile
-
 
 def build_member_amenity_season_visits(
     amenity_df: pd.DataFrame,
@@ -327,43 +378,55 @@ def build_member_amenity_season_visits(
     """
     Per member × per visit × per amenity used:
     Shows what amenity they used each time they were on property,
-    with check-in/check-out formatted as "Jan 12, 2024".
+    with member contact/address details for export.
 
     One row per (member, check_in_date, amenity) combination so a member
     visiting during High Season twice produces two rows.
     """
     df = amenity_df.copy()
+
     ref = df["check_in_date"].fillna(df["transaction_date"])
     df["season"] = ref.apply(
         lambda d: _season_for_date(d.month, d.day, seasons) if pd.notna(d) else None
     )
     df = df[df["season"].notna()].copy()
 
-    # Aggregate per member × check_in_date × amenity
+    group_cols = [
+        "member_id",
+        "member_full_name",
+        "email",
+        "telephone",
+        "address",
+        "country",
+        "state",
+        "title",
+        "dob",
+        "season",
+        "check_in_date",
+        "check_out_date",
+        "amenity",
+    ]
+
     agg = (
-        df.groupby(
-            ["member_id", "member_full_name", "season", "check_in_date", "check_out_date", "amenity"],
-            dropna=False,
-        )
+        df.groupby(group_cols, dropna=False)
         .agg(
-            usage_count=("description",  "count"),
-            total_spend=("amount",       "sum"),
+            usage_count=("description", "count"),
+            total_spend=("amount", "sum"),
         )
         .reset_index()
     )
 
-    # Format dates human-readable
-    agg["check_in_fmt"]  = agg["check_in_date"].apply(_fmt_date)
+    agg["check_in_fmt"] = agg["check_in_date"].apply(_fmt_date)
     agg["check_out_fmt"] = agg["check_out_date"].apply(_fmt_date)
+    agg["dob"] = agg["dob"].apply(_fmt_date)
 
-    # Drop raw date columns — the API will return the formatted strings
     agg = agg.drop(columns=["check_in_date", "check_out_date"])
     agg["total_spend"] = agg["total_spend"].round(2)
-    agg = agg.sort_values(["member_id", "check_in_fmt", "season"])
+
+    agg = agg.sort_values(["member_full_name", "check_in_fmt", "season", "amenity"])
 
     _save(agg, "member_amenity_season_visits")
     return agg
-
 
 def build_season_villa_bedroom_summary(
     rooms_df: pd.DataFrame,
