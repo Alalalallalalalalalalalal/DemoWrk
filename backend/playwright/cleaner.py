@@ -186,14 +186,14 @@ CREATE TABLE IF NOT EXISTS folios (
     check_in_date          DATE,
     check_out_date         DATE,
     room_number            VARCHAR(50),
-    villa_name             VARCHAR(255), 
-    bedroom_count          INTEGER, 
+    villa_name             VARCHAR(255),
+    bedroom_count          INTEGER,
+    persons                INTEGER,
+    source                 VARCHAR(255),
+    payment_type           VARCHAR(100),
     reservation_status     VARCHAR(100),
 
-    -- Folder/source audit columns
-    journal_folder         VARCHAR(255),
-    source_file            TEXT,
-
+    
     created_at             TIMESTAMP DEFAULT NOW(),
     updated_at             TIMESTAMP DEFAULT NOW()
 );
@@ -544,6 +544,7 @@ def get_connection():
     return psycopg2.connect(**DB_CONFIG)
 
 
+
 def create_tables(conn, recreate=False):
     with conn.cursor() as cur:
         if recreate:
@@ -558,6 +559,18 @@ def create_tables(conn, recreate=False):
         cur.execute("""
             ALTER TABLE IF EXISTS reservation_guests
             DROP CONSTRAINT IF EXISTS reservation_guests_member_number_fkey
+        """)
+
+        # Keep existing folios tables aligned with the current scraper output.
+        # New journal folio CSVs include Persons, Source, and Payment Type.
+        # journal_folder/source_file are no longer persisted on folios.
+        cur.execute("""
+            ALTER TABLE IF EXISTS folios
+            ADD COLUMN IF NOT EXISTS persons INTEGER,
+            ADD COLUMN IF NOT EXISTS source VARCHAR(255),
+            ADD COLUMN IF NOT EXISTS payment_type VARCHAR(100),
+            DROP COLUMN IF EXISTS journal_folder,
+            DROP COLUMN IF EXISTS source_file
         """)
     conn.commit()
     log.info("Tables ready.")
@@ -1018,9 +1031,10 @@ def normalize_folio_row(row, journal_folder=None, source_file=None):
         "room_number": clean_str(get_first(row, "Room #", "Room Number"), 50),
         "villa_name": clean_str(get_first(row, "Villa Name"), 255),
         "bedroom_count": clean_int(get_first(row, "Bedroom Count")),
-        "reservation_status": clean_category(get_first(row, "Reservation Status"), 100),
-        "journal_folder": clean_str(journal_folder, 255),
-        "source_file": clean_str(source_file),        
+        "persons": clean_int(get_first(row, "Persons")),
+        "source": clean_str(get_first(row, "Source"), 255),
+        "payment_type": clean_str(get_first(row, "Payment Type"), 100),
+        "reservation_status": clean_category(get_first(row, "Reservation Status"), 100),       
     }
 
 
