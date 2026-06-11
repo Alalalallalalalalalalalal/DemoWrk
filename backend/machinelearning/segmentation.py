@@ -17,6 +17,7 @@ import psycopg
 from dotenv import load_dotenv
 
 from season_tables import load_active_seasons, season_for_date
+from ml_amenity_seasons import classify_amenity
 
 load_dotenv()
 
@@ -164,27 +165,11 @@ with get_conn() as conn:
 # ─────────────────────────────────────────────
 def categorize_spend(descriptions):
     categories = set()
-
     for d in descriptions or []:
-        d = (d or "").lower()
-
-        if any(x in d for x in ["bar", "grill", "restaurant", "dinner", "lunch", "breakfast"]):
-            categories.add("Food & Beverage")
-
-        if "golf" in d:
-            categories.add("Golf")
-
-        if "tennis" in d:
-            categories.add("Tennis")
-
-        if "airport" in d:
-            categories.add("Transfers")
-
-        if "boutique" in d:
-            categories.add("Retail")
-
+        amenity = classify_amenity(d)
+        if amenity:
+            categories.add(amenity)
     return list(categories)
-
 
 # ─────────────────────────────────────────────
 # CLEAN TABLE REFRESH
