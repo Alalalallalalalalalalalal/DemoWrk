@@ -1,24 +1,33 @@
 """
-room_inquiry_scraper.py — Scrape the Room Inquiry table (Rooms > Inquiry > Room Inquiry).
-Saves a master rooms lookup CSV:  reports/room_lookup.csv
+room_inquiry_scraper.py — Two scrapers in one:
 
-Output columns:
-  room_number     — unit code          e.g. V52, 312B
-  villa_name      — room type name     e.g. Little Hill
-  display_name    — full display name  e.g. Little Hill -V52
-  max_persons     — integer            e.g. 10
-  bedroom_count   — integer            e.g. 5  (blank for ZZ Comp / no BR listed)
-  room_id         — internal PMS id from the href  e.g. 38
-  room_type_id    — internal type id   e.g. 38
+  1. Room Inquiry  (Rooms > Inquiry > Room Inquiry)
+       → reports/room_lookup.csv
+         Columns: room_number, villa_name, display_name,
+                  max_persons, bedroom_count, room_id, room_type_id
+
+  2. Business Source  (Admin > Business Source)
+       → reports/business_source.csv
+         Columns: Source Name, Payment Type   (Paid / Free)
+
+Importable helpers for folio_scraper.py:
+  load_room_lookup()              → {room_number: row_dict}
+  get_bedroom_count_from_lookup(room_number)
+  load_business_source_lookup()   → {source_name_lower: "Paid"|"Free"}
+  get_payment_type(source_text)   → "Paid" | "Free" | ""
 
 Usage:
-    python room_inquiry_scraper.py
+    python room_inquiry_scraper.py           # run both scrapers
+    python room_inquiry_scraper.py --rooms   # room lookup only
+    python room_inquiry_scraper.py --sources # business sources only
 """
+
 import os
 import re
 import csv
 import sys
 import time
+import argparse
 from datetime import datetime
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from config import OUTPUT_FOLDER, BASE_URL
@@ -27,14 +36,73 @@ from login import login
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-REPORTS_FOLDER    = os.path.join(OUTPUT_FOLDER, "reports")
-SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
-ROOM_LOOKUP_CSV   = os.path.join(REPORTS_FOLDER, "room_lookup.csv")
+REPORTS_FOLDER      = os.path.join(OUTPUT_FOLDER, "reports")
+SCREENSHOT_FOLDER   = os.path.join(OUTPUT_FOLDER, "screenshots")
+
+ROOM_LOOKUP_CSV     = os.path.join(REPORTS_FOLDER, "room_lookup.csv")
+BUSINESS_SOURCE_CSV = os.path.join(REPORTS_FOLDER, "business_source.csv")
 
 NAV_TIMEOUT   = 15000
 FRAME_TIMEOUT = 10000
 
 ROOM_INQUIRY_URL = "PMS/roomInquiry.do?tabGrpModuleID=13"
+BUSINESS_SRC_URL = "PMS/businessSource.do?tabGrpModuleID=13"
+
+# ─────────────────────────────────────────────
+# PAID / FREE CLASSIFICATION
+# ─────────────────────────────────────────────
+FREE_KEYWORDS = [
+    "tentative",
+    "tenta",        # catches truncated "…Tentativ" / "…Tenta"
+    "complimentary",
+    "arrival",
+    "homeowner family",
+    "hf -",
+    "ha -",
+    "free",
+]
+
+FREE_CODES = {
+    "CU",   # CU - Complimentary
+    "HA",   # HA - Homeowner Arrival
+    "HF",   # HF - Homeowner Family
+}
+
+# End-of-string fragments that signal a truncated tentative name
+FREE_SUFFIXES = (
+    "tenta",
+    "tentati",
+    "tentative",
+    " ten",     # e.g. "…Hello Summ Ten"
+)
+
+def classify_source(name: str) -> str:
+    """
+    Return "Free" or "Paid" for a business source name string.
+
+    Free  — tentative (including truncated forms), complimentary,
+             arrival, HF / HA / CU short codes.
+    Paid  — everything else.
+    """
+    if not name:
+        return ""
+
+    n_lower = name.lower().strip()
+
+    for kw in FREE_KEYWORDS:
+        if kw.lower() in n_lower:
+            return "Free"
+
+    for suffix in FREE_SUFFIXES:
+        if n_lower.endswith(suffix.lower()):
+            return "Free"
+
+    short_code = name.split("-")[0].strip().upper()
+    if short_code in FREE_CODES:
+        return "Free"
+
+    return "Paid"
+
 
 # ─────────────────────────────────────────────
 # HELPERS
@@ -65,21 +133,9 @@ def get_landing_frame(page, timeout_ms=FRAME_TIMEOUT):
         page.wait_for_timeout(200)
     return None
 
-
-def get_frame_by_url(page, keyword):
-    for frame in page.frames:
-        try:
-            if keyword in (frame.url or ""):
-                return frame
-        except Exception:
-            continue
-    return None
-
-
 def get_content_context(page, timeout_ms=FRAME_TIMEOUT):
     landing = get_landing_frame(page, timeout_ms=timeout_ms)
     return landing if landing else page
-
 
 def dismiss_popup(page):
     try:
@@ -114,53 +170,73 @@ def ensure_session(page):
         except Exception:
             pass
         page.wait_for_timeout(3000)
-        if not get_landing_frame(page, timeout_ms=FRAME_TIMEOUT):
-            pr("No landingFrame found after login; will navigate directly to the room inquiry page.")
         pr("Re-login complete.")
         return True
     except Exception as e:
         pr(f"Re-login failed: {e}")
         return False
 
+def navigate_landing(page, path, wait_selector=None):
+    ensure_session(page)
+    lf = get_content_context(page, timeout_ms=FRAME_TIMEOUT)
+    if not lf:
+        pr("ERROR: no content context.")
+        return None
+
+    url = f"{BASE_URL}/{path}"
+    pr(f"Navigating to: {url}")
+    try:
+        lf.goto(url, timeout=NAV_TIMEOUT)
+        lf.wait_for_load_state("domcontentloaded", timeout=NAV_TIMEOUT)
+        page.wait_for_timeout(1500)
+        dismiss_popup(page)
+        lf = get_content_context(page, timeout_ms=FRAME_TIMEOUT)
+        if not lf:
+            pr("ERROR: lost content context after navigation.")
+            return None
+        if wait_selector:
+            try:
+                lf.wait_for_selector(wait_selector, timeout=8000)
+            except PWTimeout:
+                pr(f"WARNING: selector '{wait_selector}' not found.")
+        return lf
+    except Exception as e:
+        pr(f"Navigation error: {e}")
+        screenshot(page, "nav_error")
+        return None
+
 def parse_bedroom_count(br_text):
-    """
-    '5BR' → 5,  '10BR' → 10,  '' or '-' → None (caller decides default)
-    """
     if not br_text or br_text.strip() in ("-", ""):
         return None
     m = re.search(r'(\d+)\s*BR', br_text, re.IGNORECASE)
-    if m:
-        return int(m.group(1))
-    return None
+    return int(m.group(1)) if m else None
 
 def extract_id_from_href(href, param):
-    """Extract numeric id from href like './roomDetail.do?roomId=38'"""
     if not href:
         return ""
     m = re.search(rf'{param}=(\d+)', href)
     return m.group(1) if m else ""
 
+def save_csv(filepath, fieldnames, rows, label=""):
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    pr(f"Saved {len(rows)} {label}rows → {filepath}")
+
+
 # ─────────────────────────────────────────────
-# SCRAPE
+# 1. ROOM INQUIRY
 # ─────────────────────────────────────────────
 def scrape_room_inquiry(page):
-    """
-    Navigate to Room Inquiry, click Search, scrape the results table.
-    Returns list of dicts.
-    """
-    landing = get_content_context(page, timeout_ms=FRAME_TIMEOUT)
-
-    url = f"{BASE_URL}/{ROOM_INQUIRY_URL}"
-
     def _navigate_and_search():
-        """Navigate to Room Inquiry and click Search. Returns landingFrame or None."""
         ensure_session(page)
         lf = get_content_context(page, timeout_ms=FRAME_TIMEOUT)
         if not lf:
-            pr("ERROR: content context not found before navigation.")
             return None
 
-        # Navigate
+        url = f"{BASE_URL}/{ROOM_INQUIRY_URL}"
         pr(f"Navigating to Room Inquiry: {url}")
         try:
             lf.goto(url, timeout=NAV_TIMEOUT)
@@ -168,20 +244,17 @@ def scrape_room_inquiry(page):
             page.wait_for_timeout(1500)
             dismiss_popup(page)
             lf = get_content_context(page, timeout_ms=FRAME_TIMEOUT)
-            if not lf:
-                pr("ERROR: no content context after navigation.")
-                return None
         except Exception as e:
             pr(f"Navigation error: {e}")
-            screenshot(page, "nav_error")
+            screenshot(page, "room_nav_error")
             return None
 
-        # Click Search
         pr("Clicking Search...")
         try:
-            search_btn = lf.query_selector("input#Search, input[name='Search'][value='Search']")
-            if not search_btn:
-                search_btn = lf.query_selector("input[type='submit'].btn-success")
+            search_btn = lf.query_selector(
+                "input#Search, input[name='Search'][value='Search'], "
+                "input[type='submit'].btn-success"
+            )
             if not search_btn:
                 pr("ERROR: Search button not found.")
                 screenshot(page, "no_search_btn")
@@ -190,45 +263,32 @@ def scrape_room_inquiry(page):
             page.wait_for_timeout(5000)
             dismiss_popup(page)
             lf = get_content_context(page, timeout_ms=FRAME_TIMEOUT)
-            if not lf:
-                pr("ERROR: no content context after Search click.")
-                return None
         except Exception as e:
             pr(f"Search click error: {e}")
-            screenshot(page, "search_click_error")
             return None
 
-        # Confirm results loaded — expect at least one tbody tr
         try:
             lf.wait_for_selector("tbody tr", timeout=8000)
         except PWTimeout:
-            pr("WARNING: tbody rows not found after Search — page may not have loaded.")
-            screenshot(page, "no_results")
+            pr("WARNING: no tbody rows after Search.")
+            screenshot(page, "no_room_results")
             return None
 
         return lf
 
-    # First attempt
     landing = _navigate_and_search()
-
-    # Retry once if first attempt failed
     if not landing:
-        pr("Retrying after session recovery...")
+        pr("Retrying Room Inquiry...")
         ensure_session(page)
         page.wait_for_timeout(2000)
         landing = _navigate_and_search()
-
     if not landing:
-        pr("ERROR: Could not load Room Inquiry after retry.")
+        pr("ERROR: Could not load Room Inquiry.")
         return []
 
-    # Scrape table
-    pr("Scraping results table...")
+    pr("Scraping Room Inquiry table...")
     rows = []
     try:
-        # Find tbody rows — use position-based column extraction matching the HTML structure:
-        # col0: Room #  col1: Villa Name  col2: Status  col3: Display Name
-        # col4: Max Persons  col5: (dash)  col6: Notes  col7: (dash)  col8: Bedroom Count
         table_rows = landing.query_selector_all("tbody tr")
         pr(f"  Found {len(table_rows)} row(s)")
 
@@ -238,49 +298,39 @@ def scrape_room_inquiry(page):
                 if len(cells) < 5:
                     continue
 
-                # col 0 — Room # + room_id from href
                 room_cell   = cells[0]
                 room_link   = room_cell.query_selector("a")
-                room_number = room_link.inner_text().strip() if room_link else room_cell.inner_text().strip()
+                room_number = (room_link.inner_text().strip()
+                               if room_link else room_cell.inner_text().strip())
                 room_id     = extract_id_from_href(
                     room_link.get_attribute("href") if room_link else "", "roomId"
                 )
 
-                # col 1 — Villa Name + room_type_id from href
                 type_cell    = cells[1]
                 type_link    = type_cell.query_selector("a")
-                villa_name   = type_link.inner_text().strip() if type_link else type_cell.inner_text().strip()
+                villa_name   = (type_link.inner_text().strip()
+                                if type_link else type_cell.inner_text().strip())
                 room_type_id = extract_id_from_href(
                     type_link.get_attribute("href") if type_link else "", "roomTypeId"
                 )
 
-                # col 3 — Display Name
                 display_cell = cells[3]
                 display_link = display_cell.query_selector("a")
                 display_name = (display_link.inner_text().strip()
                                 if display_link else display_cell.inner_text().strip())
-                # Normalise extra whitespace in display names like "Following  Seas-V20"
                 display_name = " ".join(display_name.split())
 
-                # col 4 — Max Persons
                 max_persons_raw = cells[4].inner_text().strip()
                 try:
                     max_persons = int(max_persons_raw)
                 except ValueError:
                     max_persons = 0
 
-                # col 8 — Bedroom Count
-                br_raw = cells[8].inner_text().strip() if len(cells) > 8 else ""
-                br_count = parse_bedroom_count(br_raw)
-                if br_count is None:
-                    # ZZ Comp or any room with no BR text — use 0 to signal "unknown/N/A"
-                    # (folio_scraper already defaults to 1 for real villas from the rate name;
-                    #  this lookup is the authoritative source so we store None as empty string)
-                    bedroom_count = ""
-                else:
-                    bedroom_count = br_count
+                br_raw        = cells[8].inner_text().strip() if len(cells) > 8 else ""
+                br_count      = parse_bedroom_count(br_raw)
+                bedroom_count = "" if br_count is None else br_count
 
-                row = {
+                rows.append({
                     "room_number":   room_number,
                     "villa_name":    villa_name,
                     "display_name":  display_name,
@@ -288,50 +338,110 @@ def scrape_room_inquiry(page):
                     "bedroom_count": bedroom_count,
                     "room_id":       room_id,
                     "room_type_id":  room_type_id,
-                }
-                rows.append(row)
-
+                })
             except Exception as e:
-                pr(f"  Row parse error: {e}")
+                pr(f"  Room row error: {e}")
                 continue
 
     except Exception as e:
-        pr(f"Table scrape error: {e}")
-        screenshot(page, "table_error")
+        pr(f"Room table error: {e}")
+        screenshot(page, "room_table_error")
 
     return rows
 
+
 # ─────────────────────────────────────────────
-# SAVE
+# 2. BUSINESS SOURCE
+# ─────────────────────────────────────────────
+def scrape_business_sources(page):
+    """
+    Navigate to Admin > Business Source, scrape source names,
+    classify each as Paid or Free.
+    Returns list of {"Source Name": ..., "Payment Type": ...}.
+    """
+    pr("── Business Source ─────────────────────────────")
+    lf = navigate_landing(page, BUSINESS_SRC_URL, wait_selector="table")
+    if not lf:
+        pr("ERROR: Could not load Business Source page.")
+        return []
+
+    raw_rows = lf.evaluate("""
+        () => {
+            const rows = [];
+            document.querySelectorAll('tbody tr').forEach(tr => {
+                const cells = Array.from(tr.querySelectorAll('td'))
+                                   .map(td => td.innerText.trim());
+                if (cells.some(c => c)) rows.push(cells);
+            });
+            return rows;
+        }
+    """)
+
+    pr(f"  Raw rows: {len(raw_rows)}")
+
+    headers = lf.evaluate("""
+        () => Array.from(
+            document.querySelectorAll('thead th, table tr:first-child th')
+        ).map(th => th.innerText.trim())
+    """)
+    pr(f"  Headers: {headers}")
+
+    name_col = 0
+    for i, h in enumerate(headers):
+        if any(k in h.lower() for k in ("name", "source", "description")):
+            name_col = i
+            break
+
+    rows = []
+    for cells in raw_rows:
+        if not cells:
+            continue
+        name = cells[name_col] if name_col < len(cells) else cells[0]
+        name = name.strip()
+        if not name or name.lower() in ("name", "source", "description"):
+            continue
+        ptype = classify_source(name)
+        rows.append({"Source Name": name, "Payment Type": ptype})
+        pr(f"    {name!r:45s} → {ptype}")
+
+    return rows
+
+
+# ─────────────────────────────────────────────
+# SAVE HELPERS
 # ─────────────────────────────────────────────
 def save_room_lookup(rows):
-    os.makedirs(REPORTS_FOLDER, exist_ok=True)
     if not rows:
-        pr("No rows to save.")
+        pr("No room rows to save.")
         return None
-    fieldnames = [
-        "room_number", "villa_name", "display_name",
-        "max_persons", "bedroom_count",
-        "room_id", "room_type_id",
-    ]
-    with open(ROOM_LOOKUP_CSV, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        w.writeheader()
-        w.writerows(rows)
-    pr(f"Saved {len(rows)} rooms → {ROOM_LOOKUP_CSV}")
+    save_csv(
+        ROOM_LOOKUP_CSV,
+        ["room_number", "villa_name", "display_name",
+         "max_persons", "bedroom_count", "room_id", "room_type_id"],
+        rows, label="rooms ",
+    )
     return ROOM_LOOKUP_CSV
 
+def save_business_sources(rows):
+    if not rows:
+        pr("No source rows to save.")
+        return None
+    save_csv(
+        BUSINESS_SOURCE_CSV,
+        ["Source Name", "Payment Type"],
+        rows, label="sources ",
+    )
+    return BUSINESS_SOURCE_CSV
+
+
 # ─────────────────────────────────────────────
-# LOOKUP HELPER  (importable by folio_scraper)
+# LOOKUP HELPERS  (importable by folio_scraper)
 # ─────────────────────────────────────────────
-_room_lookup_cache = None
+_room_lookup_cache     = None
+_business_source_cache = None
 
 def load_room_lookup():
-    """
-    Returns a dict keyed by room_number (upper-cased) → row dict.
-    Loads from room_lookup.csv; result is cached in-process.
-    Returns {} if the file doesn't exist (folio_scraper degrades gracefully).
-    """
+    """Returns {room_number_upper: row_dict} from room_lookup.csv. Cached."""
     global _room_lookup_cache
     if _room_lookup_cache is not None:
         return _room_lookup_cache
@@ -347,10 +457,7 @@ def load_room_lookup():
     return lookup
 
 def get_bedroom_count_from_lookup(room_number, fallback=1):
-    """
-    Look up bedroom_count for a room unit like 'V52'.
-    Returns int. Falls back to `fallback` (default 1) if not found or blank.
-    """
+    """Look up bedroom_count for a unit like 'V52'. Returns int."""
     lookup = load_room_lookup()
     row    = lookup.get(str(room_number).strip().upper())
     if not row:
@@ -363,15 +470,55 @@ def get_bedroom_count_from_lookup(room_number, fallback=1):
     except (ValueError, TypeError):
         return fallback
 
+def load_business_source_lookup():
+    """Returns {source_name_lower: "Paid"|"Free"} from business_source.csv. Cached."""
+    global _business_source_cache
+    if _business_source_cache is not None:
+        return _business_source_cache
+    if not os.path.exists(BUSINESS_SOURCE_CSV):
+        _business_source_cache = {}
+        return {}
+    lookup = {}
+    with open(BUSINESS_SOURCE_CSV, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            name  = row.get("Source Name", "").strip()
+            ptype = row.get("Payment Type", "").strip()
+            if name:
+                lookup[name.lower()] = ptype
+    _business_source_cache = lookup
+    return lookup
+
+def get_payment_type(source_text: str) -> str:
+    """
+    Return "Paid" | "Free" | "" for a source label like "WS - Website Booking".
+    Checks business_source.csv first, then falls back to classify_source().
+    """
+    if not source_text:
+        return ""
+    lookup = load_business_source_lookup()
+    key    = source_text.strip().lower()
+    if key in lookup:
+        return lookup[key]
+    return classify_source(source_text)
+
+
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
 def main():
+    parser = argparse.ArgumentParser(
+        description="Scrape Room Lookup and Business Sources."
+    )
+    parser.add_argument("--rooms",   action="store_true", help="Room Inquiry only")
+    parser.add_argument("--sources", action="store_true", help="Business Sources only")
+    args = parser.parse_args()
+
+    run_rooms   = args.rooms   or not any([args.rooms, args.sources])
+    run_sources = args.sources or not any([args.rooms, args.sources])
+
     print("=" * 60)
-    print("Room Inquiry Scraper")
+    print("Room Inquiry Scraper  (rooms + business sources)")
     print("=" * 60)
-    print(f"  Output: {ROOM_LOOKUP_CSV}")
-    print()
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=False)
@@ -384,22 +531,29 @@ def main():
             except Exception:
                 pass
             page.wait_for_timeout(3000)
-            if not get_landing_frame(page, timeout_ms=FRAME_TIMEOUT):
-                pr("No landingFrame found after login; continuing with current page context.")
             dismiss_popup(page)
 
-            rooms = scrape_room_inquiry(page)
-            if rooms:
+            totals = {}
+
+            if run_rooms:
+                print()
+                print("── Room Inquiry ─────────────────────────────────")
+                rooms = scrape_room_inquiry(page)
                 save_room_lookup(rooms)
+                totals["rooms"] = len(rooms)
+
+            if run_sources:
                 print()
-                print("=" * 60)
-                print(f"  Done: {len(rooms)} rooms scraped.")
-                print("=" * 60)
-            else:
-                print()
-                print("ERROR: No rooms scraped. Check screenshots.")
-                screenshot(page, "final_empty")
-                sys.exit(1)
+                sources = scrape_business_sources(page)
+                save_business_sources(sources)
+                totals["sources"] = len(sources)
+
+            print()
+            print("=" * 60)
+            print("Done.")
+            for k, v in totals.items():
+                print(f"  {k:10s}: {v} rows")
+            print("=" * 60)
 
         except Exception as e:
             pr(f"Fatal: {e}")

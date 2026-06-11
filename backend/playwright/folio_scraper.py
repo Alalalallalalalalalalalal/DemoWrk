@@ -7,7 +7,7 @@ Output CSV columns per row:
   _folio_num, _folio_name, _balance_due, _reservation_folio_id,
   Conf. Code, Main Member #, Member #, Guest Name,
   Check-In Date, Check-Out Date, Room #, Villa Name, Bedroom Count,
-  Persons, Source, Reservation Status
+  Persons, Source, Payment Type, Reservation Status
 Folder naming:
   - Guests from Guests tab  → journal/{guest_number}/
   - All other folios        → journal/{main_member_number}/ (first token of Member/Guest Name)
@@ -35,6 +35,7 @@ import sys
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from config import OUTPUT_FOLDER, BASE_URL
 from login import login
+from room_inquiry_scraper import get_payment_type
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
@@ -61,6 +62,7 @@ LISTING_COLUMNS = [
     "Bedroom Count",        # integer stripped from rate name e.g. 4
     "Persons",              # from noOfPersons input field
     "Source",               # selected text from businessSource dropdown
+    "Payment Type",         # Paid / Free  derived from business_source.csv
     "Reservation Status",
 ]
 # ─────────────────────────────────────────────
@@ -71,11 +73,9 @@ def load_done_set():
         return set()
     with open(DONE_LOG, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f if line.strip())
-
 def mark_done(conf_code):
     with open(DONE_LOG, "a", encoding="utf-8") as f:
         f.write(f"{conf_code}\n")
-
 # ─────────────────────────────────────────────
 # LOAD REPORT
 # ─────────────────────────────────────────────
@@ -90,7 +90,6 @@ def split_member_guest(raw):
     member_num  = parts[0].strip()
     guest_name  = parts[1].strip() if len(parts) > 1 else ""
     return member_num, guest_name
-
 def load_folio_report():
     if not os.path.exists(FOLIO_REPORT_CSV):
         print(f"ERROR: {FOLIO_REPORT_CSV} not found.")
@@ -107,13 +106,11 @@ def load_folio_report():
             rows.append(d)
     print(f"  Loaded {len(rows)} row(s) from folio_report.csv")
     return rows
-
 # ─────────────────────────────────────────────
 # UTILITIES
 # ─────────────────────────────────────────────
 def pr(prefix, msg):
     print(f"  {prefix}{msg}")
-
 def screenshot(page, name):
     try:
         os.makedirs(SCREENSHOT_FOLDER, exist_ok=True)
@@ -124,14 +121,12 @@ def screenshot(page, name):
         return path
     except Exception:
         return None
-
 def get_conf_code(row):
     for key in ("Conf. Code", "col_2", "col_0"):
         v = row.get(key, "").strip()
         if v:
             return v
     return "UNKNOWN"
-
 def parse_bedroom_count_from_rate(rate_text):
     """
     Extract bedroom integer from rate name.
@@ -146,29 +141,39 @@ def parse_bedroom_count_from_rate(rate_text):
     if m:
         return int(m.group(1))
     return 1
-
 def extract_room_unit(room_no):
     """
-    'V52-Little Hill' or 'V52 (Little Hill -V52)' → unit='V52'
-    Plain 'V52' → unit='V52'
-    Also handles 'unit - description' format.
-    Returns the unit token only.
+    Extract the short unit code from a Room # field.
+
+    Valid unit codes: V52, V22A, 312B, 64, A1
+    (optional leading letters, 1-4 digits, optional trailing letter)
+
+    If the field contains only a villa name with no parseable unit code
+    (e.g. "Villa Amana"), returns "" so the value doesn't bleed into
+    the wrong column.
     """
     if not room_no:
         return ""
     # Strip parenthetical suffixes like " (Little Hill -V52)"
-    room_no = re.sub(r'\(.*\)', '', room_no).strip()
-    # Split on first dash or space before a dash
-    parts = re.split(r'\s*-\s*', room_no, maxsplit=1)
-    return parts[0].strip()
-
+    cleaned = re.sub(r'\(.*?\)', '', room_no).strip()
+    # Split on dashes and spaces, check each token for a unit-code pattern
+    tokens = re.split(r'[\s\-]+', cleaned)
+    for token in tokens:
+        token = token.strip()
+        if re.match(r'^[A-Za-z]{0,2}\d{1,4}[A-Za-z]?$', token):
+            return token.upper()
+    # Nothing matched — field is probably just a villa name; return blank
+    return ""
 def scrape_reservation_meta(landing, prefix=""):
     """
     Scrape the reservation form fields that aren't in the folio listing:
-      - Villa Name    : selected text of #roomTypeId
-      - Bedroom Count : integer from selected rate text (#rateId)
-      - Persons       : value of #noOfPersons
-      - Source        : selected text of #businessSource
+      - Villa Name    : selected text of room type dropdown
+      - Bedroom Count : integer from selected rate text
+      - Persons       : value of persons input
+      - Source        : selected text of business source dropdown
+
+    Tries multiple selector strategies per field to handle older records
+    where the PMS may use different field IDs or have no rate selected.
     Returns a dict with those four keys (empty string if not found).
     """
     meta = {
@@ -178,62 +183,154 @@ def scrape_reservation_meta(landing, prefix=""):
         "Source":        "",
     }
     try:
-        # Villa Name — Room Type dropdown selected text
-        villa = landing.evaluate("""
+        result = landing.evaluate("""
             () => {
-                const sel = document.querySelector('#roomTypeId');
-                if (!sel) return '';
-                const opt = sel.options[sel.selectedIndex];
-                return opt ? opt.text.trim() : '';
+                const debug = {};
+
+                // ── Villa Name ───────────────────────────────────────────
+                // #roomTypeId is a hidden INPUT (value=id), the display name
+                // is in input[name="roomTypeName"]. Also try select fallback.
+                const roomTypeNameEl = document.querySelector('input[name="roomTypeName"]');
+                if (roomTypeNameEl && roomTypeNameEl.value.trim()) {
+                    debug.villaSelector = 'input[name="roomTypeName"]';
+                    debug.villa         = roomTypeNameEl.value.trim();
+                } else {
+                    const villaSelectors = [
+                        '#roomTypeId',
+                        'select[name="roomTypeId"]',
+                        'select[name="roomType"]',
+                        '#roomType',
+                    ];
+                    for (const sel of villaSelectors) {
+                        const el = document.querySelector(sel);
+                        if (el && el.tagName === 'SELECT') {
+                            const opt = el.options[el.selectedIndex];
+                            const txt = opt ? opt.text.trim() : '';
+                            debug.villaSelector = sel;
+                            debug.villaRaw = txt;
+                            if (txt && txt !== '--Select--' && opt && opt.value) {
+                                debug.villa = txt;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // ── Rate / Bedroom Count ─────────────────────────────────
+                // #rateId is a hidden INPUT (value=id). The rate name is in
+                // input[name="rateName"] — skip if "N/A" (no rate assigned).
+                const rateSelectSelectors = [
+                    'select[name="rateId"]',
+                    'select[name="rate"]',
+                    '#rate',
+                    'select[name="roomRateId"]',
+                ];
+                for (const sel of rateSelectSelectors) {
+                    const el = document.querySelector(sel);
+                    if (el && el.tagName === 'SELECT') {
+                        const opt = el.options[el.selectedIndex];
+                        const txt = opt ? opt.text.trim() : '';
+                        debug.rateSelector = sel;
+                        debug.rateRaw = txt;
+                        if (txt && opt && opt.value) {
+                            debug.rateText = txt;
+                            break;
+                        }
+                    }
+                }
+                if (!debug.rateText) {
+                    const rateInputSelectors = [
+                        'input[name="rateName"]',
+                        '#rateName',
+                        'input[name="rateDescription"]',
+                    ];
+                    for (const sel of rateInputSelectors) {
+                        const el = document.querySelector(sel);
+                        if (el) {
+                            const v = el.value.trim();
+                            debug.rateSelector = sel + ' (input)';
+                            debug.rateRaw = v;
+                            if (v && v !== 'N/A') {
+                                debug.rateText = v;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // ── Persons ──────────────────────────────────────────────
+                const personSelectors = [
+                    '#noOfPersons',
+                    'input[name="noOfPersons"]',
+                    '#persons',
+                    'input[name="persons"]',
+                    '#numPersons',
+                    'input[name="numPersons"]',
+                    '#numberOfPersons',
+                ];
+                for (const sel of personSelectors) {
+                    const el = document.querySelector(sel);
+                    if (el) {
+                        const v = el.value.trim();
+                        debug.personsSelector = sel;
+                        debug.personsRaw = v;
+                        if (v !== '') {
+                            debug.persons = v;
+                            break;
+                        }
+                    }
+                }
+
+                // ── Source ───────────────────────────────────────────────
+                const sourceSelectors = [
+                    '#businessSource',
+                    'select[name="businessSource"]',
+                    '#source',
+                    'select[name="source"]',
+                    '#bookingSource',
+                    'select[name="bookingSource"]',
+                ];
+                for (const sel of sourceSelectors) {
+                    const el = document.querySelector(sel);
+                    if (el && el.tagName === 'SELECT') {
+                        const opt = el.options[el.selectedIndex];
+                        const txt = opt ? opt.text.trim() : '';
+                        debug.sourceSelector = sel;
+                        debug.sourceRaw = txt;
+                        if (txt && txt !== '--Select--') {
+                            debug.source = txt;
+                            break;
+                        }
+                    }
+                }
+
+                return debug;
             }
         """)
-        if villa and villa != '--Select--':
+        pr(prefix, f"  meta debug: {result}")
+
+        villa = result.get("villa", "")
+        if villa:
             meta["Villa Name"] = villa
 
-        # Bedroom Count — selected rate name, strip the BR number
-        rate_text = landing.evaluate("""
-            () => {
-                const sel = document.querySelector('#rateId');
-                if (!sel) return '';
-                const opt = sel.options[sel.selectedIndex];
-                return opt ? opt.text.trim() : '';
-            }
-        """)
-        # Only trust the rate if it explicitly contains a BR pattern
-        # (e.g. "Little Hill 4BR" → 4). Ambiguous rates like "1.HO" or
-        # "ZZ Comp" leave Bedroom Count empty so the room lookup wins.
+        rate_text = result.get("rateText", "")
         if rate_text:
             m_br = re.search(r'(\d+)\s*BR', rate_text, re.IGNORECASE)
             if m_br:
                 meta["Bedroom Count"] = int(m_br.group(1))
 
-        # Persons — noOfPersons input
-        persons = landing.evaluate("""
-            () => {
-                const el = document.querySelector('#noOfPersons');
-                return el ? el.value.trim() : '';
-            }
-        """)
+        persons = result.get("persons", "")
         if persons:
             meta["Persons"] = persons
 
-        # Source — businessSource dropdown selected text
-        source = landing.evaluate("""
-            () => {
-                const sel = document.querySelector('#businessSource');
-                if (!sel) return '';
-                const opt = sel.options[sel.selectedIndex];
-                return (opt && opt.value) ? opt.text.trim() : '';
-            }
-        """)
-        if source and source != '--Select--':
+        source = result.get("source", "")
+        if source:
             meta["Source"] = source
 
     except Exception as e:
         pr(prefix, f"  scrape_reservation_meta error: {e}")
 
     return meta
-
 def save_csv(filepath, rows):
     """Write rows to filepath, always overwriting any existing file."""
     if not rows:
@@ -251,17 +348,14 @@ def save_csv(filepath, rows):
         w.writeheader()
         w.writerows(rows)
     return filepath
-
 def folio_csv_path(folder_name, folio_num):
     folder = os.path.join(JOURNAL_FOLDER, folder_name)
     os.makedirs(folder, exist_ok=True)
     return os.path.join(folder, f"{folder_name}_folio_{folio_num}.csv")
-
 def guests_csv_path(member_num):
     folder = os.path.join(JOURNAL_FOLDER, member_num)
     os.makedirs(folder, exist_ok=True)
     return os.path.join(folder, f"{member_num}_guests.csv")
-
 # ─────────────────────────────────────────────
 # FRAME HELPERS
 # ─────────────────────────────────────────────
@@ -277,16 +371,11 @@ def get_landing_frame(page, timeout_ms=FRAME_TIMEOUT):
                 continue
         page.wait_for_timeout(200)
     return None
-
 def session_alive(page):
     return get_landing_frame(page, timeout_ms=1000) is not None
-
-
 def get_content_context(page, timeout_ms=FRAME_TIMEOUT):
     landing = get_landing_frame(page, timeout_ms=timeout_ms)
     return landing if landing else page
-
-
 def ensure_session(page, worker_id=0):
     if session_alive(page):
         return False
@@ -306,7 +395,6 @@ def ensure_session(page, worker_id=0):
     except Exception as e:
         pr(prefix, f"Re-login failed: {e}")
         return False
-
 def dismiss_popup(page):
     try:
         for frame in page.frames:
@@ -325,7 +413,6 @@ def dismiss_popup(page):
         page.wait_for_timeout(500)
     except Exception:
         pass
-
 # ─────────────────────────────────────────────
 # RESERVATION NAVIGATION
 # ─────────────────────────────────────────────
@@ -352,7 +439,6 @@ def navigate_to_reservation(page, conf_href, conf_code, prefix=""):
     except Exception as e:
         pr(prefix, f"Navigation error: {e}")
         return False
-
 # ─────────────────────────────────────────────
 # GUESTS TAB
 # ─────────────────────────────────────────────
@@ -422,7 +508,6 @@ def scrape_guests_tab(page, conf_code, listing_row, prefix=""):
     except Exception as e:
         pr(prefix, f"Guests tab error: {e}")
     return folio_to_guest, guest_rows
-
 # ─────────────────────────────────────────────
 # FOLIO MANAGEMENT
 # ─────────────────────────────────────────────
@@ -476,7 +561,6 @@ def open_folio_management(page, conf_code, prefix=""):
         pr(prefix, f"  Direct nav error: {e}")
     pr(prefix, "Could not open Folio Management.")
     return None
-
 # ─────────────────────────────────────────────
 # FOLIO TAB SCRAPING
 # ─────────────────────────────────────────────
@@ -497,7 +581,6 @@ def count_tab_groups(folio_frame, prefix=""):
     except Exception as e:
         pr(prefix, f"  Tab count error: {e}")
         return 1
-
 def call_get_tab(folio_frame, tab_num, prefix=""):
     try:
         folio_frame.evaluate(f"getTab('{tab_num}')")
@@ -506,7 +589,6 @@ def call_get_tab(folio_frame, tab_num, prefix=""):
     except Exception as e:
         pr(prefix, f"  getTab({tab_num}) error: {e}")
         return False
-
 def scrape_tab_folios(folio_frame, conf_code, folio_to_guest,
                       main_member_num, listing_meta, prefix=""):
     """
@@ -515,8 +597,7 @@ def scrape_tab_folios(folio_frame, conf_code, folio_to_guest,
     Each row contains:
       Date, Description, Amount  (from the folio table)
       _folio_num, _folio_name, _balance_due, _reservation_folio_id
-      + all LISTING_COLUMNS (Conf. Code, Member #, Guest Name, dates, Room #,
-                              Villa Name, Bedroom Count, Persons, Source, etc.)
+      + all LISTING_COLUMNS
     """
     results = {}
     try:
@@ -561,7 +642,6 @@ def scrape_tab_folios(folio_frame, conf_code, folio_to_guest,
                     continue
                 table_id     = folio_frame.evaluate("(t) => t.id", table_el)
                 res_folio_id = table_id.replace("folioId_", "") if table_id else ""
-                # Scrape tbody rows — only Date, Description, Amount
                 rows = folio_frame.evaluate("""
                     (table) => {
                         const ths  = table.querySelectorAll('thead th');
@@ -609,7 +689,6 @@ def scrape_tab_folios(folio_frame, conf_code, folio_to_guest,
     except Exception as e:
         pr(prefix, f"    Tab scrape error: {e}")
     return results
-
 def scrape_all_folio_tabs(folio_frame, conf_code, folio_to_guest,
                             main_member_num, listing_meta, prefix=""):
     """Iterate all tab groups via getTab('N'). Returns {folder: {folio_num: [rows]}}"""
@@ -626,7 +705,6 @@ def scrape_all_folio_tabs(folio_frame, conf_code, folio_to_guest,
         for folder, folio_dict in tab_data.items():
             results.setdefault(folder, {}).update(folio_dict)
     return results
-
 # ─────────────────────────────────────────────
 # PER-RESERVATION PIPELINE
 # ─────────────────────────────────────────────
@@ -638,19 +716,13 @@ def scrape_reservation(page, reservation_row, prefix=""):
     if not main_member_num:
         raw = reservation_row.get("Member/Guest Name", "") or reservation_row.get("_member_name", "")
         main_member_num, _ = split_member_guest(raw)
-
     # ── Room # ──────────────────────────────────────────────────────────────
-    # Raw value from the listing e.g. "V52 (Little Hill -V52)" or "V52-Little Hill"
-    # We only want the unit token: "V52"
-    raw_room = reservation_row.get("Room #", "")
+    raw_room  = reservation_row.get("Room #", "")
     room_unit = extract_room_unit(raw_room)
-
-    # ── Listing metadata stub (will be enriched from the live page below) ───
+    # ── Listing metadata stub ────────────────────────────────────────────────
     listing_meta = {col: reservation_row.get(col, "") for col in LISTING_COLUMNS}
     listing_meta["Main Member #"] = main_member_num
-    listing_meta["Room #"]        = room_unit   # cleaned unit only
-    # Villa Name, Bedroom Count, Persons, Source will be filled from the live page
-
+    listing_meta["Room #"]        = room_unit
     saved_files = {}
     pr(prefix, f"=== Reservation: {conf_code} | {reservation_row.get('Member/Guest Name', '')} ===")
     if not conf_href:
@@ -658,8 +730,7 @@ def scrape_reservation(page, reservation_row, prefix=""):
         return saved_files
     if not navigate_to_reservation(page, conf_href, conf_code, prefix):
         return saved_files
-
-    # ── Scrape live reservation form fields ─────────────────────────────────
+    # ── Scrape live reservation form fields ──────────────────────────────────
     landing = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if landing:
         pr(prefix, "Reading reservation form fields (Villa, Rate, Persons, Source)...")
@@ -668,36 +739,44 @@ def scrape_reservation(page, reservation_row, prefix=""):
                    f"Persons={live_meta['Persons']}  Source={live_meta['Source']}")
         # Merge into listing_meta; live page wins over CSV-derived values
         for k, v in live_meta.items():
-            if v != "":           # keep CSV value if live scrape came back empty
+            if v != "":
                 listing_meta[k] = v
-
-    # ── Bedroom count: fall back to room lookup if still not resolved ────────
-    if not listing_meta.get("Bedroom Count"):
-        from room_inquiry_scraper import get_bedroom_count_from_lookup
-        bc = get_bedroom_count_from_lookup(room_unit, fallback=1)
-        listing_meta["Bedroom Count"] = bc
-        pr(prefix, f"  Bedroom Count from room lookup: {bc}")
-
-    # ── Guests tab ───────────────────────────────────────────────────────────
+    # ── Payment Type — resolved from Source via business_source.csv ──────────
+    listing_meta["Payment Type"] = get_payment_type(listing_meta.get("Source", ""))
+    pr(prefix, f"  Payment Type: {listing_meta['Payment Type']}")
+    # ── Bedroom count + Villa Name: fall back to room lookup if still unresolved ──
+    if not listing_meta.get("Bedroom Count") or not listing_meta.get("Villa Name"):
+        from room_inquiry_scraper import get_bedroom_count_from_lookup, load_room_lookup
+        lookup = load_room_lookup()
+        room_row = lookup.get(room_unit.upper(), {})
+        if not listing_meta.get("Bedroom Count"):
+            bc = room_row.get("bedroom_count", "")
+            if bc:
+                listing_meta["Bedroom Count"] = bc
+                pr(prefix, f"  Bedroom Count from room lookup: {bc}")
+            else:
+                pr(prefix, f"  Bedroom Count: not found in room lookup for '{room_unit}'")
+        if not listing_meta.get("Villa Name"):
+            vn = room_row.get("villa_name", "")
+            if vn:
+                listing_meta["Villa Name"] = vn
+                pr(prefix, f"  Villa Name from room lookup: {vn}")
+    # ── Guests tab ────────────────────────────────────────────────────────────
     pr(prefix, "Reading Guests tab...")
     folio_to_guest, guest_rows = scrape_guests_tab(
         page, conf_code, reservation_row, prefix
     )
     pr(prefix, f"Folio→Guest map: {folio_to_guest}")
-
-    # Save guests CSV in main member's folder
     if main_member_num and guest_rows:
         gp = guests_csv_path(main_member_num)
         save_csv(gp, guest_rows)
         pr(prefix, f"Saved guests: {os.path.basename(gp)} ({len(guest_rows)} row(s))")
-
-    # ── Open Folio Management ────────────────────────────────────────────────
+    # ── Open Folio Management ─────────────────────────────────────────────────
     folio_frame = open_folio_management(page, conf_code, prefix)
     if not folio_frame:
         screenshot(page, f"no_folio_{conf_code}")
         return saved_files
-
-    # ── Scrape all tab groups ────────────────────────────────────────────────
+    # ── Scrape all tab groups ─────────────────────────────────────────────────
     pr(prefix, "Scraping folio tabs...")
     folio_data = scrape_all_folio_tabs(
         folio_frame, conf_code, folio_to_guest,
@@ -707,7 +786,6 @@ def scrape_reservation(page, reservation_row, prefix=""):
         pr(prefix, "No folio data scraped.")
         screenshot(page, f"empty_{conf_code}")
         return saved_files
-
     for folder_name, folio_dict in folio_data.items():
         for folio_num, rows in folio_dict.items():
             fp = folio_csv_path(folder_name, folio_num)
@@ -716,13 +794,11 @@ def scrape_reservation(page, reservation_row, prefix=""):
                 saved_files.setdefault(folder_name, []).append(saved)
                 pr(prefix, f"Saved: {os.path.basename(saved)} ({len(rows)} rows)")
     return saved_files
-
 # ─────────────────────────────────────────────
 # WORKER
 # ─────────────────────────────────────────────
 def _worker_init():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-
 def scrape_chunk(args):
     reservations_chunk, worker_id = args
     time.sleep(worker_id * 5)
@@ -772,7 +848,6 @@ def scrape_chunk(args):
         finally:
             browser.close()
     return results
-
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
@@ -878,6 +953,5 @@ def main():
         if still_failed:
             print(f"  Still failing: {still_failed}")
         print("=" * 60)
-
 if __name__ == "__main__":
     main()
