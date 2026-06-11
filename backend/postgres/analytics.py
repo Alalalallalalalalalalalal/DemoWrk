@@ -707,7 +707,9 @@ AMENITY_CASE_SQL = """
         WHEN description ~* '\mbar\M' THEN 'Bar'
         WHEN description ~* '\m(restaurant|dinner|lunch|breakfast)\M' THEN 'Restaurant'
         WHEN description ~* '\mtennis\M' THEN 'Tennis'
-        WHEN description ~* '\m(boutique|shop|commissary)\M' THEN 'Retail'
+        WHEN description ~* '\mboutique\M' THEN 'Boutique'
+        WHEN description ~* '\mshop\M' THEN 'Shop'
+        WHEN description ~* '\mcommissary\M' THEN 'Commissary'
         ELSE NULL
     END
 """

@@ -59,7 +59,8 @@ const AMENITY_COLORS = {
   Bar: "#C4A24D",
   Restaurant: "#C8976E",
   Tennis: "#5B9EAD",
-  Retail: "#3D7ABF",
+  Boutique: "#1e0e5a",
+  Commissary: "#a8799d",
 };
 const amenityColor = (name) => AMENITY_COLORS[name] ?? "#8B7B70";
 

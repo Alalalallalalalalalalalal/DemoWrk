@@ -92,7 +92,9 @@ AMENITY_PATTERNS: dict[str, str] = {
     "Bar":        r"\bbar\b",
     "Restaurant": r"\b(restaurant|dinner|lunch|breakfast)\b",
     "Tennis":     r"\btennis\b",
-    "Retail":     r"\b(boutique|shop|commissary)\b",
+    "Boutique":    r"\bboutique\b",
+    "Shop":         r"\bshop\b",
+    "Commissary":   r"\bcommissary\b",
 }
 
 _AMENITY_RE: dict[str, re.Pattern] = {
