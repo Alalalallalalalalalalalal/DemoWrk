@@ -10,8 +10,7 @@
  */
 
 import { useEffect, useState, useMemo } from "react";
-import { analyticsApi } from "../api/analytics";
-import "./styles.css";
+import { analyticsApi } from "../../api/analytics";
 
 /* ─── colour tokens ─────────────────────────────────────────────── */
 const C = {

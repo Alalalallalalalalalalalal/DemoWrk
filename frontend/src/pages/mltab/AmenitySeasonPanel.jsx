@@ -32,8 +32,7 @@ import {
   Download,
 } from "lucide-react";
 import * as XLSX from "xlsx";
-import { analyticsApi } from "../api/analytics";
-import "./styles.css";
+import { analyticsApi } from "../../api/analytics";
 
 /* ── Design tokens (match existing dashboard palette) ──────────── */
 const C = {

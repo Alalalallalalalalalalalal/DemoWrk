@@ -41,18 +41,18 @@ import {
   Settings,
 } from "lucide-react";
 import { analyticsApi } from "../api/analytics";
-import { COLORS, TOOLTIP_STYLE } from "./Dashboardstyles";
+import { COLORS, TOOLTIP_STYLE } from "./styles/Dashboardstyles";
 import {
   StatCard,
   ChartCard,
   SectionLabel,
   PieLegendCard,
   RoomHighlightCard,
-} from "./Dashboardcomponents";
-import SeasonFilterBar from "./SeasonFilterBar";
-import AmenitySeasonPanel from "./AmenitySeasonPanel";
-import SegmentationPanel from "./SegmentationPanel";
-import "./styles.css";
+} from "./styles/Dashboardcomponents";
+import SeasonFilterBar from "./mltab/SeasonFilterBar";
+import AmenitySeasonPanel from "./mltab/AmenitySeasonPanel";
+import SegmentationPanel from "./mltab/Segmentationpanel";
+import "./styles/styles.css";
 
 /* ─── Sidebar nav config ─────────────────────────────────────── */
 const TABS = [

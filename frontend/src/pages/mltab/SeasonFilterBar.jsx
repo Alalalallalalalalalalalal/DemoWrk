@@ -8,10 +8,9 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import { analyticsApi } from "../api/analytics";
-import { TOOLTIP_STYLE } from "./Dashboardstyles";
+import { analyticsApi } from "../../api/analytics";
+import { TOOLTIP_STYLE } from "../styles/Dashboardstyles";
 import { X, MapPin } from "lucide-react";
-import "./styles.css";
 
 const MONTH_NAMES = [
   "Jan",
