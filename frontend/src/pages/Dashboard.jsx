@@ -459,7 +459,7 @@ export default function Dashboard() {
               <div
                 style={{
                   borderRadius: 24,
-                  background: "#2C3B4D",
+                  background: "#013A59",
                   padding: 24,
                   color: "#EEE9DF",
                   display: "flex",
@@ -480,7 +480,7 @@ export default function Dashboard() {
                         fontSize: 10,
                         letterSpacing: "0.18em",
                         textTransform: "uppercase",
-                        color: "rgba(238,233,223,0.55)",
+                        color: "#3783ac95",
                         marginBottom: 4,
                       }}
                     >
@@ -565,8 +565,8 @@ export default function Dashboard() {
                       key={m.l}
                       style={{
                         borderRadius: 12,
-                        border: "1px solid rgba(238,233,223,0.1)",
-                        background: "rgba(27,38,50,0.4)",
+                        border: "1px solid #022132",
+                        background: "#023652",
                         padding: "10px 12px",
                         textAlign: "center",
                       }}

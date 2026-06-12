@@ -1,19 +1,42 @@
 /* frontend/src/pages/styles.css */
 
 :root {
-  --dashboard-palladian: #f4f1ed;
-  --dashboard-oatmeal: #c9c1b1;
-  --dashboard-deep-blue: #2c3b4d;
-  --dashboard-flame: #ffb162;
-  --dashboard-truffle: #a35139;
-  --dashboard-abyssal: #1b2632;
-  --dashboard-border: #ddd6ca;
-  --dashboard-card: #fdfaf6;
-  --dashboard-panel: #f7f3ec;
-  --dashboard-panel-alt: #f2ede4;
-  --dashboard-muted: #9a8e84;
-  --dashboard-text-soft: #7a6e63;
-  --dashboard-row-border: #eae3da;
+  /* Base backgrounds */
+  --dashboard-palladian: #f4f8fb;
+  --dashboard-oatmeal: #d7e3eb;
+
+  /* Primary brand color */
+  --dashboard-deep-blue: #013a59;
+  --dashboard-deep-blue-rgb: 1, 58, 89;
+
+  /* Accent colors */
+  --dashboard-flame: #2f89c5;
+  --dashboard-flame-rgb: 47, 137, 197;
+  --dashboard-truffle: #0b5d8a;
+  --dashboard-truffle-rgb: 11, 93, 138;
+
+  /* Dark tones */
+  --dashboard-abyssal: #01263a;
+
+  /* Surfaces */
+  --dashboard-card: #ffffff;
+  --dashboard-panel: #f5f9fc;
+  --dashboard-panel-alt: #edf4f8;
+
+  /* Borders */
+  --dashboard-border: #d6e3eb;
+  --dashboard-row-border: #e4eef4;
+
+  /* Text */
+  --dashboard-muted: #6e8798;
+  --dashboard-text-soft: #557082;
+
+  /* Shared dashboard UI helpers */
+  --dashboard-hover: rgba(var(--dashboard-deep-blue-rgb), 0.06);
+  --dashboard-overlay: rgba(var(--dashboard-deep-blue-rgb), 0.28);
+  --dashboard-shadow-soft: 0 2px 12px rgba(var(--dashboard-deep-blue-rgb), 0.04);
+  --dashboard-shadow-panel: -6px 0 36px
+    rgba(var(--dashboard-deep-blue-rgb), 0.16);
 }
 
 .dashboard-shell {
@@ -29,7 +52,7 @@
   height: 100vh;
   overflow-y: auto;
   border-color: var(--dashboard-border);
-  background: linear-gradient(180deg, #f4f1ed 20%, #ddd3c2 200%);
+  background: var(--dashboard-deep-blue);
 }
 
 .dashboard-main {
@@ -40,22 +63,22 @@
 .dashboard-nav-button {
   border: none;
   background: transparent;
-  color: rgba(27, 38, 50, 0.65);
+  color: rgba(255, 255, 255, 0.72);
   font-weight: 400;
   cursor: pointer;
 }
 
 .dashboard-nav-button.is-active {
-  background: var(--dashboard-deep-blue);
-  color: #eee9df;
+  background: var(--dashboard-truffle);
+  color: #ffffff;
   font-weight: 500;
 }
-
 .dashboard-nav-icon {
   width: 15px;
   height: 15px;
   flex-shrink: 0;
   opacity: 0.6;
+  color: #ffffff;
 }
 
 .dashboard-nav-button.is-active .dashboard-nav-icon {
@@ -64,6 +87,7 @@
 
 .dashboard-nav-label {
   font-size: 13px;
+  color: #ffffff;
 }
 
 .dashboard-topbar {
@@ -159,6 +183,7 @@
   border: 1px solid var(--dashboard-border);
   border-radius: 24px;
   background: var(--dashboard-card);
+  box-shadow: var(--dashboard-shadow-soft);
 }
 
 .dashboard-card {
@@ -235,6 +260,11 @@
 .dashboard-icon-button:hover,
 .dashboard-nav-button:hover {
   filter: brightness(0.98);
+}
+
+.dashboard-card button:hover,
+.dashboard-icon-button:hover {
+  background-color: var(--dashboard-hover);
 }
 
 @media (max-width: 1024px) {

@@ -12,7 +12,7 @@
 export const COLORS = [
   "#FFB162", // flame
   "#A35139", // truffle
-  "#2C3B4D", // deepblue
+  "#013A59", // deepblue
   "#C9C1B1", // oatmeal
   "#5B8FA8",
   "#D4895A",

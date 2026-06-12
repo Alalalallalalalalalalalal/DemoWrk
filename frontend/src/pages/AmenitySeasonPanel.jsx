@@ -33,38 +33,49 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { analyticsApi } from "../api/analytics";
+import "./styles.css";
 
 /* ── Design tokens (match existing dashboard palette) ──────────── */
 const C = {
-  bg: "#FDFAF6",
-  border: "#EDE5D8",
-  borderHover: "#C8976E",
-  textPrimary: "#3D2B1F",
-  textMid: "#5A3E2B",
-  textMuted: "#A08070",
-  textLight: "#C4B0A0",
-  accent: "#C8976E",
-  accentLight: "#FDF6F0",
-  teal: "#5B9EAD",
-  gold: "#C4A24D",
+  bg: "var(--dashboard-card)",
+  panel: "var(--dashboard-panel)",
+  panelAlt: "var(--dashboard-panel-alt)",
+  border: "var(--dashboard-border)",
+  borderHover: "var(--dashboard-truffle)",
+  rowBorder: "var(--dashboard-row-border)",
+  textPrimary: "var(--dashboard-abyssal)",
+  textMid: "var(--dashboard-text-soft)",
+  textMuted: "var(--dashboard-muted)",
+  textLight: "var(--dashboard-oatmeal)",
+  accent: "var(--dashboard-deep-blue)",
+  accentLight: "var(--dashboard-panel-alt)",
+  accent2: "var(--dashboard-truffle)",
+  accent3: "var(--dashboard-flame)",
+  teal: "var(--dashboard-flame)",
+  gold: "#D98C2B",
   green: "#2D8A5F",
   purple: "#7B5EA7",
   red: "#C45B5B",
-  rowAlt: "#FAF6F0",
-  headerBg: "#F4EDE4",
+  rowAlt: "var(--dashboard-panel)",
+  headerBg: "var(--dashboard-panel-alt)",
+  overlay: "var(--dashboard-overlay)",
+  panelShadow: "var(--dashboard-shadow-panel)",
 };
+
+const tint = (color, amount = 14) =>
+  `color-mix(in srgb, ${color} ${amount}%, transparent)`;
 
 const AMENITY_COLORS = {
   Spa: "#7B5EA7",
   Golf: "#2D8A5F",
   Grill: "#C45B5B",
-  Bar: "#C4A24D",
-  Restaurant: "#C8976E",
-  Tennis: "#5B9EAD",
-  Boutique: "#1e0e5a",
-  Commissary: "#a8799d",
+  Bar: "#D98C2B",
+  Restaurant: "var(--dashboard-truffle)",
+  Tennis: "var(--dashboard-flame)",
+  Boutique: "var(--dashboard-deep-blue)",
+  Commissary: "#8A6F8F",
 };
-const amenityColor = (name) => AMENITY_COLORS[name] ?? "#8B7B70";
+const amenityColor = (name) => AMENITY_COLORS[name] ?? C.textMuted;
 
 const CHART_COLORS = Object.values(AMENITY_COLORS);
 
@@ -75,9 +86,9 @@ const pill = (color) => ({
   borderRadius: 20,
   fontSize: 11,
   fontWeight: 600,
-  background: color + "22",
+  background: tint(color, 14),
   color,
-  border: `1px solid ${color}44`,
+  border: `1px solid ${tint(color, 32)}`,
   whiteSpace: "nowrap",
   fontFamily: "sans-serif",
 });
@@ -109,7 +120,7 @@ const select = {
 const th = {
   padding: "10px 14px",
   background: C.headerBg,
-  color: "#7A5C45",
+  color: C.textMid,
   fontWeight: 700,
   textAlign: "left",
   fontSize: 11,
@@ -124,7 +135,7 @@ const th = {
 
 const td = {
   padding: "10px 14px",
-  borderBottom: `1px solid #F0E8DE`,
+  borderBottom: `1px solid ${C.rowBorder}`,
   color: C.textPrimary,
   fontSize: 13,
   verticalAlign: "middle",
@@ -146,10 +157,10 @@ const sectionTitle = {
 };
 
 const TOOLTIP_STYLE = {
-  background: "#3D2B1F",
+  background: C.textPrimary,
   border: "none",
   borderRadius: 8,
-  color: "#F5EEE6",
+  color: C.bg,
   fontSize: 12,
   fontFamily: "sans-serif",
 };
@@ -265,7 +276,7 @@ function StatMini({ icon: Icon, label, value, color = C.accent }) {
           width: 36,
           height: 36,
           borderRadius: 9,
-          background: color + "18",
+          background: tint(color, 12),
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -345,7 +356,8 @@ function InsightGuide({
         marginBottom: compact ? 12 : 16,
         padding: compact ? "12px 14px" : "14px 16px",
         borderRadius: 12,
-        background: "linear-gradient(135deg, #FDF6F0 0%, #FDFAF6 100%)",
+        background:
+          "linear-gradient(135deg, var(--dashboard-panel-alt) 0%, var(--dashboard-card) 100%)",
         border: `1px solid ${C.border}`,
         borderLeft: `4px solid ${C.accent}`,
       }}
@@ -534,7 +546,7 @@ function AmenitySeasonHeatmap({ data, onCellClick }) {
                 const cell = lookup[`${amenity}||${season}`];
                 const intensity = cell ? cell.total_spend / maxSpend : 0;
                 const bg = cell
-                  ? `rgba(200,151,110,${0.08 + intensity * 0.62})`
+                  ? `rgba(var(--dashboard-deep-blue-rgb), ${0.08 + intensity * 0.55})`
                   : "transparent";
                 return (
                   <td
@@ -747,7 +759,7 @@ function MemberAmenityProfileTable({ data }) {
             padding: "6px 12px",
             borderRadius: 8,
             border: `1px solid ${C.borderHover}`,
-            background: C.accentLight,
+            background: C.panelAlt,
             color: C.accent,
             fontSize: 12,
             fontWeight: 700,
@@ -853,7 +865,7 @@ function MemberAmenityProfileTable({ data }) {
                     <td style={{ ...td, fontWeight: 600, color: C.accent }}>
                       ${Number(r.top_amenity_spend ?? 0).toLocaleString()}
                     </td>
-                    <td style={{ ...td, fontWeight: 600, color: C.gold }}>
+                    <td style={{ ...td, fontWeight: 600, color: C.accent2 }}>
                       ${Number(r.total_amenity_spend ?? 0).toLocaleString()}
                     </td>
                   </tr>
@@ -966,7 +978,7 @@ function VisitSidePanel({ visit, onClose }) {
         style={{
           position: "fixed",
           inset: 0,
-          background: "rgba(30,18,10,0.38)",
+          background: C.overlay,
           zIndex: 900,
           backdropFilter: "blur(2px)",
         }}
@@ -980,7 +992,7 @@ function VisitSidePanel({ visit, onClose }) {
           bottom: 0,
           width: "min(420px, 92vw)",
           background: C.bg,
-          boxShadow: "-6px 0 36px rgba(0,0,0,0.13)",
+          boxShadow: C.panelShadow,
           zIndex: 901,
           display: "flex",
           flexDirection: "column",
@@ -990,7 +1002,7 @@ function VisitSidePanel({ visit, onClose }) {
       >
         <div
           style={{
-            background: C.accentLight,
+            background: C.panelAlt,
             borderBottom: `1px solid ${C.border}`,
             padding: "22px 22px 18px",
           }}
@@ -1326,7 +1338,7 @@ function MemberSeasonVisitsTable({
             padding: "6px 12px",
             borderRadius: 8,
             border: `1px solid ${C.borderHover}`,
-            background: C.accentLight,
+            background: C.panelAlt,
             color: C.accent,
             fontSize: 12,
             fontWeight: 700,
@@ -1604,7 +1616,7 @@ function SeasonCapacityCards({ data }) {
             padding: "6px 12px",
             borderRadius: 8,
             border: `1px solid ${C.borderHover}`,
-            background: C.accentLight,
+            background: C.panelAlt,
             color: C.accent,
             fontSize: 12,
             fontWeight: 700,
@@ -1923,19 +1935,19 @@ function AmenitySpendBarChart({ spendData, onBarClick }) {
           />
           <Tooltip
             contentStyle={{
-              background: "#FDFAF6",
-              border: "1px solid #EDE5D8",
+              background: "var(--dashboard-card)",
+              border: "1px solid var(--dashboard-border)",
               borderRadius: 8,
-              color: "#3D2B1F",
+              color: "var(--dashboard-abyssal)",
               fontSize: 12,
               fontFamily: "sans-serif",
             }}
             labelStyle={{
-              color: "#3D2B1F",
+              color: "var(--dashboard-abyssal)",
               fontWeight: 700,
             }}
             itemStyle={{
-              color: "#3D2B1F",
+              color: "var(--dashboard-abyssal)",
             }}
             formatter={(v) => [`$${Number(v).toLocaleString()}`, "Total Spend"]}
           />
@@ -2269,7 +2281,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
               gap: 10,
               marginBottom: 10,
               padding: "10px 14px",
-              background: C.accentLight,
+              background: C.panelAlt,
               borderRadius: 10,
               border: `1px solid ${C.borderHover}`,
             }}

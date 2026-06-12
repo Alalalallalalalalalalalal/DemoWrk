@@ -11,34 +11,45 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { analyticsApi } from "../api/analytics";
+import "./styles.css";
 
 /* ─── colour tokens ─────────────────────────────────────────────── */
 const C = {
-  bg: "#FDFAF6",
-  border: "#EDE5D8",
-  muted: "#A08070",
-  text: "#3D2B1F",
-  sub: "#6D5848",
-  accent: "#C8976E",
-  teal: "#5B9EAD",
-  gold: "#C4A24D",
+  bg: "var(--dashboard-card)",
+  border: "var(--dashboard-border)",
+  muted: "var(--dashboard-muted)",
+  text: "var(--dashboard-abyssal)",
+  sub: "var(--dashboard-text-soft)",
+  accent: "var(--dashboard-deep-blue)",
+  teal: "var(--dashboard-flame)",
+  gold: "#D98C2B",
   green: "#2D8A5F",
   red: "#C45B5B",
   purple: "#7B5EA7",
-  headerBg: "#F4EDE4",
-  rowAlt: "#FAF6F0",
+  headerBg: "var(--dashboard-panel-alt)",
+  rowAlt: "var(--dashboard-panel)",
+  panel: "var(--dashboard-panel)",
+  panelAlt: "var(--dashboard-panel-alt)",
+  overlay: "var(--dashboard-overlay)",
+  panelShadow: "var(--dashboard-shadow-panel)",
 };
+
+const tint = (color, amount = 14) =>
+  `color-mix(in srgb, ${color} ${amount}%, transparent)`;
 
 /* colour + left-border accent per segment label — no icons */
 const SEGMENT_PALETTE = {
-  "High Spender": { bg: "#FFF8F0", accent: C.accent },
-  "Medium Spender": { bg: "#F5FBF0", accent: C.green },
-  "Low Spender": { bg: "#F0F7FA", accent: C.teal },
-  Frequent: { bg: "#FFF8F0", accent: C.accent },
-  Regular: { bg: "#F5FBF0", accent: C.green },
-  Lapsed: { bg: "#FDF0F0", accent: C.red },
-  "Never Visited": { bg: "#F5F0FA", accent: C.purple },
-  _default: { bg: "#F0F5FA", accent: C.teal },
+  "High Spender": { bg: "var(--dashboard-panel-alt)", accent: C.accent },
+  "Medium Spender": {
+    bg: "var(--dashboard-panel)",
+    accent: C.accent3 ?? C.teal,
+  },
+  "Low Spender": { bg: "var(--dashboard-card)", accent: C.muted },
+  Frequent: { bg: "var(--dashboard-panel-alt)", accent: C.accent },
+  Regular: { bg: "var(--dashboard-panel)", accent: C.teal },
+  Lapsed: { bg: "#FFF5F5", accent: C.red },
+  "Never Visited": { bg: "#F7F4FD", accent: C.purple },
+  _default: { bg: "var(--dashboard-panel)", accent: C.teal },
 };
 
 const paletteFor = (label) =>
@@ -48,7 +59,7 @@ const paletteFor = (label) =>
 const th = {
   padding: "10px 14px",
   background: C.headerBg,
-  color: "#7A5C45",
+  color: C.sub,
   fontWeight: 700,
   textAlign: "left",
   fontSize: 11,
@@ -64,7 +75,7 @@ const th = {
 
 const td = {
   padding: "10px 14px",
-  borderBottom: `1px solid #F0E8DE`,
+  borderBottom: `1px solid var(--dashboard-row-border)`,
   color: C.text,
   fontSize: 13,
   verticalAlign: "middle",
@@ -77,9 +88,9 @@ const pill = (color) => ({
   borderRadius: 20,
   fontSize: 11,
   fontWeight: 600,
-  background: color + "22",
+  background: tint(color, 14),
   color,
-  border: `1px solid ${color}44`,
+  border: `1px solid ${tint(color, 32)}`,
   whiteSpace: "nowrap",
   fontFamily: "sans-serif",
 });
@@ -198,7 +209,7 @@ function MemberSidePanel({ member, tab, onClose }) {
         style={{
           position: "fixed",
           inset: 0,
-          background: "rgba(30,18,10,0.38)",
+          background: C.overlay,
           zIndex: 900,
           backdropFilter: "blur(2px)",
         }}
@@ -212,7 +223,7 @@ function MemberSidePanel({ member, tab, onClose }) {
           bottom: 0,
           width: "min(400px, 92vw)",
           background: C.bg,
-          boxShadow: "-6px 0 36px rgba(0,0,0,0.13)",
+          boxShadow: C.panelShadow,
           zIndex: 901,
           display: "flex",
           flexDirection: "column",
@@ -457,6 +468,9 @@ function SegmentCard({ label, count, totalSpend, active, onClick }) {
         minWidth: 130,
         flex: "1 1 130px",
         fontFamily: "sans-serif",
+        boxShadow: active
+          ? "0 4px 12px rgba(var(--dashboard-deep-blue-rgb), 0.08)"
+          : "none",
       }}
     >
       <div
@@ -800,7 +814,7 @@ export default function SegmentationPanel() {
         style={{
           display: "flex",
           gap: 2,
-          background: "#EDE5D8",
+          background: "var(--dashboard-border)",
           borderRadius: 10,
           padding: 3,
           marginBottom: 20,

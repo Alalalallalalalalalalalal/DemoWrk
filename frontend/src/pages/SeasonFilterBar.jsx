@@ -11,6 +11,7 @@ import {
 import { analyticsApi } from "../api/analytics";
 import { TOOLTIP_STYLE } from "./Dashboardstyles";
 import { X, MapPin } from "lucide-react";
+import "./styles.css";
 
 const MONTH_NAMES = [
   "Jan",
@@ -28,6 +29,27 @@ const MONTH_NAMES = [
 ];
 
 const DAY_OPTIONS = Array.from({ length: 31 }, (_, i) => i + 1);
+
+const C = {
+  bg: "var(--dashboard-card)",
+  panel: "var(--dashboard-panel)",
+  panelAlt: "var(--dashboard-panel-alt)",
+  border: "var(--dashboard-border)",
+  rowBorder: "var(--dashboard-row-border)",
+  textPrimary: "var(--dashboard-abyssal)",
+  textMid: "var(--dashboard-text-soft)",
+  textMuted: "var(--dashboard-muted)",
+  textLight: "var(--dashboard-oatmeal)",
+  accent: "var(--dashboard-deep-blue)",
+  accent2: "var(--dashboard-truffle)",
+  accent3: "var(--dashboard-flame)",
+  panelShadow: "var(--dashboard-shadow-panel)",
+  overlay: "var(--dashboard-overlay)",
+  red: "#C45B5B",
+};
+
+const tint = (color, amount = 14) =>
+  `color-mix(in srgb, ${color} ${amount}%, transparent)`;
 
 function formatSeasonRange(season) {
   return `${MONTH_NAMES[season.start_month - 1]} ${season.start_day}–${
@@ -93,7 +115,7 @@ function InsightGuide({ title, description, meta = [], action }) {
             margin: 0,
             fontSize: 13,
             fontWeight: 700,
-            color: "#3D2B1F",
+            color: C.textPrimary,
             fontFamily: "sans-serif",
           }}
         >
@@ -104,9 +126,9 @@ function InsightGuide({ title, description, meta = [], action }) {
             style={{
               padding: "4px 9px",
               borderRadius: 999,
-              background: "#FDF6F0",
-              border: "1px solid #C8976E55",
-              color: "#C8976E",
+              background: C.panelAlt,
+              border: `1px solid ${tint(C.accent, 32)}`,
+              color: C.accent,
               fontSize: 11,
               fontWeight: 700,
               fontFamily: "sans-serif",
@@ -122,7 +144,7 @@ function InsightGuide({ title, description, meta = [], action }) {
           margin: "6px 0 10px",
           fontSize: 12,
           lineHeight: 1.55,
-          color: "#A08070",
+          color: C.textMuted,
           fontFamily: "sans-serif",
           maxWidth: 980,
         }}
@@ -138,10 +160,10 @@ function InsightGuide({ title, description, meta = [], action }) {
               style={{
                 padding: "5px 9px",
                 borderRadius: 999,
-                background: "#F4EDE4",
-                border: "1px solid #EDE5D8",
+                background: C.panelAlt,
+                border: `1px solid ${C.border}`,
                 fontSize: 11,
-                color: "#5A3E2B",
+                color: C.textMid,
                 fontFamily: "sans-serif",
               }}
             >
@@ -345,8 +367,8 @@ export default function SeasonFilterBar({
 
   const S = {
     wrap: {
-      background: "#FDFAF6",
-      border: "1px solid #EDE5D8",
+      background: C.bg,
+      border: `1px solid ${C.border}`,
       borderRadius: 14,
       padding: "18px 20px 14px",
       display: "flex",
@@ -358,10 +380,10 @@ export default function SeasonFilterBar({
       margin: 0,
       fontSize: 13,
       fontWeight: 700,
-      color: "#3D2B1F",
+      color: C.textPrimary,
       fontFamily: "sans-serif",
     },
-    note: { fontSize: 11, color: "#A08070", fontFamily: "sans-serif" },
+    note: { fontSize: 11, color: C.textMuted, fontFamily: "sans-serif" },
     tabRow: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" },
     tab: (active) => ({
       padding: "5px 13px",
@@ -371,9 +393,9 @@ export default function SeasonFilterBar({
       cursor: "pointer",
       border: "1.5px solid",
       fontFamily: "sans-serif",
-      borderColor: active ? "#3D2B1F" : "#DDD0C4",
-      background: active ? "#3D2B1F" : "#FDFAF6",
-      color: active ? "#FDFAF6" : "#7A6050",
+      borderColor: active ? C.accent : C.border,
+      background: active ? C.accent : C.bg,
+      color: active ? C.bg : C.textMid,
     }),
     addGroupBtn: {
       display: "inline-flex",
@@ -384,8 +406,8 @@ export default function SeasonFilterBar({
       fontSize: 12,
       fontWeight: 600,
       cursor: "pointer",
-      border: "1.5px dashed #C8976E",
-      color: "#C8976E",
+      border: `1.5px dashed ${C.accent2}`,
+      color: C.accent,
       background: "transparent",
       fontFamily: "sans-serif",
     },
@@ -398,9 +420,9 @@ export default function SeasonFilterBar({
       borderRadius: 20,
       fontSize: 11,
       fontWeight: 600,
-      border: "1px solid #EDE5D8",
-      background: "#FAF6F0",
-      color: "#5A3E2B",
+      border: `1px solid ${C.border}`,
+      background: C.panel,
+      color: C.textMid,
       fontFamily: "sans-serif",
       opacity: enabled ? 1 : 0.4,
     }),
@@ -411,14 +433,14 @@ export default function SeasonFilterBar({
       border: "none",
       cursor: "pointer",
       background: "transparent",
-      color: "#9C7B65",
+      color: C.textMuted,
       fontSize: 11,
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
     },
     panel: {
-      background: "#F4EDE4",
+      background: C.panelAlt,
       borderRadius: 10,
       padding: "12px 14px",
       display: "flex",
@@ -428,28 +450,28 @@ export default function SeasonFilterBar({
     input: {
       flex: 1,
       padding: "6px 10px",
-      border: "1px solid #DDD0C4",
+      border: `1px solid ${C.border}`,
       borderRadius: 8,
       fontSize: 12,
-      background: "#FDFAF6",
-      color: "#3D2B1F",
+      background: C.bg,
+      color: C.textPrimary,
       outline: "none",
       fontFamily: "sans-serif",
     },
     select: {
       padding: "6px 8px",
-      border: "1px solid #DDD0C4",
+      border: `1px solid ${C.border}`,
       borderRadius: 8,
       fontSize: 12,
-      background: "#FDFAF6",
-      color: "#3D2B1F",
+      background: C.bg,
+      color: C.textPrimary,
       outline: "none",
     },
     saveBtn: {
       padding: "6px 14px",
       borderRadius: 8,
       border: "none",
-      background: "#C8976E",
+      background: C.accent,
       color: "#fff",
       fontSize: 12,
       fontWeight: 700,
@@ -459,9 +481,9 @@ export default function SeasonFilterBar({
     cancelBtn: {
       padding: "6px 14px",
       borderRadius: 8,
-      border: "1px solid #DDD0C4",
-      background: "#FDFAF6",
-      color: "#7A6050",
+      border: `1px solid ${C.border}`,
+      background: C.bg,
+      color: C.textMid,
       fontSize: 12,
       cursor: "pointer",
       fontFamily: "sans-serif",
@@ -513,9 +535,9 @@ export default function SeasonFilterBar({
                       fontSize: 9,
                       padding: "1px 5px",
                       borderRadius: 8,
-                      background: "#C8976E22",
-                      color: "#C8976E",
-                      border: "1px solid #C8976E44",
+                      background: tint(C.accent, 14),
+                      color: C.accent,
+                      border: `1px solid ${tint(C.accent, 32)}`,
                     }}
                   >
                     custom
@@ -528,7 +550,7 @@ export default function SeasonFilterBar({
                       border: "none",
                       background: "transparent",
                       cursor: "pointer",
-                      color: "#C45B5B",
+                      color: C.red,
                     }}
                     title="Delete group"
                     onClick={(e) => {
@@ -561,7 +583,7 @@ export default function SeasonFilterBar({
               <div key={s.id} style={S.chip(s.is_active)}>
                 <span>{s.season_name}</span>
                 <span
-                  style={{ fontSize: 10, color: "#A08070", fontWeight: 400 }}
+                  style={{ fontSize: 10, color: C.textMuted, fontWeight: 400 }}
                 >
                   {formatSeasonRange(s)}
                 </span>
@@ -623,7 +645,7 @@ export default function SeasonFilterBar({
               style={{
                 fontSize: 12,
                 fontWeight: 700,
-                color: "#3D2B1F",
+                color: C.textPrimary,
                 margin: "0 0 4px",
                 fontFamily: "sans-serif",
               }}
@@ -672,7 +694,11 @@ export default function SeasonFilterBar({
                 ))}
               </select>
               <span
-                style={{ fontSize: 11, color: "#A08070", alignSelf: "center" }}
+                style={{
+                  fontSize: 11,
+                  color: C.textMuted,
+                  alignSelf: "center",
+                }}
               >
                 →
               </span>
@@ -730,7 +756,7 @@ export default function SeasonFilterBar({
               style={{
                 fontSize: 12,
                 fontWeight: 700,
-                color: "#3D2B1F",
+                color: C.textPrimary,
                 margin: "0 0 4px",
                 fontFamily: "sans-serif",
               }}
@@ -779,7 +805,11 @@ export default function SeasonFilterBar({
                 ))}
               </select>
               <span
-                style={{ fontSize: 11, color: "#A08070", alignSelf: "center" }}
+                style={{
+                  fontSize: 11,
+                  color: C.textMuted,
+                  alignSelf: "center",
+                }}
               >
                 →
               </span>
@@ -837,7 +867,7 @@ export default function SeasonFilterBar({
               style={{
                 fontSize: 12,
                 fontWeight: 700,
-                color: "#3D2B1F",
+                color: C.textPrimary,
                 margin: "0 0 4px",
                 fontFamily: "sans-serif",
               }}
@@ -876,24 +906,24 @@ export default function SeasonFilterBar({
               <CartesianGrid strokeDasharray="3 3" stroke="#E8DDD0" />
               <XAxis
                 dataKey="season"
-                stroke="#A08070"
+                stroke="var(--dashboard-muted)"
                 fontSize={11}
                 label={{
                   value: "Season Name",
                   position: "insideBottom",
                   offset: -12,
-                  fill: "#A08070",
+                  fill: "var(--dashboard-muted)",
                   fontSize: 11,
                 }}
               />
               <YAxis
-                stroke="#A08070"
+                stroke="var(--dashboard-muted)"
                 fontSize={11}
                 label={{
                   value: "Total Visits",
                   angle: -90,
                   position: "insideLeft",
-                  fill: "#A08070",
+                  fill: "var(--dashboard-muted)",
                   fontSize: 11,
                 }}
               />
@@ -907,7 +937,7 @@ export default function SeasonFilterBar({
               />
               <Bar
                 dataKey="visits"
-                fill="#C8976E"
+                fill="var(--dashboard-deep-blue)"
                 radius={[6, 6, 0, 0]}
                 cursor="pointer"
                 onClick={(data) => openSeasonMembers(data)}
@@ -918,7 +948,7 @@ export default function SeasonFilterBar({
         <p
           style={{
             fontSize: 11,
-            color: "#A08070",
+            color: C.textMuted,
             fontFamily: "sans-serif",
             margin: 0,
             lineHeight: 1.45,
@@ -956,8 +986,8 @@ export default function SeasonFilterBar({
             padding: "10px 14px",
             borderRadius: 10,
             background: seasonModalError ? "#FFF4F4" : "#FFFDF9",
-            border: "1px solid #EDE5D8",
-            color: seasonModalError ? "#C45B5B" : "#7A6050",
+            border: `1px solid ${C.border}`,
+            color: seasonModalError ? C.red : "var(--dashboard-text-soft)",
             fontSize: 12,
             fontFamily: "sans-serif",
             boxShadow: "0 8px 22px rgba(61,43,31,0.12)",
@@ -1008,7 +1038,7 @@ const MODAL = {
   panel: {
     width: "min(1180px, 98vw)",
     height: "100vh",
-    background: "#FDFAF6",
+    background: C.bg,
     display: "flex",
     flexDirection: "column",
     boxShadow: "-8px 0 40px rgba(0,0,0,0.18)",
@@ -1016,27 +1046,27 @@ const MODAL = {
   },
   header: {
     padding: "24px 34px 20px",
-    borderBottom: "1px solid #EDE5D8",
+    borderBottom: "1px solid var(--dashboard-border)",
     display: "flex",
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: 12,
     position: "sticky",
     top: 0,
-    background: "#FDFAF6",
+    background: C.bg,
     zIndex: 10,
   },
   title: {
     margin: 0,
     fontSize: 22,
     fontWeight: 700,
-    color: "#3D2B1F",
+    color: C.textPrimary,
     fontFamily: "sans-serif",
   },
   sub: {
     margin: "4px 0 0",
     fontSize: 12,
-    color: "#A08070",
+    color: C.textMuted,
     fontFamily: "sans-serif",
   },
   closeBtn: {
@@ -1046,10 +1076,10 @@ const MODAL = {
     width: 38,
     height: 38,
     borderRadius: "50%",
-    border: "1px solid #EDE5D8",
+    border: `1px solid ${C.border}`,
     background: "transparent",
     cursor: "pointer",
-    color: "#7A5C45",
+    color: "var(--dashboard-text-soft)",
     flexShrink: 0,
   },
   body: {
@@ -1067,18 +1097,18 @@ const MODAL = {
   },
   filterInput: {
     padding: "7px 12px",
-    border: "1px solid #DDD0C4",
+    border: `1px solid ${C.border}`,
     borderRadius: 8,
     fontSize: 12,
     fontFamily: "sans-serif",
-    background: "#FDFAF6",
-    color: "#3D2B1F",
+    background: C.bg,
+    color: C.textPrimary,
     outline: "none",
     width: 260,
   },
   count: {
     fontSize: 12,
-    color: "#A08070",
+    color: C.textMuted,
     fontFamily: "sans-serif",
     marginLeft: "auto",
   },
@@ -1090,14 +1120,14 @@ const MODAL = {
   },
   th: {
     padding: "12px 14px",
-    background: "#F4EDE4",
-    color: "#7A5C45",
+    background: C.panelAlt,
+    color: "var(--dashboard-text-soft)",
     fontWeight: 700,
     textAlign: "left",
     fontSize: 11,
     textTransform: "uppercase",
     letterSpacing: "0.07em",
-    borderBottom: "1px solid #EDE5D8",
+    borderBottom: "1px solid var(--dashboard-border)",
     whiteSpace: "nowrap",
     position: "sticky",
     top: 0,
@@ -1105,8 +1135,8 @@ const MODAL = {
   },
   td: {
     padding: "12px 14px",
-    borderBottom: "1px solid #F0E8DE",
-    color: "#3D2B1F",
+    borderBottom: "1px solid var(--dashboard-row-border)",
+    color: C.textPrimary,
     verticalAlign: "top",
   },
 };
@@ -1176,10 +1206,10 @@ function SeasonDetailPanel({ season, rows = [], onClose }) {
                   style={{
                     padding: "5px 9px",
                     borderRadius: 999,
-                    background: "#F4EDE4",
-                    border: "1px solid #EDE5D8",
+                    background: C.panelAlt,
+                    border: `1px solid ${C.border}`,
                     fontSize: 11,
-                    color: "#5A3E2B",
+                    color: C.textMid,
                     fontFamily: "sans-serif",
                   }}
                 >
@@ -1251,10 +1281,10 @@ function SeasonDetailPanel({ season, rows = [], onClose }) {
               type="button"
               style={{
                 padding: "7px 12px",
-                border: "1px solid #DDD0C4",
+                border: `1px solid ${C.border}`,
                 borderRadius: 8,
-                background: "#FDFAF6",
-                color: "#7A6050",
+                background: C.bg,
+                color: C.textMid,
                 fontSize: 12,
                 fontFamily: "sans-serif",
                 cursor: "pointer",
@@ -1272,7 +1302,7 @@ function SeasonDetailPanel({ season, rows = [], onClose }) {
               overflow: "auto",
               maxHeight: "calc(100vh - 290px)",
               borderRadius: 10,
-              border: "1px solid #EDE5D8",
+              border: `1px solid ${C.border}`,
             }}
           >
             <table style={MODAL.table}>
@@ -1315,14 +1345,21 @@ function SeasonDetailPanel({ season, rows = [], onClose }) {
                     <tr
                       key={i}
                       style={{
-                        background: i % 2 === 0 ? "transparent" : "#FAF6F0",
+                        background:
+                          i % 2 === 0
+                            ? "transparent"
+                            : "var(--dashboard-panel)",
                       }}
                     >
                       <td style={{ ...MODAL.td, fontWeight: 600 }}>
                         {getMemberName(r) ?? "—"}
                       </td>
                       <td
-                        style={{ ...MODAL.td, color: "#A08070", fontSize: 11 }}
+                        style={{
+                          ...MODAL.td,
+                          color: C.textMuted,
+                          fontSize: 11,
+                        }}
                       >
                         {getMemberNumber(r) ?? "—"}
                       </td>
