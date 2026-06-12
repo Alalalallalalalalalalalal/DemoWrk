@@ -24,6 +24,7 @@ PLAYWRIGHT_FOLDER = BASE_DIR
 
 JOURNAL_FOLDER = os.path.join(PLAYWRIGHT_FOLDER, "journal")
 FOLIO_REPORT_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "folio_report.csv")
+BUSINESS_SOURCE_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "business_source.csv")
 
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST"),
@@ -198,6 +199,14 @@ CREATE TABLE IF NOT EXISTS folios (
     updated_at             TIMESTAMP DEFAULT NOW()
 );
 
+
+CREATE TABLE IF NOT EXISTS business_source (
+    source_name           VARCHAR(255) PRIMARY KEY,
+    payment_type          VARCHAR(100),
+    created_at            TIMESTAMP DEFAULT NOW(),
+    updated_at            TIMESTAMP DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS reservation_guests (
     guest_key              VARCHAR(64) PRIMARY KEY,
     conf_code              VARCHAR(100),
@@ -252,7 +261,7 @@ CREATE TABLE IF NOT EXISTS interests (
 
 DROP_ALL = """
 DROP TABLE IF EXISTS interests, services, statements, recent_activity,
-    reservation_guests, folios, rooms, dependent_phones, dependent_addresses, dependents,
+    reservation_guests, business_source, folios, rooms, dependent_phones, dependent_addresses, dependents,
     member_phones, member_addresses, members CASCADE;
 """
 
@@ -1139,6 +1148,68 @@ def load_journal_folios(conn, journal_folder=JOURNAL_FOLDER, dry_run=False):
     return total
 
 
+
+def load_business_source(conn, filepath=BUSINESS_SOURCE_FILE, dry_run=False):
+    """
+    Load playwright/reports/business_source.csv and update folios.payment_type
+    for existing folio rows whose folios.source matches Source Name.
+
+    Expected columns:
+        Source Name, Payment Type
+
+    This does not insert new folio rows. It only upserts the mapping table and
+    updates existing folios.source/payment_type values.
+    """
+    if not os.path.exists(filepath):
+        log.warning(f"Business source report not found: {filepath}")
+        return 0
+
+    try:
+        df = pd.read_csv(filepath)
+    except Exception as e:
+        log.warning(f"Could not read business source report {filepath}: {e}")
+        return 0
+
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+
+    rows = []
+    for _, row in df.iterrows():
+        source_name = clean_str(get_first(row, "Source Name", "Source", "Business Source"), 255)
+        payment_type = clean_str(get_first(row, "Payment Type", "PaymentType"), 100)
+
+        if not source_name:
+            continue
+
+        rows.append({
+            "source_name": source_name,
+            "payment_type": payment_type,
+        })
+
+    if not rows:
+        log.info("business_source: 0 rows")
+        return 0
+
+    rows = remove_duplicate_dicts(rows, ["source_name"])
+    count = upsert(conn, "business_source", rows, "source_name", dry_run)
+
+    if dry_run:
+        log.info(f"  [DRY RUN] Would update folios.payment_type from {len(rows)} business_source rows")
+        return count
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            UPDATE folios f
+            SET payment_type = bs.payment_type,
+                updated_at = NOW()
+            FROM business_source bs
+            WHERE f.source = bs.source_name
+              AND COALESCE(f.payment_type, '') IS DISTINCT FROM COALESCE(bs.payment_type, '')
+        """)
+        updated = cur.rowcount
+
+    log.info(f"business_source: {count} mapping rows, updated {updated} folio rows")
+    return updated
+
 def load_folios(conn, filepath=FOLIO_REPORT_FILE, dry_run=False):
     """
     Load folios. Preferred source is backend/playwright/journal/{person}/ folio CSVs.
@@ -1286,6 +1357,8 @@ def main():
                         help="Load deterministic sample, e.g. 0.10 for 10%")
     parser.add_argument("--folios-only", action="store_true",
                         help="Only load folios/reservation guests, skip member profile data")
+    parser.add_argument("--business-source-only", action="store_true",
+                        help="Only load reports/business_source.csv and update folios.payment_type")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -1297,6 +1370,7 @@ def main():
     print(f"Dry run:      {args.dry_run}")
     print(f"Sample rate:  {args.sample_rate}")
     print(f"Folios only:  {args.folios_only}")
+    print(f"Business source only: {args.business_source_only}")
     print()
 
     try:
@@ -1308,6 +1382,22 @@ def main():
         return
 
     create_tables(conn, recreate=args.recreate_tables)
+
+    if args.business_source_only:
+        log.info("Skipping member/profile/folio transaction load because --business-source-only was used.")
+        try:
+            load_business_source(conn, BUSINESS_SOURCE_FILE, dry_run=args.dry_run)
+            if not args.dry_run:
+                conn.commit()
+        except Exception as e:
+            conn.rollback()
+            log.error(f"Failed loading business_source: {e}")
+        conn.close()
+        print()
+        print("=" * 60)
+        print("ETL Complete")
+        print("=" * 60)
+        return
 
     success, failed = [], []
 
@@ -1349,6 +1439,7 @@ def main():
     try:
         if args.sample_rate >= 1.0 or args.folios_only:
             load_folios(conn, FOLIO_REPORT_FILE, dry_run=args.dry_run)
+            load_business_source(conn, BUSINESS_SOURCE_FILE, dry_run=args.dry_run)
             if not args.dry_run:
                 conn.commit()
         else:
