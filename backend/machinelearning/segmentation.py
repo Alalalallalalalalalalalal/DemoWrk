@@ -6,7 +6,10 @@ Creates and refreshes:
     2. segment_visitors
     3. segment_amenities
 
-Designed for dashboard/API consumption (precomputed tables).
+Uses a blue/green (staging → rename) swap so live tables are never
+locked during a refresh. Readers on the dashboard see no interruption.
+Staging tables are defined explicitly (no LIKE) so creating them never
+acquires locks on the live tables (important for Supabase environments).
 """
 
 import os
@@ -42,19 +45,22 @@ DB_CONFIG = {
 }
 
 # ─────────────────────────────────────────────
-# THRESHOLDS (calibrated from real data)
-# ─────────────────────────────────────────────
-# ─────────────────────────────────────────────
-# spend THRESHOLDS — loaded from DB, set by frontend
+# THRESHOLDS — loaded from DB, set by frontend
 # ─────────────────────────────────────────────
 def load_thresholds(conn):
     with conn.cursor() as cur:
-        cur.execute("SELECT key, value FROM segment_config WHERE key IN ('high_spend_threshold', 'low_spend_threshold')")
+        cur.execute(
+            "SELECT key, value FROM segment_config "
+            "WHERE key IN ('high_spend_threshold', 'low_spend_threshold')"
+        )
         rows = dict(cur.fetchall())
-    return float(rows.get("high_spend_threshold", 10000)), float(rows.get("low_spend_threshold", 1000))
+    return (
+        float(rows.get("high_spend_threshold", 10000)),
+        float(rows.get("low_spend_threshold",  1000)),
+    )
 
 FREQUENT_MIN = 4
-LAPSED_DAYS = 18 * 30  # ~18 months
+LAPSED_DAYS  = 18 * 30  # ~18 months
 
 
 # ─────────────────────────────────────────────
@@ -65,11 +71,12 @@ def get_conn():
 
 
 # ─────────────────────────────────────────────
-# DDL — drop and recreate so schema changes always apply cleanly
+# BOOTSTRAP DDL
+# Creates live tables on first deploy only.
+# Safe to re-run — uses IF NOT EXISTS throughout.
 # ─────────────────────────────────────────────
-DDL = """
-DROP TABLE IF EXISTS segment_spenders;
-CREATE TABLE segment_spenders (
+BOOTSTRAP_DDL = """
+CREATE TABLE IF NOT EXISTS segment_spenders (
     id                  SERIAL PRIMARY KEY,
     member_number       VARCHAR,
     title               VARCHAR,
@@ -92,8 +99,7 @@ CREATE TABLE segment_spenders (
     created_at          TIMESTAMP DEFAULT NOW()
 );
 
-DROP TABLE IF EXISTS segment_visitors;
-CREATE TABLE segment_visitors (
+CREATE TABLE IF NOT EXISTS segment_visitors (
     id                  SERIAL PRIMARY KEY,
     member_number       VARCHAR,
     title               VARCHAR,
@@ -116,8 +122,7 @@ CREATE TABLE segment_visitors (
     created_at          TIMESTAMP DEFAULT NOW()
 );
 
-DROP TABLE IF EXISTS segment_amenities;
-CREATE TABLE segment_amenities (
+CREATE TABLE IF NOT EXISTS segment_amenities (
     id                  SERIAL PRIMARY KEY,
     member_number       VARCHAR,
     title               VARCHAR,
@@ -140,25 +145,141 @@ CREATE TABLE segment_amenities (
     created_at          TIMESTAMP DEFAULT NOW()
 );
 
-
 CREATE TABLE IF NOT EXISTS segment_config (
     key   VARCHAR PRIMARY KEY,
     value NUMERIC NOT NULL
 );
 
--- Seed defaults if not already set
 INSERT INTO segment_config (key, value)
 VALUES ('high_spend_threshold', 10000),
        ('low_spend_threshold',  1000)
 ON CONFLICT (key) DO NOTHING;
 """
 
-with get_conn() as conn:
+
+def bootstrap_tables():
+    """Create live tables on first deploy. Safe to call on every startup."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = 0")
+            for stmt in BOOTSTRAP_DDL.split(";"):
+                if stmt.strip():
+                    cur.execute(stmt)
+        conn.commit()
+    log.info("Bootstrap DDL complete.")
+
+
+# ─────────────────────────────────────────────
+# STAGING TABLE SETUP
+# Fully hardcoded — no reference to live tables,
+# so no locks are acquired on them whatsoever.
+# ─────────────────────────────────────────────
+def create_staging_tables(conn):
+    """Drop any leftover staging tables and create fresh empty ones."""
     with conn.cursor() as cur:
-        for stmt in DDL.split(";"):
-            if stmt.strip():
-                cur.execute(stmt)
+        cur.execute("SET statement_timeout = 0")
+        cur.execute("""
+            DROP TABLE IF EXISTS segment_spenders_new;
+            CREATE TABLE segment_spenders_new (
+                id                  SERIAL PRIMARY KEY,
+                member_number       VARCHAR,
+                title               VARCHAR,
+                name                VARCHAR,
+                email               VARCHAR,
+                date_of_birth       DATE,
+                phone_number        VARCHAR,
+                address_line1       VARCHAR,
+                address_line2       VARCHAR,
+                city                VARCHAR,
+                state               VARCHAR,
+                postal_code         VARCHAR,
+                country             VARCHAR,
+                tier                VARCHAR,
+                net_spend           NUMERIC,
+                spend_categories    TEXT[],
+                check_in_date       DATE,
+                check_out_date      DATE,
+                season              VARCHAR,
+                created_at          TIMESTAMP DEFAULT NOW()
+            );
+
+            DROP TABLE IF EXISTS segment_visitors_new;
+            CREATE TABLE segment_visitors_new (
+                id                  SERIAL PRIMARY KEY,
+                member_number       VARCHAR,
+                title               VARCHAR,
+                name                VARCHAR,
+                email               VARCHAR,
+                date_of_birth       DATE,
+                phone_number        VARCHAR,
+                address_line1       VARCHAR,
+                address_line2       VARCHAR,
+                city                VARCHAR,
+                state               VARCHAR,
+                postal_code         VARCHAR,
+                country             VARCHAR,
+                visitor_type        VARCHAR,
+                total_reservations  INTEGER,
+                last_visit          DATE,
+                check_in_date       DATE,
+                check_out_date      DATE,
+                season              VARCHAR,
+                created_at          TIMESTAMP DEFAULT NOW()
+            );
+
+            DROP TABLE IF EXISTS segment_amenities_new;
+            CREATE TABLE segment_amenities_new (
+                id                  SERIAL PRIMARY KEY,
+                member_number       VARCHAR,
+                title               VARCHAR,
+                name                VARCHAR,
+                email               VARCHAR,
+                date_of_birth       DATE,
+                phone_number        VARCHAR,
+                address_line1       VARCHAR,
+                address_line2       VARCHAR,
+                city                VARCHAR,
+                state               VARCHAR,
+                postal_code         VARCHAR,
+                country             VARCHAR,
+                top_amenity         VARCHAR,
+                top_amenity_spend   NUMERIC,
+                total_amenity_spend NUMERIC,
+                check_in_date       DATE,
+                check_out_date      DATE,
+                season              VARCHAR,
+                created_at          TIMESTAMP DEFAULT NOW()
+            );
+        """)
     conn.commit()
+    log.info("Staging tables created.")
+
+
+# ─────────────────────────────────────────────
+# ATOMIC SWAP
+# Renames staging → live in one transaction.
+# Live tables are locked for milliseconds only.
+# Previous live tables saved as _old for one cycle.
+# ─────────────────────────────────────────────
+def swap_tables(conn):
+    with conn.cursor() as cur:
+        cur.execute("SET statement_timeout = 0")
+        cur.execute("""
+            DROP TABLE IF EXISTS segment_spenders_old;
+            DROP TABLE IF EXISTS segment_visitors_old;
+            DROP TABLE IF EXISTS segment_amenities_old;
+
+            ALTER TABLE segment_spenders  RENAME TO segment_spenders_old;
+            ALTER TABLE segment_visitors  RENAME TO segment_visitors_old;
+            ALTER TABLE segment_amenities RENAME TO segment_amenities_old;
+
+            ALTER TABLE segment_spenders_new  RENAME TO segment_spenders;
+            ALTER TABLE segment_visitors_new  RENAME TO segment_visitors;
+            ALTER TABLE segment_amenities_new RENAME TO segment_amenities;
+        """)
+    conn.commit()
+    log.info("Table swap complete.")
+
 
 # ─────────────────────────────────────────────
 # UTIL: SPEND CATEGORIZATION
@@ -171,18 +292,11 @@ def categorize_spend(descriptions):
             categories.add(amenity)
     return list(categories)
 
-# ─────────────────────────────────────────────
-# CLEAN TABLE REFRESH
-# ─────────────────────────────────────────────
-def truncate_tables(conn):
-    with conn.cursor() as cur:
-        cur.execute("TRUNCATE segment_spenders, segment_visitors, segment_amenities")
-
 
 # ─────────────────────────────────────────────
-# 1. SPENDERS
+# 1. SPENDERS  →  segment_spenders_new
 # ─────────────────────────────────────────────
-def  build_spenders(conn, seasons, high_spend, low_spend):
+def build_spenders(conn, seasons, high_spend, low_spend):
     sql = """
         WITH spend AS (
             SELECT
@@ -259,36 +373,25 @@ def  build_spenders(conn, seasons, high_spend, low_spend):
                 _, season = season_for_date(r["check_in_date"], seasons)
 
             cur.execute("""
-                INSERT INTO segment_spenders
+                INSERT INTO segment_spenders_new
                     (member_number, title, name, email, date_of_birth, phone_number,
                      address_line1, address_line2, city, state, postal_code, country,
                      tier, net_spend, spend_categories,
                      check_in_date, check_out_date, season)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (
-                r["member_number"],
-                r["title"],
-                r["name"],
-                r["email"],
-                r["date_of_birth"],
-                r["phone_number"],
-                r["address_line1"],
-                r["address_line2"],
-                r["city"],
-                r["state"],
-                r["postal_code"],
-                r["country"],
-                tier,           # VARCHAR  — "High / Medium / Low Spender"
-                spend,          # NUMERIC  — actual spend value
-                categories,     # TEXT[]   — spend category labels
-                r["check_in_date"],
-                r["check_out_date"],
-                season,
+                r["member_number"], r["title"], r["name"], r["email"],
+                r["date_of_birth"], r["phone_number"], r["address_line1"],
+                r["address_line2"], r["city"], r["state"], r["postal_code"],
+                r["country"], tier, spend, categories,
+                r["check_in_date"], r["check_out_date"], season,
             ))
+
+    log.info("build_spenders complete.")
 
 
 # ─────────────────────────────────────────────
-# 2. VISITORS
+# 2. VISITORS  →  segment_visitors_new
 # ─────────────────────────────────────────────
 def build_visitors(conn, seasons):
     cutoff = date.today() - timedelta(days=LAPSED_DAYS)
@@ -370,36 +473,25 @@ def build_visitors(conn, seasons):
                 _, season = season_for_date(r["check_in_date"], seasons)
 
             cur.execute("""
-                INSERT INTO segment_visitors
+                INSERT INTO segment_visitors_new
                     (member_number, title, name, email, date_of_birth, phone_number,
                      address_line1, address_line2, city, state, postal_code, country,
                      visitor_type, total_reservations, last_visit,
                      check_in_date, check_out_date, season)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (
-                r["member_number"],
-                r["title"],
-                r["name"],
-                r["email"],
-                r["date_of_birth"],
-                r["phone_number"],
-                r["address_line1"],
-                r["address_line2"],
-                r["city"],
-                r["state"],
-                r["postal_code"],
-                r["country"],
-                vtype,
-                res,
-                r["last_visit"],
-                r["check_in_date"],
-                r["check_out_date"],
-                season,
+                r["member_number"], r["title"], r["name"], r["email"],
+                r["date_of_birth"], r["phone_number"], r["address_line1"],
+                r["address_line2"], r["city"], r["state"], r["postal_code"],
+                r["country"], vtype, res, r["last_visit"],
+                r["check_in_date"], r["check_out_date"], season,
             ))
+
+    log.info("build_visitors complete.")
 
 
 # ─────────────────────────────────────────────
-# 3. AMENITIES
+# 3. AMENITIES  →  segment_amenities_new
 # ─────────────────────────────────────────────
 def build_amenities(conn, seasons):
     sql = """
@@ -454,59 +546,91 @@ def build_amenities(conn, seasons):
                 _, season = season_for_date(r["check_in_date"], seasons)
 
             cur.execute("""
-                INSERT INTO segment_amenities
+                INSERT INTO segment_amenities_new
                     (member_number, title, name, email, date_of_birth, phone_number,
                      address_line1, address_line2, city, state, postal_code, country,
                      top_amenity, top_amenity_spend, total_amenity_spend,
                      check_in_date, check_out_date, season)
                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """, (
-                r["member_number"],
-                r["title"],
-                r["name"],
-                r["email"],
-                r["date_of_birth"],
-                r["phone_number"],
-                r["address_line1"],
-                r["address_line2"],
-                r["city"],
-                r["state"],
-                r["postal_code"],
-                r["country"],
-                r["top_amenity"],
-                r["top_amenity_spend"],
-                r["total_amenity_spend"],
-                r["check_in_date"],
-                r["check_out_date"],
+                r["member_number"], r["title"], r["name"], r["email"],
+                r["date_of_birth"], r["phone_number"], r["address_line1"],
+                r["address_line2"], r["city"], r["state"], r["postal_code"],
+                r["country"], r["top_amenity"], r["top_amenity_spend"],
+                r["total_amenity_spend"], r["check_in_date"], r["check_out_date"],
                 season,
             ))
+
+    log.info("build_amenities complete.")
 
 
 # ─────────────────────────────────────────────
 # MASTER PIPELINE
 # ─────────────────────────────────────────────
 def refresh_all_segments():
+    """
+    Full refresh using blue/green swap:
+      1. Create empty _new staging tables   — zero locks on live tables
+      2. Populate all _new staging tables   — zero locks on live tables
+      3. Atomically rename _new → live      — live tables locked for milliseconds only
+
+    If anything fails before the swap, live tables are untouched.
+    """
+    log.info("Starting segment refresh...")
+
+    # ── Stage 1: create staging tables ──────────────────────────────────
     conn = get_conn()
     try:
-        log.info("Refreshing segment tables...")
-        truncate_tables(conn)
-        seasons = load_active_seasons(conn)
-        high_spend, low_spend = load_thresholds(conn)   # ← add this
-        build_spenders(conn, seasons, high_spend, low_spend)  # ← pass them in
-        build_visitors(conn, seasons)
-        build_amenities(conn, seasons)
-        conn.commit()
-        log.info("Segment refresh complete.")
+        create_staging_tables(conn)
     except Exception as e:
         conn.rollback()
-        log.error(f"Segment refresh failed: {e}")
+        log.error(f"Failed to create staging tables: {e}")
+        conn.close()
         raise
     finally:
         conn.close()
+
+    # ── Stage 2: populate staging tables ────────────────────────────────
+    conn = get_conn()
+    try:
+        seasons = load_active_seasons(conn)
+        high_spend, low_spend = load_thresholds(conn)
+
+        build_spenders(conn, seasons, high_spend, low_spend)
+        conn.commit()
+
+        build_visitors(conn, seasons)
+        conn.commit()
+
+        build_amenities(conn, seasons)
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        log.error(f"Failed to populate staging tables: {e}")
+        conn.close()
+        raise
+    finally:
+        conn.close()
+
+    # ── Stage 3: atomic swap ─────────────────────────────────────────────
+    conn = get_conn()
+    try:
+        swap_tables(conn)
+    except Exception as e:
+        conn.rollback()
+        log.error(f"Table swap failed — live tables unchanged: {e}")
+        conn.close()
+        raise
+    finally:
+        conn.close()
+
+    log.info("Segment refresh complete.")
 
 
 # ─────────────────────────────────────────────
 # ENTRYPOINT
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
+    bootstrap_tables()      # creates live tables on first run; no-op after that
     refresh_all_segments()
