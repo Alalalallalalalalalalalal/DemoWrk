@@ -1,5 +1,5 @@
 // frontend/src/pages/dashboard.jsx
-// Styling: Westbrook Country Club — Lovable-inspired luxury dashboard
+
 // Palette: Palladian #EEE9DF · Oatmeal #C9C1B1 · DeepBlue #2C3B4D
 //          Flame #FFB162 · Truffle #A35139 · Abyssal #1B2632
 
