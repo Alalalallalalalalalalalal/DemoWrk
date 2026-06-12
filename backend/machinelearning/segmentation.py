@@ -1,5 +1,5 @@
 """
-segmentation.py — Analytics segmentation pipeline (dashboard-ready)
+segmentation.py — Analytics segmentation pipeline
 
 Creates and refreshes:
     1. segment_spenders
@@ -62,13 +62,11 @@ def load_thresholds(conn):
 FREQUENT_MIN = 4
 LAPSED_DAYS  = 18 * 30  # ~18 months
 
-
 # ─────────────────────────────────────────────
 # CONNECTION
 # ─────────────────────────────────────────────
 def get_conn():
     return psycopg.connect(**DB_CONFIG)
-
 
 # ─────────────────────────────────────────────
 # BOOTSTRAP DDL
@@ -302,10 +300,11 @@ def build_spenders(conn, seasons, high_spend, low_spend):
             SELECT
                 member_number,
                 guest_name,
+                MAX(folio_name) AS folio_name,
                 SUM(COALESCE(amount, 0)) AS net_spend,
                 ARRAY_AGG(DISTINCT description) AS spend_items
             FROM folios
-            WHERE member_number IS NOT NULL
+            WHERE member_number IS NOT NULL AND check_in_date IS NOT NULL
             GROUP BY member_number, guest_name
         ),
         latest_stay AS (
@@ -314,13 +313,13 @@ def build_spenders(conn, seasons, high_spend, low_spend):
                 check_in_date,
                 check_out_date
             FROM folios
-            WHERE member_number IS NOT NULL
+            WHERE member_number IS NOT NULL AND check_in_date IS NOT NULL
             ORDER BY member_number, check_in_date DESC
         )
         SELECT
             s.member_number,
             m.prefix           AS title,
-            s.guest_name       AS name,
+            COALESCE(s.guest_name, s.folio_name) AS name,
             m.email,
             m.date_of_birth,
             p.phone_number,
@@ -401,10 +400,11 @@ def build_visitors(conn, seasons):
             SELECT
                 member_number,
                 guest_name,
+                MAX(folio_name) AS folio_name,
                 COUNT(DISTINCT conf_code) AS total_reservations,
                 MAX(check_out_date)       AS last_visit
             FROM folios
-            WHERE member_number IS NOT NULL
+            WHERE member_number IS NOT NULL AND check_in_date IS NOT NULL
             GROUP BY member_number, guest_name
         ),
         latest_stay AS (
@@ -413,13 +413,13 @@ def build_visitors(conn, seasons):
                 check_in_date,
                 check_out_date
             FROM folios
-            WHERE member_number IS NOT NULL
+            WHERE member_number IS NOT NULL AND check_in_date IS NOT NULL
             ORDER BY member_number, check_in_date DESC
         )
         SELECT
             v.member_number,
             m.prefix           AS title,
-            v.guest_name       AS name,
+            COALESCE(v.guest_name, v.folio_name) AS name,
             m.email,
             m.date_of_birth,
             p.phone_number,
