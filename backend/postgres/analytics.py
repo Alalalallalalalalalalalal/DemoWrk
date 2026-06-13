@@ -1256,7 +1256,16 @@ def villa_stats(db: Session = Depends(get_db)):
         )
         SELECT
             villa_name,
-            bedroom_count,
+
+            STRING_AGG(
+              DISTINCT bedroom_count::text,
+              ', '
+              ORDER BY bedroom_count::text
+            ) AS bedroom_counts,
+
+            MIN(bedroom_count) AS min_bedrooms,
+            MAX(bedroom_count) AS max_bedrooms,
+
             COUNT(*) AS bookings,
             SUM(nights) AS total_nights,
             ROUND(AVG(nights)::numeric, 1) AS avg_stay,
@@ -1265,7 +1274,7 @@ def villa_stats(db: Session = Depends(get_db)):
             ROUND(AVG(persons)::numeric, 1) AS avg_party_size,
             SUM(revenue) AS revenue
         FROM booking_rows
-        GROUP BY villa_name, bedroom_count
+        GROUP BY villa_name
         ORDER BY bookings DESC
     """)
 

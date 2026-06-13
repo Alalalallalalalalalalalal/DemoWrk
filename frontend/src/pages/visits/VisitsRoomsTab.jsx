@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -133,6 +133,19 @@ export default function VisitsRoomsTab({
   onVillaSelect,
   onGoToML,
 }) {
+  // Internal selected villa state — works even if parent doesn't pass onVillaSelect
+  const [localSelected, setLocalSelected] = useState(null);
+
+  const activeVillaName =
+    selectedVillaName !== undefined ? selectedVillaName : localSelected;
+
+  const handleVillaSelect = (name) => {
+    setLocalSelected((prev) => (prev === name ? null : name));
+    if (typeof onVillaSelect === "function") {
+      onVillaSelect(activeVillaName === name ? null : name);
+    }
+  };
+
   const [year, setYear] = useState("All");
   const [month, setMonth] = useState("All");
 
@@ -170,7 +183,7 @@ export default function VisitsRoomsTab({
     });
   }, [villaStats, year, month]);
 
-  const mostVilla = filteredVillas[0];
+  const mostVilla = filteredVillas[0] ?? null;
   const leastVilla = filteredVillas.length
     ? [...filteredVillas].sort(
         (a, b) => Number(a.bookings ?? 0) - Number(b.bookings ?? 0),
@@ -178,9 +191,19 @@ export default function VisitsRoomsTab({
     : null;
 
   const selectedVilla =
-    filteredVillas.find((v) => v.villa_name === selectedVillaName) ??
-    mostVilla ??
-    null;
+    filteredVillas.find((v) => v.villa_name === activeVillaName) ?? null;
+
+  const bedroomsLabel = (villa) => {
+    if (!villa) return "—";
+    if (villa.bedroom_counts) {
+      return String(villa.bedroom_counts)
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .join(", ");
+    }
+    return villa.bedroom_count ?? "—";
+  };
 
   return (
     <div className="dashboard-section">
@@ -202,7 +225,6 @@ export default function VisitsRoomsTab({
             Villa booking performance
           </h2>
         </div>
-
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Select
             label="Year"
@@ -259,7 +281,7 @@ export default function VisitsRoomsTab({
         />
       </section>
 
-      {/* Villa charts */}
+      {/* Bookings by villa bar chart */}
       <div className="dashboard-grid dashboard-grid-main">
         <Card
           title="Bookings by Villa"
@@ -288,54 +310,258 @@ export default function VisitsRoomsTab({
             </ResponsiveContainer>
           </div>
         </Card>
+      </div>
 
-        <Card
-          title="Most / Least Booked Villa"
-          sub="Click through to ML Insights"
+      {/* Villa table + Most/Least side-by-side */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 300px",
+          gap: 16,
+          alignItems: "start",
+        }}
+      >
+        {/* Villa Table */}
+        <div
+          className="dashboard-card"
+          style={{ padding: 0, overflow: "hidden" }}
         >
-          {[mostVilla, leastVilla].map((villa, i) => (
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              tableLayout: "fixed",
+            }}
+          >
+            <thead>
+              <tr>
+                {[
+                  "Villa",
+                  "Bookings",
+                  "Bedrooms",
+                  "Avg Stay",
+                  "Revenue",
+                  "",
+                ].map((h, i) => (
+                  <th
+                    key={i}
+                    className="dashboard-eyebrow"
+                    style={{
+                      textAlign: "left",
+                      padding: "10px 14px",
+                      borderBottom: `1px solid ${C.border}`,
+                      background: C.panel,
+                      width: ["30%", "14%", "14%", "16%", "16%", "10%"][i],
+                    }}
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredVillas.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={6}
+                    style={{ padding: 28, textAlign: "center", color: C.muted }}
+                  >
+                    No villas match the selected filters.
+                  </td>
+                </tr>
+              ) : (
+                filteredVillas.map((villa) => {
+                  const isActive = activeVillaName === villa.villa_name;
+                  return (
+                    <Fragment key={villa.villa_name}>
+                      <tr
+                        onClick={() => handleVillaSelect(villa.villa_name)}
+                        style={{
+                          cursor: "pointer",
+                          background: isActive ? C.panelAlt : "transparent",
+                          borderBottom: `1px solid ${C.border}`,
+                        }}
+                      >
+                        <td
+                          style={{
+                            padding: "10px 14px",
+                            fontWeight: 700,
+                            color: C.text,
+                          }}
+                        >
+                          {villa.villa_name}
+                        </td>
+                        <td style={{ padding: "10px 14px", color: C.soft }}>
+                          {fmt(villa.bookings)}
+                        </td>
+                        <td style={{ padding: "10px 14px", color: C.soft }}>
+                          {bedroomsLabel(villa)}
+                        </td>
+                        <td style={{ padding: "10px 14px", color: C.soft }}>
+                          {num(villa.avg_stay)} nights
+                        </td>
+                        <td style={{ padding: "10px 14px", color: C.soft }}>
+                          {money(villa.revenue)}
+                        </td>
+                        <td
+                          style={{
+                            padding: "10px 14px",
+                            textAlign: "right",
+                            color: C.muted,
+                            fontSize: 10,
+                          }}
+                        >
+                          {isActive ? "▲" : "▼"}
+                        </td>
+                      </tr>
+
+                      {/* Inline expanded detail */}
+                      {isActive && (
+                        <tr>
+                          <td
+                            colSpan={6}
+                            style={{
+                              padding: 0,
+                              borderBottom: `1px solid ${C.border}`,
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "repeat(3, 1fr)",
+                                gap: 10,
+                                padding: 14,
+                                background: C.panel,
+                              }}
+                            >
+                              {[
+                                ["Room Nights", fmt(villa.total_nights)],
+                                ["Avg Stay", `${num(villa.avg_stay)} nights`],
+                                ["Avg Party", num(villa.avg_party_size)],
+                                ["Bedrooms", bedroomsLabel(villa)],
+                                ["Revenue", money(villa.revenue)],
+                                ["Bookings", fmt(villa.bookings)],
+                              ].map(([label, val]) => (
+                                <div
+                                  key={label}
+                                  style={{
+                                    background: C.bg,
+                                    border: `1px solid ${C.border}`,
+                                    borderRadius: 12,
+                                    padding: "10px 14px",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      fontSize: 11,
+                                      color: C.muted,
+                                      marginBottom: 3,
+                                    }}
+                                  >
+                                    {label}
+                                  </div>
+                                  <div
+                                    style={{
+                                      fontSize: 20,
+                                      color: C.text,
+                                      fontFamily: "'Cormorant Garamond', serif",
+                                    }}
+                                  >
+                                    {val}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Most / Least + ML button */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {[
+            { villa: mostVilla, label: "Most Booked", accent: C.accent },
+            { villa: leastVilla, label: "Least Booked", accent: C.accent3 },
+          ].map(({ villa, label, accent }) => (
             <button
-              key={`${villa?.villa_name}-${i}`}
-              onClick={() => {
-                if (villa?.villa_name) onVillaSelect(villa.villa_name);
-              }}
+              key={label}
+              onClick={() =>
+                villa?.villa_name && handleVillaSelect(villa.villa_name)
+              }
+              className="dashboard-card"
               style={{
-                width: "100%",
                 textAlign: "left",
-                border: `1px solid ${C.border}`,
-                borderRadius: 16,
-                background: i === 0 ? C.panelAlt : C.panel,
-                padding: 16,
-                marginBottom: 12,
                 cursor: "pointer",
+                borderLeft: `3px solid ${accent}`,
+                borderRadius: 16,
+                width: "100%",
               }}
             >
-              <div className="dashboard-eyebrow">
-                {i === 0 ? "Most Booked" : "Least Booked"}
-              </div>
+              <div className="dashboard-eyebrow">{label}</div>
               <div
                 style={{
                   fontFamily: "'Cormorant Garamond', serif",
-                  fontSize: 24,
+                  fontSize: 22,
                   color: C.text,
+                  margin: "4px 0",
                 }}
               >
                 {villa?.villa_name ?? "—"}
               </div>
-              <div style={{ color: C.soft, fontSize: 12 }}>
-                {fmt(villa?.bookings)} bookings · {villa?.bedroom_count ?? "—"}{" "}
+              <div style={{ fontSize: 12, color: C.soft }}>
+                {fmt(villa?.bookings)} bookings · {bedroomsLabel(villa)}{" "}
                 bedrooms
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 8,
+                  marginTop: 10,
+                }}
+              >
+                <div
+                  style={{
+                    background: C.panel,
+                    borderRadius: 10,
+                    padding: "8px 10px",
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: C.muted }}>
+                    Room nights
+                  </div>
+                  <div style={{ fontSize: 18, color: C.text }}>
+                    {fmt(villa?.total_nights)}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    background: C.panel,
+                    borderRadius: 10,
+                    padding: "8px 10px",
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: C.muted }}>Revenue</div>
+                  <div style={{ fontSize: 18, color: C.text }}>
+                    {money(villa?.revenue)}
+                  </div>
+                </div>
               </div>
             </button>
           ))}
 
           <button
-            onClick={onGoToML}
+            onClick={typeof onGoToML === "function" ? onGoToML : undefined}
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              width: "100%",
               padding: "13px 15px",
               borderRadius: 14,
               border: `1px dashed ${C.accent2}`,
@@ -343,66 +569,15 @@ export default function VisitsRoomsTab({
               color: C.accent,
               fontWeight: 700,
               cursor: "pointer",
+              width: "100%",
             }}
           >
-            View season × villa insights
-            <ArrowUpRight size={17} />
+            View season × villa insights <ArrowUpRight size={17} />
           </button>
-        </Card>
+        </div>
       </div>
 
-      {/* Villa cards */}
-      <div className="dashboard-grid dashboard-grid-3">
-        {filteredVillas.map((villa) => {
-          const active = villa.villa_name === selectedVillaName;
-
-          return (
-            <button
-              key={villa.villa_name}
-              onClick={() => onVillaSelect(villa.villa_name)}
-              className="dashboard-card"
-              style={{
-                textAlign: "left",
-                cursor: "pointer",
-                borderTop: active
-                  ? `4px solid ${C.accent2}`
-                  : `1px solid ${C.border}`,
-              }}
-            >
-              <div className="dashboard-eyebrow">Villa</div>
-              <h3
-                style={{
-                  fontFamily: "'Cormorant Garamond', serif",
-                  fontSize: 24,
-                  color: C.text,
-                  margin: "4px 0 12px",
-                }}
-              >
-                {villa.villa_name}
-              </h3>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: 10,
-                  fontSize: 12,
-                  color: C.soft,
-                }}
-              >
-                <b>Bookings: {fmt(villa.bookings)}</b>
-                <b>Bedrooms: {villa.bedroom_count ?? "—"}</b>
-                <span>Room nights: {fmt(villa.total_nights)}</span>
-                <span>Avg stay: {num(villa.avg_stay)} nights</span>
-                <span>Avg party: {num(villa.avg_party_size)}</span>
-                <span>Revenue: {money(villa.revenue)}</span>
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Selected villa drilldown */}
+      {/* Selected villa monthly drilldown charts */}
       {selectedVilla && (
         <div className="dashboard-grid dashboard-grid-main">
           <Card
