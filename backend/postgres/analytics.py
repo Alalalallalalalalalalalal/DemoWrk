@@ -68,8 +68,31 @@ def dashboard_summary(db: Session = Depends(get_db)):
             ORDER BY total DESC
         """),
 
+        "accountsByType": rows("""
+            SELECT
+                member_type AS member_type,
+                member_or_guest AS account_category,
+                COUNT(*) AS total
+            FROM members
+            WHERE member_type IS NOT NULL
+            AND member_type <> ''
+            AND member_or_guest IN ('Member', 'Guest')
+            GROUP BY
+                member_type,
+                member_or_guest
+            ORDER BY total DESC
+        """),
+
         "membersByStatus": rows("""
-            SELECT status, COUNT(*) AS total
+            SELECT
+                status,
+                COUNT(*) FILTER (
+                    WHERE member_or_guest = 'Member'
+                ) AS members,
+                COUNT(*) FILTER (
+                    WHERE member_or_guest = 'Guest'
+                ) AS guests,
+                COUNT(*) AS total
             FROM members
             WHERE status IS NOT NULL
             GROUP BY status
@@ -95,10 +118,17 @@ def dashboard_summary(db: Session = Depends(get_db)):
 
         "newMembersPerYear": rows("""
             SELECT EXTRACT(YEAR FROM since_date)::INT AS year,
-                   COUNT(*) AS total
+                COUNT(*) FILTER (
+                    WHERE member_or_guest = 'Member'
+                ) AS members,
+                COUNT(*) FILTER (
+                    WHERE member_or_guest = 'Guest'
+                ) AS guests,
+                COUNT(*) AS total
             FROM members
             WHERE since_date IS NOT NULL
-              AND EXTRACT(YEAR FROM since_date) >= 2018
+                AND EXTRACT(YEAR FROM since_date) >= 2018
+                AND member_or_guest IN ('Member', 'Guest')
             GROUP BY year
             ORDER BY year
         """),

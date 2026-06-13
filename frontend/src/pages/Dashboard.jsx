@@ -15,6 +15,7 @@ import {
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
@@ -89,6 +90,8 @@ export default function Dashboard() {
   const [membersByGender, setMembersByGender] = useState([]);
   const [membersByAgeGroup, setMembersByAgeGroup] = useState([]);
   const [membersByType, setMembersByType] = useState([]);
+  const [accountsByType, setAccountsByType] = useState([]);
+  const [accountTypeView, setAccountTypeView] = useState("Member");
   const [membersByStatus, setMembersByStatus] = useState([]);
   const [membersByMaritalStatus, setMembersByMaritalStatus] = useState([]);
   const [newMembersPerYear, setNewMembersPerYear] = useState([]);
@@ -140,6 +143,7 @@ export default function Dashboard() {
         setMembersByGender(data.membersByGender ?? []);
         setMembersByAgeGroup(data.membersByAgeGroup ?? []);
         setMembersByType(data.membersByType ?? []);
+        setAccountsByType(data.accountsByType ?? []);
         setMembersByStatus(data.membersByStatus ?? []);
         setMembersByMaritalStatus(data.membersByMaritalStatus ?? []);
         setNewMembersPerYear(data.newMembersPerYear ?? []);
@@ -224,6 +228,11 @@ export default function Dashboard() {
   ]);
 
   const totalMembers = membersByType.reduce((a, b) => a + (b.total || 0), 0);
+
+  const visibleAccountTypes = accountsByType.filter(
+    (item) =>
+      item.account_category?.trim() === accountTypeView,
+  );
 
   const getCV = (v) => {
     if (v == null || v === "") return "";
@@ -708,9 +717,115 @@ export default function Dashboard() {
         {/* ════ DEMOGRAPHICS ════ */}
         {activeTab === "demographics" && (
           <div className="dashboard-section">
+            <Card title="Account Types" sub="Distribution of member and guest account types">
+              <div
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  padding: 4,
+                  marginBottom: 14,
+                  background: "#EEE9DF",
+                  borderRadius: 10,
+                  width: "fit-content",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setAccountTypeView("Member")}
+                  style={{
+                    border: "none",
+                    borderRadius: 7,
+                    padding: "7px 14px",
+                    cursor: "pointer",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    background:
+                      accountTypeView === "Member" ? "#2C3B4D" : "transparent",
+                    color:
+                      accountTypeView === "Member" ? "#FFFFFF" : "#2C3B4D",
+                    transition: "all 0.2s ease",
+                  }}
+                >
+                  Members
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAccountTypeView("Guest")}
+                  style={{
+                    border: "none",
+                    borderRadius: 7,
+                    padding: "7px 14px",
+                    cursor: "pointer",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    background:
+                      accountTypeView === "Guest" ? "#2C3B4D" : "transparent",
+                    color:
+                      accountTypeView === "Guest" ? "#FFFFFF" : "#2C3B4D",
+                    transition: "all 0.2s ease",
+                  }}
+                >
+                  Guests
+                </button>
+              </div>
+              <div className="dashboard-chart dashboard-chart-200">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={visibleAccountTypes}
+                    layout="vertical"
+                    margin={{
+                      top: 2,
+                      right: 20,
+                      bottom: 2,
+                    }}
+                    barCategoryGap="20%"
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke={GRID}
+                      horizontal={false}
+                    />
+                    <XAxis
+                      type="number"
+                      stroke={AX}
+                      fontSize={11}
+                      allowDecimals={false}
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="member_type"
+                      stroke={AX}
+                      fontSize={10}
+                      width={210}
+                      interval={0}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={TIP}
+                      formatter={(value) => [
+                        Number(value).toLocaleString(),
+                        accountTypeView === "Member" ? "Members" : "Guests",
+                      ]}
+                    />
+                    <Bar
+                      dataKey="total"
+                      name="Accounts"
+                      fill={
+                        accountTypeView === "Member"
+                          ? "#FFB162"
+                          : "#5B8FA8"
+                      }
+                      radius={[0, 6, 6, 0]}
+                      maxBarSize={20}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
+  
             <SectionLabel>Age / Gender / Status</SectionLabel>
             <div className="dashboard-grid dashboard-grid-3">
-              <Card title="Age Groups" sub="Members by age segment">
+              <Card title="Age Groups" sub="Accounts by age segment">
                 <div className="dashboard-chart dashboard-chart-200">
                   <ResponsiveContainer>
                     <BarChart data={membersByAgeGroup}>
@@ -744,40 +859,91 @@ export default function Dashboard() {
             </div>
             <SectionLabel>Member Status &amp; Tenure</SectionLabel>
             <div className="dashboard-grid dashboard-grid-side">
-              <Card title="Member Status" sub="Active vs Inactive">
+              <Card title="Member & Guest Status" sub="Status comparison between members and guests">
                 <div className="dashboard-chart dashboard-chart-200">
                   <ResponsiveContainer>
-                    <BarChart data={membersByStatus}>
+                    <BarChart
+                      data={membersByStatus}
+                      margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
+                      barGap={4}
+                    >
                       <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis dataKey="status" stroke={AX} fontSize={11} />
-                      <YAxis stroke={AX} fontSize={11} />
+                      <XAxis
+                        dataKey="status"
+                        stroke={AX}
+                        fontSize={11}
+                      />
+                      <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                        allowDecimals={false}
+                      />
                       <Tooltip contentStyle={TIP} />
+                      <Legend
+                        wrapperStyle={{
+                          fontSize: 11,
+                          paddingTop: 6,
+                        }}
+                      />
                       <Bar
-                        dataKey="total"
-                        fill="#2C3B4D"
+                        dataKey="members"
+                        name="Members"
+                        fill="#FFB162"
+                        radius={[6, 6, 0, 0]}
+                      />
+                      <Bar
+                        dataKey="guests"
+                        name="Guests"
+                        fill="#5B8FA8"
                         radius={[6, 6, 0, 0]}
                       />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </Card>
-              <Card title="New Members per Year" sub="Acquisition over time">
+              <Card title="New Members & Guests per Year" sub="Member and guest acquisition over time">
                 <div className="dashboard-chart dashboard-chart-200">
                   <ResponsiveContainer>
                     <LineChart
                       data={newMembersPerYear}
-                      margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
+                      margin={{ top: 5, right: 12, bottom: 5, left: 0 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis dataKey="year" stroke={AX} fontSize={11} />
-                      <YAxis stroke={AX} fontSize={11} />
+                      <XAxis
+                        dataKey="year"
+                        stroke={AX}
+                        fontSize={11}
+                        allowDecimals={false}
+                      />
+                      <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                        allowDecimals={false}
+                      />
                       <Tooltip contentStyle={TIP} />
+                      <Legend
+                        wrapperStyle={{
+                          fontSize: 11,
+                          paddingTop: 6,
+                        }}
+                      />
                       <Line
                         type="monotone"
-                        dataKey="total"
+                        dataKey="members"
+                        name="Members"
                         stroke="#FFB162"
                         strokeWidth={2.5}
                         dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="guests"
+                        name="Guests"
+                        stroke="#5B8FA8"
+                        strokeWidth={2.5}
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
                       />
                     </LineChart>
                   </ResponsiveContainer>
@@ -786,7 +952,7 @@ export default function Dashboard() {
             </div>
             <SectionLabel>Location</SectionLabel>
             <div className="dashboard-grid dashboard-grid-side">
-              <Card title="Members by Country" sub="Geographic distribution">
+              <Card title="Accounts by Country" sub="Geographic distribution">
                 <div className="dashboard-chart dashboard-chart-200">
                   <ResponsiveContainer>
                     <BarChart data={membersByCountry}>
@@ -803,7 +969,7 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
               </Card>
-              <Card title="Members by State" sub="US state breakdown">
+              <Card title="Accounts by State" sub="US state breakdown">
                 <div className="dashboard-chart dashboard-chart-200">
                   <ResponsiveContainer>
                     <BarChart
@@ -858,8 +1024,8 @@ export default function Dashboard() {
                 </div>
               </Card>
               <Card
-                title="Top Members by Dependents"
-                sub="Members with the most linked dependents"
+                title="Top Accounts by Dependents"
+                sub="Accounts with the most linked dependents"
               >
                 <div className="dashboard-chart dashboard-chart-200">
                   <ResponsiveContainer>
