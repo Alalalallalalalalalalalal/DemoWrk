@@ -84,4 +84,12 @@ export const analyticsApi = {
   getSegmentConfig: () => fetchData("/analytics/ml/segment-config"),
   updateSegmentConfig: (payload) =>
     fetchData("/analytics/ml/segment-config", jsonRequest("PATCH", payload)),
+
+  villaStats: () => fetchData("/analytics/villa-stats"),
+  villaMonthly: (villaName) =>
+    fetchData(withQuery("/analytics/villa-monthly", { villa: villaName })),
+  bookingsByBedroom: () => fetchData("/analytics/bookings-by-bedroom"),
+  monthlyRevenue: () => fetchData("/analytics/monthly-revenue"),
+  leadTimeAnalysis: () => fetchData("/analytics/lead-time"),
+  visitsTabSummary: () => fetchData("/analytics/visits-tab-summary"),
 };

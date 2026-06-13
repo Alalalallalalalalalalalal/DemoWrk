@@ -53,6 +53,7 @@ import SeasonFilterBar from "./mltab/SeasonFilterBar";
 import AmenitySeasonPanel from "./mltab/AmenitySeasonPanel";
 import SegmentationPanel from "./mltab/Segmentationpanel";
 import "./styles/styles.css";
+import VisitsRoomsTab from "./visits/VisitsRoomsTab";
 
 /* ─── Sidebar nav config ─────────────────────────────────────── */
 const TABS = [
@@ -122,6 +123,14 @@ export default function Dashboard() {
   const [columnVisibilityOpen, setColumnVisibilityOpen] = useState(false);
   const [exportMenu, setExportMenu] = useState(false);
 
+  const [villaStats, setVillaStats] = useState([]);
+  const [villaMonthly, setVillaMonthly] = useState([]);
+  const [bookingsByBedroom, setBookingsByBedroom] = useState([]);
+  const [monthlyRevenue, setMonthlyRevenue] = useState([]);
+  const [leadTimeData, setLeadTimeData] = useState([]);
+  const [visitsTabSummary, setVisitsTabSummary] = useState(null);
+  const [selectedVillaName, setSelectedVillaName] = useState(null);
+
   useEffect(() => {
     analyticsApi
       .dashboardSummary()
@@ -151,9 +160,32 @@ export default function Dashboard() {
         setDependentsByAgeGroup(data.dependentsByAgeGroup ?? []);
         setDependentsPerMember(data.dependentsPerMember ?? []);
       })
+
       .catch(console.error);
+
     analyticsApi.getTables().then(setAvailableTables).catch(console.error);
+
+    analyticsApi.villaStats().then(setVillaStats).catch(console.error);
+    analyticsApi
+      .bookingsByBedroom()
+      .then(setBookingsByBedroom)
+      .catch(console.error);
+    analyticsApi.monthlyRevenue().then(setMonthlyRevenue).catch(console.error);
+    analyticsApi.leadTimeAnalysis().then(setLeadTimeData).catch(console.error);
+    analyticsApi
+      .visitsTabSummary()
+      .then(setVisitsTabSummary)
+      .catch(console.error);
   }, []);
+
+  useEffect(() => {
+    if (!selectedVillaName) return;
+
+    analyticsApi
+      .villaMonthly(selectedVillaName)
+      .then(setVillaMonthly)
+      .catch(console.error);
+  }, [selectedVillaName]);
 
   useEffect(() => {
     if (!selectedTable) {
@@ -859,276 +891,20 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ════ VISITS & ROOMS ════ */}
         {activeTab === "visits" && (
-          <div className="dashboard-section">
-            {/* KPI band */}
-            <section
-              className="dashboard-kpi-band"
-              style={{ padding: "20px 24px" }}
-            >
-              {[
-                {
-                  label: "In-House",
-                  value: String(liveInHouseCount?.total_in_house ?? 0),
-                  delta: "Live count",
-                },
-                {
-                  label: "Avg. Stay",
-                  value:
-                    averageLengthOfStay?.average_nights != null
-                      ? `${Number(averageLengthOfStay.average_nights).toFixed(1)} nights`
-                      : "—",
-                  delta: "Per booking",
-                },
-                {
-                  label: "Room Types",
-                  value: String(bookingsByRoomType.length || "—"),
-                  delta: "Tracked categories",
-                },
-                {
-                  label: "Total Bookings",
-                  value:
-                    bookingsByMonth
-                      .reduce((a, b) => a + (b.total || 0), 0)
-                      .toLocaleString() || "—",
-                  delta: "All time",
-                },
-              ].map((k, i) => (
-                <div
-                  key={k.label}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 4,
-                    padding: "0 20px",
-                    borderLeft: i > 0 ? "1px solid #DDD6CA" : "none",
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: 10,
-                      letterSpacing: "0.18em",
-                      textTransform: "uppercase",
-                      color: "#9A8E84",
-                    }}
-                  >
-                    {k.label}
-                  </span>
-                  <span
-                    style={{
-                      fontFamily: "'Cormorant Garamond', serif",
-                      fontSize: 28,
-                      lineHeight: 1.1,
-                      color: "#1B2632",
-                    }}
-                  >
-                    {k.value}
-                  </span>
-                  <span style={{ fontSize: 11, color: "#A35139" }}>
-                    {k.delta}
-                  </span>
-                </div>
-              ))}
-            </section>
-
-            <div className="dashboard-grid dashboard-grid-main dashboard-grid-gap-sm">
-              <Card title="Bookings by Room Type" sub="Aggregated check-ins">
-                <div className="dashboard-chart dashboard-chart-200">
-                  <ResponsiveContainer>
-                    <BarChart data={bookingsByRoomType}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis
-                        dataKey="room_type"
-                        stroke={AX}
-                        fontSize={11}
-                        angle={-15}
-                        textAnchor="end"
-                        height={55}
-                      />
-                      <YAxis stroke={AX} fontSize={11} />
-                      <Tooltip contentStyle={TIP} />
-                      <Bar
-                        dataKey="total"
-                        fill="#FFB162"
-                        radius={[6, 6, 0, 0]}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-              <RoomHighlightCard
-                most={mostUsedRoomTypes[0]}
-                least={leastUsedRoomTypes[0]}
-              />
-            </div>
-
-            <Card title="Bookings by Month" sub="Monthly reservation trend">
-              <div className="dashboard-chart dashboard-chart-200">
-                <ResponsiveContainer>
-                  <LineChart
-                    data={bookingsByMonth}
-                    margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                    <XAxis dataKey="month" stroke={AX} fontSize={11} />
-                    <YAxis stroke={AX} fontSize={11} />
-                    <Tooltip contentStyle={TIP} />
-                    <Line
-                      type="monotone"
-                      dataKey="total"
-                      stroke="#2C3B4D"
-                      strokeWidth={2.5}
-                      dot={{ r: 3 }}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </Card>
-
-            {/* Roster */}
-            <div className="dashboard-card dashboard-card-roomy">
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "minmax(0,1fr) auto",
-                  alignItems: "center",
-                  gap: 16,
-                  marginBottom: 20,
-                }}
-              >
-                <div>
-                  <div
-                    style={{
-                      fontSize: 10,
-                      letterSpacing: "0.18em",
-                      textTransform: "uppercase",
-                      color: "#9A8E84",
-                    }}
-                  >
-                    Front of House
-                  </div>
-                  <h2
-                    style={{
-                      fontFamily: "'Cormorant Garamond', serif",
-                      fontSize: 22,
-                      color: "#1B2632",
-                      margin: "4px 0 0",
-                    }}
-                  >
-                    Live in-house roster
-                  </h2>
-                </div>
-                <span style={{ fontSize: 13, color: "#7A6E63" }}>
-                  {liveInHouseRoster.length} guests on property
-                </span>
-              </div>
-              <div style={{ overflowX: "auto" }}>
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: 13,
-                  }}
-                >
-                  <thead>
-                    <tr
-                      style={{
-                        fontSize: 10,
-                        letterSpacing: "0.16em",
-                        textTransform: "uppercase",
-                        color: "#9A8E84",
-                      }}
-                    >
-                      {["Name", "Member #", "Room Type", "Check-in"].map(
-                        (h) => (
-                          <th
-                            key={h}
-                            style={{
-                              textAlign: "left",
-                              paddingBottom: 10,
-                              fontWeight: 400,
-                              borderBottom: "1px solid #DDD6CA",
-                            }}
-                          >
-                            {h}
-                          </th>
-                        ),
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {liveInHouseRoster.length === 0 ? (
-                      <tr>
-                        <td
-                          colSpan={4}
-                          style={{
-                            textAlign: "center",
-                            padding: 32,
-                            color: "#B0A496",
-                          }}
-                        >
-                          No data available
-                        </td>
-                      </tr>
-                    ) : (
-                      liveInHouseRoster.map((m, i) => (
-                        <tr
-                          key={i}
-                          style={{ borderBottom: "1px solid #EAE3DA" }}
-                        >
-                          <td style={{ padding: "12px 8px 12px 0" }}>
-                            <div
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 10,
-                              }}
-                            >
-                              <div
-                                style={{
-                                  width: 32,
-                                  height: 32,
-                                  borderRadius: "50%",
-                                  background: "#C9C1B1",
-                                  display: "grid",
-                                  placeItems: "center",
-                                  fontSize: 11,
-                                  color: "#1B2632",
-                                  flexShrink: 0,
-                                  fontFamily: "'Cormorant Garamond', serif",
-                                }}
-                              >
-                                {(m.member_full_name ?? m.member_name ?? "?")
-                                  .split(" ")
-                                  .map((p) => p[0])
-                                  .slice(0, 2)
-                                  .join("")}
-                              </div>
-                              <span
-                                style={{ fontWeight: 500, color: "#1B2632" }}
-                              >
-                                {m.member_full_name ?? m.member_name ?? "—"}
-                              </span>
-                            </div>
-                          </td>
-                          <td style={{ padding: "12px 8px", color: "#7A6E63" }}>
-                            {m.member_number ?? "—"}
-                          </td>
-                          <td style={{ padding: "12px 8px", color: "#7A6E63" }}>
-                            {m.room_type ?? "—"}
-                          </td>
-                          <td style={{ padding: "12px 8px", color: "#7A6E63" }}>
-                            {m.check_in_date ?? m.checkin ?? "—"}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
+          <VisitsRoomsTab
+            liveInHouseCount={liveInHouseCount}
+            liveInHouseRoster={liveInHouseRoster}
+            visitsTabSummary={visitsTabSummary}
+            villaStats={villaStats}
+            villaMonthly={villaMonthly}
+            bookingsByBedroom={bookingsByBedroom}
+            monthlyRevenue={monthlyRevenue}
+            leadTimeData={leadTimeData}
+            selectedVillaName={selectedVillaName}
+            onVillaSelect={setSelectedVillaName}
+            onGoToML={() => setActiveTab("ml")}
+          />
         )}
 
         {/* ════ FINANCE ════ */}
