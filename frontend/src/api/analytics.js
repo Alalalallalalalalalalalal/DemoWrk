@@ -92,4 +92,6 @@ export const analyticsApi = {
   monthlyRevenue: () => fetchData("/analytics/monthly-revenue"),
   leadTimeAnalysis: () => fetchData("/analytics/lead-time"),
   visitsTabSummary: () => fetchData("/analytics/visits-tab-summary"),
+  villaBookings: (villaName) =>
+    fetchData(withQuery("/analytics/villa-bookings", { villa: villaName })),
 };

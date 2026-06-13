@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   BarChart,
   Bar,
@@ -17,7 +17,9 @@ import {
   DollarSign,
   ArrowUpRight,
   Clock,
+  X,
 } from "lucide-react";
+import { analyticsApi } from "../../api/analytics";
 
 const C = {
   bg: "var(--dashboard-card)",
@@ -194,6 +196,28 @@ export default function VisitsRoomsTab({
     }
 
     return villa.bedroom_count ?? "—";
+  };
+
+  const [villaModalOpen, setVillaModalOpen] = useState(false);
+  const [villaBookings, setVillaBookings] = useState([]);
+  const [villaBookingsLoading, setVillaBookingsLoading] = useState(false);
+
+  const openVillaModal = async (villaName) => {
+    if (!villaName) return;
+
+    onVillaSelect(villaName);
+    setVillaModalOpen(true);
+    setVillaBookingsLoading(true);
+
+    try {
+      const data = await analyticsApi.villaBookings(villaName);
+      setVillaBookings(data);
+    } catch (err) {
+      console.error(err);
+      setVillaBookings([]);
+    } finally {
+      setVillaBookingsLoading(false);
+    }
   };
 
   return (
@@ -415,7 +439,7 @@ export default function VisitsRoomsTab({
                   return (
                     <tr
                       key={villa.villa_name}
-                      onClick={() => onVillaSelect(villa.villa_name)}
+                      onClick={() => openVillaModal(villa.villa_name)}
                       style={{
                         borderBottom: `1px solid ${C.border}`,
                         background: active ? C.panelAlt : "transparent",
@@ -734,6 +758,464 @@ export default function VisitsRoomsTab({
           </table>
         </div>
       </Card>
+
+      {villaModalOpen && selectedVilla && (
+        <div
+          onClick={() => setVillaModalOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(8, 18, 32, 0.48)",
+            zIndex: 1000,
+            display: "flex",
+            justifyContent: "flex-end",
+            backdropFilter: "blur(3px)",
+          }}
+        >
+          <aside
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(860px, 96vw)",
+              height: "100vh",
+              background: C.bg,
+              borderLeft: `1px solid ${C.border}`,
+              boxShadow: "-24px 0 60px rgba(0,0,0,0.22)",
+              overflowY: "auto",
+            }}
+          >
+            {/* Sticky header */}
+            <div
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 5,
+                background: C.bg,
+                borderBottom: `1px solid ${C.border}`,
+                padding: "22px 26px 18px",
+              }}
+            >
+              <button
+                onClick={() => setVillaModalOpen(false)}
+                style={{
+                  position: "absolute",
+                  right: 22,
+                  top: 22,
+                  border: `1px solid ${C.border}`,
+                  background: C.panel,
+                  width: 36,
+                  height: 36,
+                  borderRadius: 999,
+                  cursor: "pointer",
+                  color: C.text,
+                }}
+              >
+                <X size={18} />
+              </button>
+
+              <div className="dashboard-eyebrow">Villa booking profile</div>
+
+              <h2
+                style={{
+                  fontFamily: "'Cormorant Garamond', serif",
+                  fontSize: 38,
+                  color: C.text,
+                  margin: "4px 48px 4px 0",
+                  lineHeight: 1,
+                }}
+              >
+                {selectedVilla.villa_name}
+              </h2>
+
+              <div style={{ color: C.soft, fontSize: 13 }}>
+                {fmt(selectedVilla.bookings)} bookings ·{" "}
+                {fmt(selectedVilla.total_nights)} room nights ·{" "}
+                {money(selectedVilla.revenue)} revenue
+              </div>
+            </div>
+
+            <div style={{ padding: 26 }}>
+              {/* Summary tiles */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                  gap: 12,
+                  marginBottom: 24,
+                }}
+              >
+                {[
+                  ["Bookings", fmt(selectedVilla.bookings), "Total stays"],
+                  ["Revenue", money(selectedVilla.revenue), "Rental spend"],
+                  [
+                    "Avg Stay",
+                    `${num(selectedVilla.avg_stay)}n`,
+                    "Per booking",
+                  ],
+                  ["Guests", fmt(selectedVilla.total_guests), "Total guests"],
+                  ["Bedrooms", bedroomsLabel(selectedVilla), "Villa setup"],
+                  [
+                    "Members",
+                    fmt(selectedVilla.unique_members),
+                    "Unique members",
+                  ],
+                ].map(([label, value, sub]) => (
+                  <div
+                    key={label}
+                    style={{
+                      border: `1px solid ${C.border}`,
+                      background: C.panel,
+                      borderRadius: 18,
+                      padding: 16,
+                    }}
+                  >
+                    <div className="dashboard-eyebrow">{label}</div>
+                    <div
+                      style={{
+                        fontFamily: "'Cormorant Garamond', serif",
+                        color: C.text,
+                        fontSize: 28,
+                        marginTop: 4,
+                      }}
+                    >
+                      {value}
+                    </div>
+                    <div style={{ color: C.muted, fontSize: 11 }}>{sub}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  alignItems: "end",
+                  marginBottom: 12,
+                }}
+              >
+                <div>
+                  <div className="dashboard-eyebrow">Booking timeline</div>
+                  <h3
+                    style={{
+                      color: C.text,
+                      margin: "4px 0 0",
+                      fontSize: 22,
+                    }}
+                  >
+                    People who booked this villa
+                  </h3>
+                </div>
+
+                <div
+                  style={{
+                    color: C.muted,
+                    fontSize: 12,
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 999,
+                    padding: "7px 11px",
+                    background: C.panelAlt,
+                  }}
+                >
+                  {villaBookings.length} records
+                </div>
+              </div>
+
+              {villaBookingsLoading ? (
+                <div
+                  style={{
+                    padding: 34,
+                    textAlign: "center",
+                    color: C.muted,
+                    border: `1px dashed ${C.border}`,
+                    borderRadius: 18,
+                  }}
+                >
+                  Loading booking details...
+                </div>
+              ) : villaBookings.length === 0 ? (
+                <div
+                  style={{
+                    padding: 34,
+                    textAlign: "center",
+                    color: C.muted,
+                    border: `1px dashed ${C.border}`,
+                    borderRadius: 18,
+                  }}
+                >
+                  No booking details found.
+                </div>
+              ) : (
+                <div style={{ position: "relative" }}>
+                  {/* timeline rail */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: 17,
+                      top: 8,
+                      bottom: 8,
+                      width: 2,
+                      background: C.border,
+                    }}
+                  />
+
+                  {villaBookings.map((b, index) => {
+                    const guests = Array.isArray(b.guests) ? b.guests : [];
+                    const primaryName =
+                      b.member_full_name ??
+                      b.member_name ??
+                      b.guest_name ??
+                      "Unknown guest";
+
+                    return (
+                      <div
+                        key={b.conf_code ?? index}
+                        style={{
+                          position: "relative",
+                          display: "grid",
+                          gridTemplateColumns: "38px 1fr",
+                          gap: 14,
+                          marginBottom: 16,
+                        }}
+                      >
+                        {/* date dot */}
+                        <div
+                          style={{
+                            width: 34,
+                            height: 34,
+                            borderRadius: 999,
+                            background: C.accent2,
+                            color: "#fff",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            fontSize: 12,
+                            fontWeight: 800,
+                            zIndex: 1,
+                            marginTop: 10,
+                          }}
+                        >
+                          {index + 1}
+                        </div>
+
+                        {/* booking card */}
+                        <div
+                          style={{
+                            border: `1px solid ${C.border}`,
+                            background: index === 0 ? C.panelAlt : C.panel,
+                            borderRadius: 20,
+                            padding: 18,
+                            boxShadow: "0 10px 28px rgba(0,0,0,0.04)",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              gap: 14,
+                              alignItems: "flex-start",
+                            }}
+                          >
+                            <div>
+                              <div
+                                style={{
+                                  fontSize: 18,
+                                  fontWeight: 850,
+                                  color: C.text,
+                                }}
+                              >
+                                {primaryName}
+                              </div>
+
+                              <div
+                                style={{
+                                  color: C.soft,
+                                  fontSize: 12,
+                                  marginTop: 4,
+                                }}
+                              >
+                                Member #{b.member_number ?? "—"} · Confirmation{" "}
+                                {b.conf_code ?? "—"}
+                              </div>
+                            </div>
+
+                            <div
+                              style={{
+                                textAlign: "right",
+                                minWidth: 100,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  fontWeight: 900,
+                                  color: C.text,
+                                  fontSize: 18,
+                                }}
+                              >
+                                {money(b.revenue)}
+                              </div>
+                              <div style={{ color: C.muted, fontSize: 11 }}>
+                                revenue
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* stay strip */}
+                          <div
+                            style={{
+                              marginTop: 16,
+                              display: "grid",
+                              gridTemplateColumns: "1fr auto 1fr",
+                              alignItems: "center",
+                              gap: 10,
+                              background: C.bg,
+                              border: `1px solid ${C.border}`,
+                              borderRadius: 16,
+                              padding: 12,
+                            }}
+                          >
+                            <div>
+                              <div className="dashboard-eyebrow">Check-in</div>
+                              <div style={{ color: C.text, fontWeight: 800 }}>
+                                {b.check_in_date ?? "—"}
+                              </div>
+                            </div>
+
+                            <div
+                              style={{
+                                borderRadius: 999,
+                                padding: "7px 12px",
+                                background: C.panelAlt,
+                                color: C.accent,
+                                fontWeight: 800,
+                                fontSize: 12,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {fmt(b.nights)} nights · {fmt(b.persons)} guests
+                            </div>
+
+                            <div style={{ textAlign: "right" }}>
+                              <div className="dashboard-eyebrow">Check-out</div>
+                              <div style={{ color: C.text, fontWeight: 800 }}>
+                                {b.check_out_date ?? "—"}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* contact row */}
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "1fr 1fr",
+                              gap: 10,
+                              marginTop: 12,
+                            }}
+                          >
+                            <div
+                              style={{
+                                border: `1px solid ${C.border}`,
+                                borderRadius: 14,
+                                padding: 11,
+                                background: C.bg,
+                              }}
+                            >
+                              <div className="dashboard-eyebrow">Email</div>
+                              <div
+                                style={{
+                                  color: C.soft,
+                                  fontSize: 12,
+                                  wordBreak: "break-word",
+                                }}
+                              >
+                                {b.email ?? "—"}
+                              </div>
+                            </div>
+
+                            <div
+                              style={{
+                                border: `1px solid ${C.border}`,
+                                borderRadius: 14,
+                                padding: 11,
+                                background: C.bg,
+                              }}
+                            >
+                              <div className="dashboard-eyebrow">Phone</div>
+                              <div style={{ color: C.soft, fontSize: 12 }}>
+                                {b.phone ?? "—"}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* guest manifest */}
+                          {guests.length > 0 && (
+                            <div style={{ marginTop: 15 }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  marginBottom: 8,
+                                }}
+                              >
+                                <div className="dashboard-eyebrow">
+                                  Guest manifest
+                                </div>
+                                <div style={{ color: C.muted, fontSize: 11 }}>
+                                  {guests.length} guest
+                                  {guests.length === 1 ? "" : "s"}
+                                </div>
+                              </div>
+
+                              <div
+                                style={{
+                                  display: "flex",
+                                  flexWrap: "wrap",
+                                  gap: 8,
+                                }}
+                              >
+                                {guests.map((g, i) => (
+                                  <div
+                                    key={`${b.conf_code}-${i}`}
+                                    style={{
+                                      border: `1px solid ${C.border}`,
+                                      borderRadius: 999,
+                                      padding: "8px 11px",
+                                      background: g.is_owner
+                                        ? C.panelAlt
+                                        : C.bg,
+                                      color: C.text,
+                                      fontSize: 12,
+                                      display: "flex",
+                                      gap: 6,
+                                      alignItems: "center",
+                                    }}
+                                  >
+                                    <span style={{ fontWeight: 800 }}>
+                                      {g.guest_name ?? "Unnamed guest"}
+                                    </span>
+                                    <span style={{ color: C.muted }}>
+                                      {g.is_owner ? "Owner" : "Guest"}
+                                    </span>
+                                    {g.room_number && (
+                                      <span style={{ color: C.soft }}>
+                                        Room {g.room_number}
+                                      </span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

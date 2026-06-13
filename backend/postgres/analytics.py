@@ -1402,3 +1402,82 @@ def visits_tab_summary(db: Session = Depends(get_db)):
             COALESCE(SUM(villa_revenue), 0) AS villa_rental_revenue
         FROM bookings
     """)
+
+@router.get("/villa-bookings")
+def villa_bookings(villa: str = Query(...), db: Session = Depends(get_db)):
+    return rows(db, """
+        WITH booking_rows AS (
+            SELECT
+                f.conf_code,
+                MAX(f.villa_name) AS villa_name,
+                MAX(f.member_number) AS member_number,
+                MAX(m.member_full_name) AS member_full_name,
+                MAX(m.member_name) AS member_name,
+                MAX(m.email) AS email,
+                MAX(mp.phone_number) AS phone,
+                MAX(f.guest_name) AS guest_name,
+                MAX(f.persons) AS persons,
+                MAX(f.bedroom_count) AS bedroom_count,
+                MIN(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                MAX(f.check_out_date - f.check_in_date) AS nights,
+                SUM(
+                    CASE
+                        WHEN f.description ILIKE '%villa%'
+                          OR f.description ILIKE '%room%'
+                          OR f.description ILIKE '%rental%'
+                          OR f.description ILIKE '%accommodation%'
+                        THEN COALESCE(f.amount, 0)
+                        ELSE 0
+                    END
+                ) AS revenue
+            FROM folios f
+            LEFT JOIN members m
+              ON m.member_number = f.member_number
+            LEFT JOIN member_phones mp
+              ON mp.member_number = f.member_number
+             AND mp.phone_type IN ('cell', 'home', 'business')
+            WHERE f.conf_code IS NOT NULL
+              AND f.villa_name = :villa
+              AND f.check_in_date IS NOT NULL
+              AND f.check_out_date IS NOT NULL
+              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+                'cancelled', 'canceled', 'no-show'
+              )
+            GROUP BY f.conf_code
+        )
+        SELECT
+            br.*,
+            COALESCE(
+                json_agg(
+                    DISTINCT jsonb_build_object(
+                        'guest_name', rg.guest_name,
+                        'member_number', rg.member_number,
+                        'is_owner', rg.is_owner,
+                        'room_number', rg.room_number,
+                        'check_in_date', rg.check_in_date,
+                        'check_out_date', rg.check_out_date
+                    )
+                ) FILTER (WHERE rg.guest_name IS NOT NULL),
+                '[]'
+            ) AS guests
+        FROM booking_rows br
+        LEFT JOIN reservation_guests rg
+          ON rg.conf_code = br.conf_code
+        GROUP BY
+            br.conf_code,
+            br.villa_name,
+            br.member_number,
+            br.member_full_name,
+            br.member_name,
+            br.email,
+            br.phone,
+            br.guest_name,
+            br.persons,
+            br.bedroom_count,
+            br.check_in_date,
+            br.check_out_date,
+            br.nights,
+            br.revenue
+        ORDER BY br.check_in_date DESC
+    """, {"villa": villa})
