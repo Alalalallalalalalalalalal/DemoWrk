@@ -1185,6 +1185,7 @@ def update_segment_config(payload: dict, db: Session = Depends(get_db)):
 
 # villa
 
+
 def rows(db: Session, sql: str, params: dict | None = None):
     return [dict(row) for row in db.execute(text(sql), params or {}).mappings().all()]
 
@@ -1672,3 +1673,39 @@ def booked_people(
         ORDER BY bookings DESC, member_full_name, member_name
         LIMIT 1000
     """, filter_params(year, month))
+
+@router.get("/visits-rooms-dashboard")
+def visits_rooms_dashboard(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    villa: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    summary = visits_tab_summary(year=year, month=month, db=db)
+    villa_stats_data = villa_stats(year=year, month=month, db=db)
+    bedroom_stats = bookings_by_bedroom(year=year, month=month, db=db)
+    monthly_revenue_data = monthly_revenue(year=year, month=month, db=db)
+
+    selected_villa = villa
+    if not selected_villa and villa_stats_data:
+        selected_villa = villa_stats_data[0].get("villa_name")
+
+    villa_monthly_data = (
+        villa_monthly(
+            villa=selected_villa,
+            year=year,
+            month=month,
+            db=db,
+        )
+        if selected_villa
+        else []
+    )
+
+    return {
+        "summary": summary,
+        "villa_stats": villa_stats_data,
+        "bookings_by_bedroom": bedroom_stats,
+        "monthly_revenue": monthly_revenue_data,
+        "villa_monthly": villa_monthly_data,
+        "selected_villa": selected_villa,
+    }
