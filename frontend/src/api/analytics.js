@@ -85,13 +85,32 @@ export const analyticsApi = {
   updateSegmentConfig: (payload) =>
     fetchData("/analytics/ml/segment-config", jsonRequest("PATCH", payload)),
 
-  villaStats: () => fetchData("/analytics/villa-stats"),
-  villaMonthly: (villaName) =>
-    fetchData(withQuery("/analytics/villa-monthly", { villa: villaName })),
-  bookingsByBedroom: () => fetchData("/analytics/bookings-by-bedroom"),
-  monthlyRevenue: () => fetchData("/analytics/monthly-revenue"),
-  leadTimeAnalysis: () => fetchData("/analytics/lead-time"),
-  visitsTabSummary: () => fetchData("/analytics/visits-tab-summary"),
-  villaBookings: (villaName) =>
-    fetchData(withQuery("/analytics/villa-bookings", { villa: villaName })),
+  villaStats: (params = {}) =>
+    fetchData(withQuery("/analytics/villa-stats", params)),
+
+  villaMonthly: (villaName, params = {}) =>
+    fetchData(
+      withQuery("/analytics/villa-monthly", { villa: villaName, ...params }),
+    ),
+
+  bookingsByBedroom: (params = {}) =>
+    fetchData(withQuery("/analytics/bookings-by-bedroom", params)),
+
+  bedroomBookings: (beds, params = {}) =>
+    fetchData(withQuery("/analytics/bedroom-bookings", { beds, ...params })),
+
+  monthlyRevenue: (params = {}) =>
+    fetchData(withQuery("/analytics/monthly-revenue", params)),
+
+  visitsTabSummary: (params = {}) =>
+    fetchData(withQuery("/analytics/visits-tab-summary", params)),
+
+  villaBookings: (villaName, params = {}) =>
+    fetchData(
+      withQuery("/analytics/villa-bookings", { villa: villaName, ...params }),
+    ),
+  bookedPeople: (kind, params = {}) =>
+    fetchData(withQuery("/analytics/booked-people", { kind, ...params })),
+  visitsTabSummary: (params = {}) =>
+    fetchData(withQuery("/analytics/visits-tab-summary", params)),
 };

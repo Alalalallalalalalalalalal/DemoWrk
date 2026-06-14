@@ -16,8 +16,8 @@ import {
   CalendarClock,
   DollarSign,
   ArrowUpRight,
-  Clock,
   X,
+  Info,
 } from "lucide-react";
 import { analyticsApi } from "../../api/analytics";
 
@@ -44,6 +44,232 @@ const TIP = {
   fontSize: 12,
 };
 
+const LABEL_STYLE = {
+  fill: "var(--dashboard-muted)",
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+};
+
+// ─── Chart info tooltips ────────────────────────────────────────────────────
+
+const CHART_INFO = {
+  bookingsByVilla: {
+    summary:
+      "Shows total confirmed bookings per villa across all time (or the selected year/month filter).",
+    functionality:
+      "Hover a bar for exact booking count. Use the Year/Month filters above to narrow the view. Click a villa in the table below to drill into its monthly detail.",
+    x: "Villa name",
+    y: "Number of confirmed bookings",
+  },
+  villaMonthlyBookings: {
+    summary:
+      "Breaks down how bookings for the selected villa are distributed across calendar months.",
+    functionality:
+      "Hover a point for the exact monthly booking count. Change the selected villa by clicking a different row in the performance table.",
+    x: "Month (Jan–Dec)",
+    y: "Number of bookings",
+  },
+  villaMonthlyRevenue: {
+    summary:
+      "Shows rental revenue earned by the selected villa for each calendar month.",
+    functionality:
+      "Hover a bar for the exact monthly revenue figure. Revenue counts only folio lines matching villa, room, rental, or accommodation descriptions.",
+    x: "Month (Jan–Dec)",
+    y: "Rental revenue in USD",
+  },
+  bookingsByBedroom: {
+    summary:
+      "Compares booking volume across different bedroom configurations to reveal which villa sizes are most in demand.",
+    functionality:
+      "Hover a bar for exact booking count per bedroom tier. Use alongside the avg-stay chart to understand whether larger villas attract longer stays.",
+    x: "Number of bedrooms",
+    y: "Number of confirmed bookings",
+  },
+  avgStayByBedroom: {
+    summary:
+      "Shows the average length of stay for each bedroom count, helping identify whether party size correlates with longer visits.",
+    functionality:
+      "Hover a bar for the average nights figure. Drawn from the same folio dataset as the bookings chart — cancelled and no-show reservations are excluded.",
+    x: "Number of bedrooms",
+    y: "Average stay in nights",
+  },
+  bookingsByMonth: {
+    summary:
+      "Tracks booking volume month-by-month across all villas to surface seasonal demand patterns.",
+    functionality:
+      "Hover a point for the exact monthly count. This chart uses check-in date as the reference, so a booking confirmed in March for a June stay appears in June.",
+    x: "Month (Jan–Dec)",
+    y: "Number of confirmed bookings",
+  },
+  revenueByMonth: {
+    summary:
+      "Shows total villa rental revenue by month across all villas, revealing which months drive the most income.",
+    functionality:
+      "Hover a bar for the exact monthly revenue. Revenue is summed from folio lines matching villa, room, rental, or accommodation keywords — service charges and fees are excluded.",
+    x: "Month (Jan–Dec)",
+    y: "Rental revenue in USD",
+  },
+
+  villaTable: {
+    summary:
+      "Ranks all villas by total confirmed bookings and surfaces key performance metrics side by side.",
+    functionality:
+      "Click any row to open a full booking timeline for that villa in a side panel. The active row is highlighted. Filtered by the Year/Month selectors at the top.",
+    x: null,
+    y: null,
+  },
+};
+
+function ChartInfo({ id }) {
+  const [open, setOpen] = useState(false);
+  const info = CHART_INFO[id];
+  if (!info) return null;
+
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Chart information"
+        style={{
+          background: "none",
+          border: "none",
+          padding: 4,
+          cursor: "pointer",
+          color: open ? C.accent2 : C.muted,
+          display: "flex",
+          alignItems: "center",
+          borderRadius: 6,
+          transition: "color 0.15s",
+        }}
+        onMouseEnter={(e) => (e.currentTarget.style.color = C.accent2)}
+        onMouseLeave={(e) =>
+          (e.currentTarget.style.color = open ? C.accent2 : C.muted)
+        }
+      >
+        <Info size={15} />
+      </button>
+
+      {open && (
+        <>
+          {/* backdrop to close */}
+          <div
+            onClick={() => setOpen(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 49 }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              top: "calc(100% + 6px)",
+              right: 0,
+              zIndex: 50,
+              width: 280,
+              background: C.bg,
+              border: `1px solid ${C.border}`,
+              borderRadius: 14,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.14)",
+              padding: "14px 16px",
+              fontSize: 12,
+              color: C.soft,
+              lineHeight: 1.55,
+            }}
+          >
+            {/* close */}
+            <button
+              onClick={() => setOpen(false)}
+              style={{
+                position: "absolute",
+                top: 8,
+                right: 8,
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: C.muted,
+                padding: 2,
+                display: "flex",
+              }}
+            >
+              <X size={13} />
+            </button>
+
+            {/* summary */}
+            <p
+              style={{
+                margin: "0 0 10px",
+                color: C.text,
+                fontSize: 12,
+                paddingRight: 16,
+              }}
+            >
+              {info.summary}
+            </p>
+
+            {/* axes */}
+            {(info.x || info.y) && (
+              <div
+                style={{
+                  borderTop: `1px solid ${C.border}`,
+                  paddingTop: 10,
+                  marginBottom: 10,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 5,
+                }}
+              >
+                {info.x && (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        color: C.accent2,
+                        minWidth: 14,
+                        fontSize: 11,
+                      }}
+                    >
+                      X
+                    </span>
+                    <span>{info.x}</span>
+                  </div>
+                )}
+                {info.y && (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        color: C.accent,
+                        minWidth: 14,
+                        fontSize: 11,
+                      }}
+                    >
+                      Y
+                    </span>
+                    <span>{info.y}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* functionality */}
+            <div
+              style={{
+                borderTop: `1px solid ${C.border}`,
+                paddingTop: 10,
+                color: C.muted,
+                fontSize: 11,
+              }}
+            >
+              {info.functionality}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
 const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
 const money = (v) =>
   v == null
@@ -51,13 +277,38 @@ const money = (v) =>
     : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 const num = (v, d = 1) => (v == null ? "—" : Number(v).toFixed(d));
 
-function Stat({ icon: Icon, label, value, sub }) {
+function Stat({ icon: Icon, label, value, sub, onClick }) {
+  const clickable = Boolean(onClick);
+
   return (
     <div style={{ padding: "0 18px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={!clickable}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          background: "none",
+          border: "none",
+          padding: 0,
+          cursor: clickable ? "pointer" : "default",
+          color: "inherit",
+        }}
+      >
         {Icon && <Icon size={15} color={C.accent2} />}
-        <span className="dashboard-eyebrow">{label}</span>
-      </div>
+        <span
+          className="dashboard-eyebrow"
+          style={{
+            textDecoration: clickable ? "underline" : "none",
+            textUnderlineOffset: 3,
+          }}
+        >
+          {label}
+        </span>
+      </button>
+
       <div
         style={{
           fontFamily: "'Cormorant Garamond', serif",
@@ -123,14 +374,11 @@ function Select({ label, value, onChange, options }) {
 }
 
 export default function VisitsRoomsTab({
-  liveInHouseCount,
-  liveInHouseRoster = [],
-  visitsTabSummary,
-  villaStats = [],
-  villaMonthly = [],
-  bookingsByBedroom = [],
-  monthlyRevenue = [],
-  leadTimeData = [],
+  visitsTabSummary: initialVisitsTabSummary,
+  villaStats: initialVillaStats = [],
+  villaMonthly: initialVillaMonthly = [],
+  bookingsByBedroom: initialBookingsByBedroom = [],
+  monthlyRevenue: initialMonthlyRevenue = [],
   selectedVillaName,
   onVillaSelect,
   onGoToML,
@@ -138,12 +386,36 @@ export default function VisitsRoomsTab({
   const [year, setYear] = useState("All");
   const [month, setMonth] = useState("All");
 
-  const years = useMemo(() => {
-    const all = [...villaStats, ...monthlyRevenue]
-      .map((r) => r.year ?? r.booking_year)
-      .filter(Boolean);
-    return ["All", ...Array.from(new Set(all)).sort((a, b) => b - a)];
-  }, [villaStats, monthlyRevenue]);
+  const [summaryData, setSummaryData] = useState(initialVisitsTabSummary ?? {});
+  const [villaStatsData, setVillaStatsData] = useState(initialVillaStats);
+  const [villaMonthlyData, setVillaMonthlyData] = useState(initialVillaMonthly);
+  const [bookingsByBedroomData, setBookingsByBedroomData] = useState(
+    initialBookingsByBedroom,
+  );
+  const [monthlyRevenueData, setMonthlyRevenueData] = useState(
+    initialMonthlyRevenue,
+  );
+  const [visitsDataLoading, setVisitsDataLoading] = useState(false);
+
+  useEffect(() => {
+    setSummaryData(initialVisitsTabSummary ?? {});
+  }, [initialVisitsTabSummary]);
+
+  useEffect(() => {
+    setVillaStatsData(initialVillaStats);
+  }, [initialVillaStats]);
+
+  useEffect(() => {
+    setVillaMonthlyData(initialVillaMonthly);
+  }, [initialVillaMonthly]);
+
+  useEffect(() => {
+    setBookingsByBedroomData(initialBookingsByBedroom);
+  }, [initialBookingsByBedroom]);
+
+  useEffect(() => {
+    setMonthlyRevenueData(initialMonthlyRevenue);
+  }, [initialMonthlyRevenue]);
 
   const months = [
     "All",
@@ -161,16 +433,92 @@ export default function VisitsRoomsTab({
     "Dec",
   ];
 
-  const filteredVillas = useMemo(() => {
-    return villaStats.filter((v) => {
-      const y = v.year ?? v.booking_year;
-      const m = v.month ?? v.month_name;
-      return (
-        (year === "All" || String(y) === String(year)) &&
-        (month === "All" || String(m) === String(month))
-      );
-    });
-  }, [villaStats, year, month]);
+  const activeFilters = useMemo(
+    () => ({
+      year: year === "All" ? null : Number(year),
+      month: month === "All" ? null : months.indexOf(month),
+    }),
+    [year, month],
+  );
+
+  const years = useMemo(() => {
+    const fromData = [
+      ...initialVillaStats,
+      ...initialMonthlyRevenue,
+      ...villaStatsData,
+      ...monthlyRevenueData,
+    ]
+      .map((r) => r.year ?? r.booking_year)
+      .filter(Boolean)
+      .map(Number);
+
+    const uniqueYears = Array.from(new Set(fromData)).sort((a, b) => b - a);
+
+    if (uniqueYears.length) {
+      return ["All", ...uniqueYears];
+    }
+
+    const currentYear = new Date().getFullYear();
+    return [
+      "All",
+      ...Array.from(
+        { length: currentYear - 2018 + 1 },
+        (_, i) => currentYear - i,
+      ),
+    ];
+  }, [
+    initialVillaStats,
+    initialMonthlyRevenue,
+    villaStatsData,
+    monthlyRevenueData,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFilteredData() {
+      setVisitsDataLoading(true);
+
+      try {
+        const [summary, stats, bedroomStats, revenueByMonth] =
+          await Promise.all([
+            analyticsApi.visitsTabSummary(activeFilters),
+            analyticsApi.villaStats(activeFilters),
+            analyticsApi.bookingsByBedroom(activeFilters),
+            analyticsApi.monthlyRevenue(activeFilters),
+          ]);
+
+        if (cancelled) return;
+
+        setSummaryData(summary ?? {});
+        setVillaStatsData(Array.isArray(stats) ? stats : []);
+        setBookingsByBedroomData(
+          Array.isArray(bedroomStats) ? bedroomStats : [],
+        );
+        setMonthlyRevenueData(
+          Array.isArray(revenueByMonth) ? revenueByMonth : [],
+        );
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) {
+          setSummaryData({});
+          setVillaStatsData([]);
+          setBookingsByBedroomData([]);
+          setMonthlyRevenueData([]);
+        }
+      } finally {
+        if (!cancelled) setVisitsDataLoading(false);
+      }
+    }
+
+    loadFilteredData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFilters]);
+
+  const filteredVillas = villaStatsData;
 
   const mostVilla = filteredVillas[0];
   const leastVilla = filteredVillas.length
@@ -183,6 +531,32 @@ export default function VisitsRoomsTab({
     filteredVillas.find((v) => v.villa_name === selectedVillaName) ??
     mostVilla ??
     null;
+
+  useEffect(() => {
+    let cancelled = false;
+    const villaName = selectedVilla?.villa_name;
+
+    async function loadVillaMonthly() {
+      if (!villaName) {
+        setVillaMonthlyData([]);
+        return;
+      }
+
+      try {
+        const data = await analyticsApi.villaMonthly(villaName, activeFilters);
+        if (!cancelled) setVillaMonthlyData(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setVillaMonthlyData([]);
+      }
+    }
+
+    loadVillaMonthly();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedVilla?.villa_name, activeFilters]);
 
   const bedroomsLabel = (villa) => {
     if (!villa) return "—";
@@ -210,7 +584,7 @@ export default function VisitsRoomsTab({
     setVillaBookingsLoading(true);
 
     try {
-      const data = await analyticsApi.villaBookings(villaName);
+      const data = await analyticsApi.villaBookings(villaName, activeFilters);
       setVillaBookings(data);
     } catch (err) {
       console.error(err);
@@ -219,6 +593,76 @@ export default function VisitsRoomsTab({
       setVillaBookingsLoading(false);
     }
   };
+
+  const [bedroomModalOpen, setBedroomModalOpen] = useState(false);
+  const [selectedBedroom, setSelectedBedroom] = useState(null);
+  const [bedroomBookings, setBedroomBookings] = useState([]);
+  const [bedroomBookingsLoading, setBedroomBookingsLoading] = useState(false);
+
+  const openBedroomModal = async (beds) => {
+    if (!beds) return;
+
+    setSelectedBedroom(beds);
+    setBedroomModalOpen(true);
+    setBedroomBookingsLoading(true);
+
+    try {
+      const data = await analyticsApi.bedroomBookings(beds, activeFilters);
+      setBedroomBookings(data);
+    } catch (err) {
+      console.error(err);
+      setBedroomBookings([]);
+    } finally {
+      setBedroomBookingsLoading(false);
+    }
+  };
+
+  const [peopleModalOpen, setPeopleModalOpen] = useState(false);
+  const [peopleKind, setPeopleKind] = useState("members");
+  const [peopleRows, setPeopleRows] = useState([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
+  const [peopleYear, setPeopleYear] = useState(year);
+  const [peopleMonth, setPeopleMonth] = useState(month);
+
+  const peopleFilters = useMemo(
+    () => ({
+      year: peopleYear === "All" ? null : Number(peopleYear),
+      month: peopleMonth === "All" ? null : months.indexOf(peopleMonth),
+    }),
+    [peopleYear, peopleMonth],
+  );
+
+  const loadPeopleRows = async (kind, filters = peopleFilters) => {
+    setPeopleLoading(true);
+    try {
+      const data = await analyticsApi.bookedPeople(kind, filters);
+      setPeopleRows(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error(err);
+      setPeopleRows([]);
+    } finally {
+      setPeopleLoading(false);
+    }
+  };
+
+  const openPeopleModal = async (kind) => {
+    setPeopleKind(kind);
+    setPeopleYear(year);
+    setPeopleMonth(month);
+    setPeopleModalOpen(true);
+
+    const filters = {
+      year: year === "All" ? null : Number(year),
+      month: month === "All" ? null : months.indexOf(month),
+    };
+
+    await loadPeopleRows(kind, filters);
+  };
+
+  useEffect(() => {
+    if (!peopleModalOpen) return;
+    loadPeopleRows(peopleKind, peopleFilters);
+  }, [peopleKind, peopleFilters, peopleModalOpen]);
 
   return (
     <div className="dashboard-section">
@@ -257,52 +701,72 @@ export default function VisitsRoomsTab({
         </div>
       </div>
 
+      {visitsDataLoading && (
+        <div style={{ color: C.muted, fontSize: 12, padding: "0 4px" }}>
+          Updating visits and rooms data…
+        </div>
+      )}
+
       {/* KPI band */}
       <section className="dashboard-kpi-band" style={{ padding: "20px 18px" }}>
         <Stat
           icon={Users}
           label="Total Members Booked"
-          value={fmt(visitsTabSummary?.total_members_booked)}
+          value={fmt(summaryData?.total_members_booked)}
           sub="Unique members"
+          onClick={() => openPeopleModal("members")}
         />
+
         <Stat
           icon={Users}
           label="Total Guests Booked"
-          value={fmt(visitsTabSummary?.total_guests_booked)}
+          value={fmt(summaryData?.total_guests_booked)}
           sub="From folios"
+          onClick={() => openPeopleModal("guests")}
         />
         <Stat
           icon={CalendarClock}
           label="Average Length of Stay"
-          value={`${num(visitsTabSummary?.avg_length_of_stay)} nights`}
+          value={`${num(summaryData?.avg_length_of_stay)} nights`}
           sub="Overall"
         />
         <Stat
           icon={Users}
           label="Average Party Size"
-          value={num(visitsTabSummary?.avg_party_size)}
+          value={num(summaryData?.avg_party_size)}
           sub="Guests per booking"
         />
         <Stat
           icon={BedDouble}
           label="Total Room Nights"
-          value={fmt(visitsTabSummary?.total_room_nights)}
+          value={fmt(summaryData?.total_room_nights)}
           sub="Booked nights"
         />
         <Stat
           icon={DollarSign}
           label="Villa Rental Revenue"
-          value={money(visitsTabSummary?.villa_rental_revenue)}
+          value={money(summaryData?.villa_rental_revenue)}
           sub="Folio rental spend"
         />
       </section>
 
       {/* Villa charts */}
-      <Card title="Bookings by Villa" sub="Villa types, not generic room types">
+      <Card
+        title="Bookings by Villa"
+        action={<ChartInfo id="bookingsByVilla" />}
+      >
         <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: filteredVillas.length * 60, height: 320 }}>
+          <div
+            style={{
+              minWidth: Math.max(filteredVillas.length * 60, 420),
+              height: 320,
+            }}
+          >
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={filteredVillas} margin={{ bottom: 80 }}>
+              <BarChart
+                data={filteredVillas}
+                margin={{ top: 8, right: 16, bottom: 90, left: 16 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
                 <XAxis
                   dataKey="villa_name"
@@ -312,8 +776,25 @@ export default function VisitsRoomsTab({
                   textAnchor="end"
                   interval={0}
                   height={90}
+                  label={{
+                    value: "Villa",
+                    position: "insideBottom",
+                    offset: -20,
+                    style: LABEL_STYLE,
+                  }}
                 />
-                <YAxis stroke={AX} fontSize={11} />
+                <YAxis
+                  stroke={AX}
+                  fontSize={11}
+                  label={{
+                    value: "Bookings",
+                    angle: -90,
+                    position: "insideLeft",
+                    offset: 10,
+                    dy: 40,
+                    style: LABEL_STYLE,
+                  }}
+                />
                 <Tooltip contentStyle={TIP} />
                 <Bar
                   dataKey="bookings"
@@ -396,8 +877,19 @@ export default function VisitsRoomsTab({
           className="dashboard-card"
           style={{ flex: "0 0 420px", minWidth: 0 }}
         >
-          <div className="dashboard-eyebrow">All Villas</div>
-          <h2 className="dashboard-card-title">Villa performance</h2>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+            }}
+          >
+            <div>
+              <div className="dashboard-eyebrow">All Villas</div>
+              <h2 className="dashboard-card-title">Villa performance</h2>
+            </div>
+            <ChartInfo id="villaTable" />
+          </div>
           <div style={{ overflowY: "auto", maxHeight: 480, marginTop: 8 }}>
             <table
               style={{
@@ -526,13 +1018,38 @@ export default function VisitsRoomsTab({
               <Card
                 title={`${selectedVilla.villa_name} — Monthly Bookings`}
                 sub="Selected villa drill-down"
+                action={<ChartInfo id="villaMonthlyBookings" />}
               >
                 <div style={{ height: 200 }}>
                   <ResponsiveContainer>
-                    <LineChart data={villaMonthly}>
+                    <LineChart
+                      data={villaMonthlyData}
+                      margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+                    >
                       <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis dataKey="month" stroke={AX} fontSize={11} />
-                      <YAxis stroke={AX} fontSize={11} />
+                      <XAxis
+                        dataKey="month"
+                        stroke={AX}
+                        fontSize={11}
+                        label={{
+                          value: "Month",
+                          position: "insideBottom",
+                          offset: -10,
+                          style: LABEL_STYLE,
+                        }}
+                      />
+                      <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                        label={{
+                          value: "Bookings",
+                          angle: -90,
+                          position: "insideLeft",
+                          offset: 10,
+                          dy: 30,
+                          style: LABEL_STYLE,
+                        }}
+                      />
                       <Tooltip contentStyle={TIP} />
                       <Line
                         type="monotone"
@@ -548,13 +1065,38 @@ export default function VisitsRoomsTab({
               <Card
                 title={`${selectedVilla.villa_name} — Rental Revenue`}
                 sub="Monthly villa revenue"
+                action={<ChartInfo id="villaMonthlyRevenue" />}
               >
                 <div style={{ height: 200 }}>
                   <ResponsiveContainer>
-                    <BarChart data={villaMonthly}>
+                    <BarChart
+                      data={villaMonthlyData}
+                      margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+                    >
                       <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis dataKey="month" stroke={AX} fontSize={11} />
-                      <YAxis stroke={AX} fontSize={11} />
+                      <XAxis
+                        dataKey="month"
+                        stroke={AX}
+                        fontSize={11}
+                        label={{
+                          value: "Month",
+                          position: "insideBottom",
+                          offset: -10,
+                          style: LABEL_STYLE,
+                        }}
+                      />
+                      <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                        label={{
+                          value: "Revenue ($)",
+                          angle: -90,
+                          position: "insideLeft",
+                          offset: 10,
+                          dy: 40,
+                          style: LABEL_STYLE,
+                        }}
+                      />
                       <Tooltip contentStyle={TIP} />
                       <Bar
                         dataKey="revenue"
@@ -587,31 +1129,89 @@ export default function VisitsRoomsTab({
 
       {/* Bedroom + monthly revenue */}
       <div className="dashboard-grid dashboard-grid-main">
-        <Card title="Bookings by Bedroom Count" sub="Bedroom demand">
+        <Card
+          title="Bookings by Bedroom Count"
+          sub="Bedroom demand"
+          action={<ChartInfo id="bookingsByBedroom" />}
+        >
           <div style={{ height: 240 }}>
             <ResponsiveContainer>
-              <BarChart data={bookingsByBedroom}>
+              <BarChart
+                data={bookingsByBedroomData}
+                margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                <XAxis dataKey="beds" stroke={AX} fontSize={11} />
-                <YAxis stroke={AX} fontSize={11} />
+                <XAxis
+                  dataKey="beds"
+                  stroke={AX}
+                  fontSize={11}
+                  label={{
+                    value: "Bedrooms",
+                    position: "insideBottom",
+                    offset: -10,
+                    style: LABEL_STYLE,
+                  }}
+                />
+                <YAxis
+                  stroke={AX}
+                  fontSize={11}
+                  label={{
+                    value: "Bookings",
+                    angle: -90,
+                    position: "insideLeft",
+                    offset: 10,
+                    dy: 40,
+                    style: LABEL_STYLE,
+                  }}
+                />
                 <Tooltip contentStyle={TIP} />
                 <Bar
                   dataKey="bookings"
                   fill="var(--dashboard-flame)"
                   radius={[6, 6, 0, 0]}
+                  cursor="pointer"
+                  onClick={(entry) => openBedroomModal(entry?.beds)}
                 />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </Card>
 
-        <Card title="Average Stay by Bedroom Count" sub="Length of stay">
+        <Card
+          title="Average Stay by Bedroom Count"
+          sub="Length of stay"
+          action={<ChartInfo id="avgStayByBedroom" />}
+        >
           <div style={{ height: 240 }}>
             <ResponsiveContainer>
-              <BarChart data={bookingsByBedroom}>
+              <BarChart
+                data={bookingsByBedroomData}
+                margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                <XAxis dataKey="beds" stroke={AX} fontSize={11} />
-                <YAxis stroke={AX} fontSize={11} />
+                <XAxis
+                  dataKey="beds"
+                  stroke={AX}
+                  fontSize={11}
+                  label={{
+                    value: "Bedrooms",
+                    position: "insideBottom",
+                    offset: -10,
+                    style: LABEL_STYLE,
+                  }}
+                />
+                <YAxis
+                  stroke={AX}
+                  fontSize={11}
+                  label={{
+                    value: "Nights",
+                    angle: -90,
+                    position: "insideLeft",
+                    offset: 10,
+                    dy: 30,
+                    style: LABEL_STYLE,
+                  }}
+                />
                 <Tooltip contentStyle={TIP} />
                 <Bar
                   dataKey="avg_stay"
@@ -625,13 +1225,41 @@ export default function VisitsRoomsTab({
       </div>
 
       <div className="dashboard-grid dashboard-grid-main">
-        <Card title="Bookings by Month" sub="Monthly booking trend">
+        <Card
+          title="Bookings by Month"
+          sub="Monthly booking trend"
+          action={<ChartInfo id="bookingsByMonth" />}
+        >
           <div style={{ height: 240 }}>
             <ResponsiveContainer>
-              <LineChart data={monthlyRevenue}>
+              <LineChart
+                data={monthlyRevenueData}
+                margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                <XAxis dataKey="month" stroke={AX} fontSize={11} />
-                <YAxis stroke={AX} fontSize={11} />
+                <XAxis
+                  dataKey="month"
+                  stroke={AX}
+                  fontSize={11}
+                  label={{
+                    value: "Month",
+                    position: "insideBottom",
+                    offset: -10,
+                    style: LABEL_STYLE,
+                  }}
+                />
+                <YAxis
+                  stroke={AX}
+                  fontSize={11}
+                  label={{
+                    value: "Bookings",
+                    angle: -90,
+                    position: "insideLeft",
+                    offset: 10,
+                    dy: 40,
+                    style: LABEL_STYLE,
+                  }}
+                />
                 <Tooltip contentStyle={TIP} />
                 <Line
                   type="monotone"
@@ -644,13 +1272,41 @@ export default function VisitsRoomsTab({
           </div>
         </Card>
 
-        <Card title="Villa Rental Revenue by Month" sub="Folio rental revenue">
+        <Card
+          title="Villa Rental Revenue by Month"
+          sub="Folio rental revenue"
+          action={<ChartInfo id="revenueByMonth" />}
+        >
           <div style={{ height: 240 }}>
             <ResponsiveContainer>
-              <BarChart data={monthlyRevenue}>
+              <BarChart
+                data={monthlyRevenueData}
+                margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                <XAxis dataKey="month" stroke={AX} fontSize={11} />
-                <YAxis stroke={AX} fontSize={11} />
+                <XAxis
+                  dataKey="month"
+                  stroke={AX}
+                  fontSize={11}
+                  label={{
+                    value: "Month",
+                    position: "insideBottom",
+                    offset: -10,
+                    style: LABEL_STYLE,
+                  }}
+                />
+                <YAxis
+                  stroke={AX}
+                  fontSize={11}
+                  label={{
+                    value: "Revenue ($)",
+                    angle: -90,
+                    position: "insideLeft",
+                    offset: 10,
+                    dy: 40,
+                    style: LABEL_STYLE,
+                  }}
+                />
                 <Tooltip contentStyle={TIP} />
                 <Bar
                   dataKey="revenue"
@@ -663,101 +1319,312 @@ export default function VisitsRoomsTab({
         </Card>
       </div>
 
-      {/* Lead time */}
-      <Card title="Lead Time Analysis" sub="Booking creation to check-in">
-        <div className="dashboard-grid dashboard-grid-3">
-          {leadTimeData.map((row) => (
+      {/* side modals */}
+
+      {peopleModalOpen && (
+        <div
+          onClick={() => setPeopleModalOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(8, 18, 32, 0.48)",
+            zIndex: 1000,
+            display: "flex",
+            justifyContent: "flex-end",
+          }}
+        >
+          <aside
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(820px, 96vw)",
+              height: "100vh",
+              background: C.bg,
+              borderLeft: `1px solid ${C.border}`,
+              overflowY: "auto",
+              padding: 26,
+            }}
+          >
+            <button onClick={() => setPeopleModalOpen(false)}>
+              <X size={18} />
+            </button>
+
+            <div className="dashboard-eyebrow">
+              {peopleKind === "members" ? "Members booked" : "Guests booked"}
+            </div>
+
+            <h2 className="dashboard-card-title">
+              {peopleKind === "members"
+                ? "Total Members Booked"
+                : "Total Guests Booked"}
+            </h2>
+
             <div
-              key={row.range}
               style={{
-                border: `1px solid ${C.border}`,
-                borderRadius: 14,
-                padding: 16,
-                background: C.panel,
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                marginBottom: 16,
               }}
             >
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <Clock size={15} color={C.accent2} />
-                <span className="dashboard-eyebrow">{row.range}</span>
+              <Select
+                label="Year"
+                value={peopleYear}
+                onChange={setPeopleYear}
+                options={years}
+              />
+              <Select
+                label="Month"
+                value={peopleMonth}
+                onChange={setPeopleMonth}
+                options={months}
+              />
+            </div>
+
+            <div style={{ color: C.muted, fontSize: 12, marginBottom: 12 }}>
+              {peopleRows.length} records
+            </div>
+
+            {peopleLoading ? (
+              <div style={{ color: C.muted }}>Loading people...</div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 12,
+                  }}
+                >
+                  <thead>
+                    <tr className="dashboard-eyebrow">
+                      {[
+                        "Name",
+                        "Member #",
+                        "Member Type",
+                        "Account",
+                        "Bookings",
+                        "Nights",
+                        "First In",
+                        "Last Out",
+                      ].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            textAlign: h === "Name" ? "left" : "right",
+                            padding: "10px",
+                            borderBottom: `1px solid ${C.border}`,
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {peopleRows.map((p, i) => {
+                      const name =
+                        p.member_full_name ||
+                        p.member_name ||
+                        p.folio_guest_name ||
+                        p.guest_name ||
+                        "Unknown";
+
+                      const missingMemberType = !p.member_type;
+
+                      return (
+                        <tr
+                          key={`${name}-${p.member_number ?? i}`}
+                          style={{
+                            background: missingMemberType
+                              ? "rgba(255, 193, 7, 0.14)"
+                              : "transparent",
+                            borderTop: `1px solid ${C.border}`,
+                          }}
+                        >
+                          <td style={{ padding: "10px", color: C.text }}>
+                            {name}
+                            {missingMemberType && (
+                              <div
+                                style={{
+                                  marginTop: 4,
+                                  color: C.accent3,
+                                  fontSize: 10,
+                                  fontWeight: 800,
+                                  textTransform: "uppercase",
+                                  letterSpacing: "0.05em",
+                                }}
+                              >
+                                Member type is null
+                              </div>
+                            )}
+                          </td>
+
+                          <td
+                            style={{
+                              padding: "10px",
+                              textAlign: "right",
+                              color: C.soft,
+                            }}
+                          >
+                            {p.member_number ?? "—"}
+                          </td>
+
+                          <td
+                            style={{
+                              padding: "10px",
+                              textAlign: "right",
+                              color: missingMemberType ? C.accent3 : C.soft,
+                              fontWeight: missingMemberType ? 800 : 400,
+                            }}
+                          >
+                            {p.member_type ?? "NULL"}
+                          </td>
+
+                          <td
+                            style={{
+                              padding: "10px",
+                              textAlign: "right",
+                              color: !p.member_or_guest ? C.accent3 : C.soft,
+                              fontWeight: !p.member_or_guest ? 800 : 400,
+                            }}
+                          >
+                            {p.member_or_guest ?? "NULL"}
+                          </td>
+
+                          <td
+                            style={{
+                              padding: "10px",
+                              textAlign: "right",
+                              color: C.soft,
+                            }}
+                          >
+                            {fmt(p.bookings)}
+                          </td>
+
+                          <td
+                            style={{
+                              padding: "10px",
+                              textAlign: "right",
+                              color: C.soft,
+                            }}
+                          >
+                            {fmt(p.nights)}
+                          </td>
+
+                          <td
+                            style={{
+                              padding: "10px",
+                              textAlign: "right",
+                              color: C.soft,
+                            }}
+                          >
+                            {p.first_check_in ?? "—"}
+                          </td>
+
+                          <td
+                            style={{
+                              padding: "10px",
+                              textAlign: "right",
+                              color: C.soft,
+                            }}
+                          >
+                            {p.last_check_out ?? "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-              <div
+            )}
+          </aside>
+        </div>
+      )}
+
+      {bedroomModalOpen && (
+        <div
+          onClick={() => setBedroomModalOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(8, 18, 32, 0.48)",
+            zIndex: 1000,
+            display: "flex",
+            justifyContent: "flex-end",
+          }}
+        >
+          <aside
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(760px, 96vw)",
+              height: "100vh",
+              background: C.bg,
+              borderLeft: `1px solid ${C.border}`,
+              overflowY: "auto",
+              padding: 26,
+            }}
+          >
+            <button onClick={() => setBedroomModalOpen(false)}>
+              <X size={18} />
+            </button>
+
+            <div className="dashboard-eyebrow">Bedroom booking profile</div>
+            <h2 className="dashboard-card-title">
+              {selectedBedroom} Bedroom Bookings
+            </h2>
+
+            {bedroomBookingsLoading ? (
+              <div style={{ color: C.muted }}>Loading bookings…</div>
+            ) : (
+              <table
                 style={{
-                  fontFamily: "'Cormorant Garamond', serif",
-                  fontSize: 28,
-                  color: C.text,
-                  marginTop: 6,
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  fontSize: 12,
                 }}
               >
-                {fmt(row.bookings)}
-              </div>
-              <div style={{ color: C.soft, fontSize: 12 }}>
-                {num(row.pct)}% of bookings
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      {/* Live roster */}
-      <Card
-        title="Live In-House Roster"
-        sub={`${liveInHouseCount?.total_in_house ?? 0} currently in house`}
-      >
-        <div style={{ overflowX: "auto" }}>
-          <table
-            style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
-          >
-            <thead>
-              <tr className="dashboard-eyebrow">
-                {[
-                  "Name",
-                  "Member #",
-                  "Room / Villa Type",
-                  "Check-in",
-                  "Check-out",
-                ].map((h) => (
-                  <th
-                    key={h}
-                    style={{
-                      textAlign: "left",
-                      padding: "10px",
-                      borderBottom: `1px solid ${C.border}`,
-                    }}
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {liveInHouseRoster.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={5}
-                    style={{ padding: 28, textAlign: "center", color: C.muted }}
-                  >
-                    No guests currently in house.
-                  </td>
-                </tr>
-              ) : (
-                liveInHouseRoster.map((m, i) => (
-                  <tr key={i} style={{ borderBottom: `1px solid ${C.border}` }}>
-                    <td style={{ padding: 10, fontWeight: 700 }}>
-                      {m.member_full_name ?? m.member_name ?? "—"}
-                    </td>
-                    <td style={{ padding: 10 }}>{m.member_number ?? "—"}</td>
-                    <td style={{ padding: 10 }}>
-                      {m.villa_name ?? m.room_type ?? "—"}
-                    </td>
-                    <td style={{ padding: 10 }}>{m.check_in_date ?? "—"}</td>
-                    <td style={{ padding: 10 }}>{m.check_out_date ?? "—"}</td>
+                <thead>
+                  <tr className="dashboard-eyebrow">
+                    {[
+                      "Who",
+                      "Villa",
+                      "Check in",
+                      "Check out",
+                      "Nights",
+                      "Guests",
+                    ].map((h) => (
+                      <th key={h} style={{ textAlign: "left", padding: 10 }}>
+                        {h}
+                      </th>
+                    ))}
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {bedroomBookings.map((b) => (
+                    <tr
+                      key={b.conf_code}
+                      style={{ borderTop: `1px solid ${C.border}` }}
+                    >
+                      <td style={{ padding: 10 }}>
+                        {b.member_full_name ||
+                          b.member_name ||
+                          b.guest_name ||
+                          "—"}
+                      </td>
+                      <td style={{ padding: 10 }}>{b.villa_name || "—"}</td>
+                      <td style={{ padding: 10 }}>{b.check_in_date || "—"}</td>
+                      <td style={{ padding: 10 }}>{b.check_out_date || "—"}</td>
+                      <td style={{ padding: 10 }}>{fmt(b.nights)}</td>
+                      <td style={{ padding: 10 }}>{fmt(b.persons)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </aside>
         </div>
-      </Card>
+      )}
 
       {villaModalOpen && selectedVilla && (
         <div

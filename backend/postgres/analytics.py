@@ -250,39 +250,6 @@ def dashboard_summary(db: Session = Depends(get_db)):
         ORDER BY total DESC
     """),
 
-    "liveInHouseCount": one("""
-        SELECT COUNT(*) AS total_in_house
-        FROM rooms
-        WHERE check_in_date <= CURRENT_DATE
-        AND check_out_date > CURRENT_DATE
-        AND (
-            status IS NULL
-            OR LOWER(status) NOT IN ('cancelled', 'canceled')
-        )
-    """),
-
-    "liveInHouseRoster": rows("""
-        SELECT
-            r.member_number,
-            m.member_full_name,
-            m.member_type,
-            r.confirmation_code,
-            r.room_type,
-            r.room_number,
-            r.check_in_date,
-            r.check_out_date,
-            r.status
-        FROM rooms r
-        JOIN members m ON r.member_number = m.member_number
-        WHERE r.check_in_date <= CURRENT_DATE
-        AND r.check_out_date > CURRENT_DATE
-        AND (
-            r.status IS NULL
-            OR LOWER(r.status) NOT IN ('cancelled', 'canceled')
-        )
-        ORDER BY r.room_number
-    """),
-
     "directoryMembers": rows("""
         SELECT
             m.member_number,
@@ -1217,15 +1184,66 @@ def update_segment_config(payload: dict, db: Session = Depends(get_db)):
     return {"ok": True, "updated": updates}
 
 # villa
+
 def rows(db: Session, sql: str, params: dict | None = None):
     return [dict(row) for row in db.execute(text(sql), params or {}).mappings().all()]
+
 
 def one(db: Session, sql: str, params: dict | None = None):
     return dict(db.execute(text(sql), params or {}).mappings().first() or {})
 
+
+def date_filter_sql(alias="f"):
+    return f"""
+      AND (
+        :year IS NULL
+        OR (
+          {alias}.check_in_date <= MAKE_DATE(:year, 12, 31)
+          AND {alias}.check_out_date >= MAKE_DATE(:year, 1, 1)
+        )
+      )
+      AND (
+        :month IS NULL
+        OR (
+          :year IS NOT NULL
+          AND {alias}.check_in_date <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::DATE
+          AND {alias}.check_out_date >= MAKE_DATE(:year, :month, 1)
+        )
+        OR (
+          :year IS NULL
+          AND (
+            EXTRACT(MONTH FROM {alias}.check_in_date)::INT = :month
+            OR EXTRACT(MONTH FROM {alias}.check_out_date)::INT = :month
+          )
+        )
+      )
+    """
+
+
+def filter_params(year: int | None, month: int | None):
+    return {"year": year, "month": month}
+
+
+def valid_booking_sql(alias="f"):
+    return f"""
+      {alias}.conf_code IS NOT NULL
+      AND {alias}.check_in_date IS NOT NULL
+      AND {alias}.check_out_date IS NOT NULL
+      AND COALESCE(LOWER({alias}.reservation_status), '') NOT IN (
+        'cancelled', 'canceled', 'no-show'
+      )
+    """
+
+
+
+
 @router.get("/villa-stats")
-def villa_stats(db: Session = Depends(get_db)):
-    return rows(db, """
+def villa_stats(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
         WITH booking_rows AS (
             SELECT
                 f.conf_code,
@@ -1252,20 +1270,18 @@ def villa_stats(db: Session = Depends(get_db)):
               AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
                 'cancelled', 'canceled', 'no-show'
               )
+              {date_filter_sql("f")}
             GROUP BY f.conf_code
         )
         SELECT
             villa_name,
-
             STRING_AGG(
               DISTINCT bedroom_count::text,
               ', '
               ORDER BY bedroom_count::text
             ) AS bedroom_counts,
-
             MIN(bedroom_count) AS min_bedrooms,
             MAX(bedroom_count) AS max_bedrooms,
-
             COUNT(*) AS bookings,
             SUM(nights) AS total_nights,
             ROUND(AVG(nights)::numeric, 1) AS avg_stay,
@@ -1276,32 +1292,60 @@ def villa_stats(db: Session = Depends(get_db)):
         FROM booking_rows
         GROUP BY villa_name
         ORDER BY bookings DESC
-    """)
+    """, filter_params(year, month))
 
 @router.get("/villa-monthly")
-def villa_monthly(villa: str = Query(...), db: Session = Depends(get_db)):
-    return rows(db, """
+def villa_monthly(
+    villa: str = Query(...),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
+        WITH booking_rows AS (
+            SELECT
+                f.conf_code,
+                MIN(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                MAX(f.check_out_date - f.check_in_date) AS nights,
+                SUM(
+                    CASE
+                        WHEN f.description ILIKE '%villa%'
+                          OR f.description ILIKE '%room%'
+                          OR f.description ILIKE '%rental%'
+                          OR f.description ILIKE '%accommodation%'
+                        THEN COALESCE(f.amount, 0)
+                        ELSE 0
+                    END
+                ) AS revenue
+            FROM folios f
+            WHERE f.conf_code IS NOT NULL
+              AND f.villa_name = :villa
+              AND f.check_in_date IS NOT NULL
+              AND f.check_out_date IS NOT NULL
+              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+                'cancelled', 'canceled', 'no-show'
+              )
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code
+        )
         SELECT
-          TO_CHAR(f.check_in_date, 'Mon') AS month,
-          EXTRACT(MONTH FROM f.check_in_date)::int AS month_num,
-          COUNT(DISTINCT f.conf_code) AS bookings,
-          SUM(f.amount) FILTER (
-            WHERE f.description ILIKE '%villa%'
-               OR f.description ILIKE '%room%'
-               OR f.description ILIKE '%accommodation%'
-          ) AS revenue
-        FROM folios f
-        WHERE f.villa_name = :villa
-          AND COALESCE(LOWER(f.reservation_status), '') NOT IN ('cancelled', 'canceled', 'no-show')
-          AND f.check_in_date IS NOT NULL
+          TO_CHAR(check_in_date, 'Mon') AS month,
+          EXTRACT(MONTH FROM check_in_date)::int AS month_num,
+          COUNT(*) AS bookings,
+          COALESCE(SUM(revenue), 0) AS revenue
+        FROM booking_rows
         GROUP BY month, month_num
         ORDER BY month_num
-    """, {"villa": villa})
-
+    """, {"villa": villa, **filter_params(year, month)})
 
 @router.get("/bookings-by-bedroom")
-def bookings_by_bedroom(db: Session = Depends(get_db)):
-    return rows(db, """
+def bookings_by_bedroom(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
         SELECT
           f.bedroom_count AS beds,
           COUNT(DISTINCT f.conf_code) AS bookings,
@@ -1309,66 +1353,111 @@ def bookings_by_bedroom(db: Session = Depends(get_db)):
           ROUND(AVG(f.check_out_date - f.check_in_date), 1) AS avg_stay
         FROM folios f
         WHERE f.bedroom_count IS NOT NULL
-          AND COALESCE(LOWER(f.reservation_status), '') NOT IN ('cancelled', 'canceled', 'no-show')
+          AND f.check_in_date IS NOT NULL
+          AND f.check_out_date IS NOT NULL
+          AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+            'cancelled', 'canceled', 'no-show'
+          )
+          {date_filter_sql("f")}
         GROUP BY f.bedroom_count
         ORDER BY f.bedroom_count
-    """)
+    """, filter_params(year, month))
 
+
+@router.get("/bedroom-bookings")
+def bedroom_bookings(
+    beds: int = Query(...),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
+        WITH booking_rows AS (
+            SELECT
+                f.conf_code,
+                MAX(f.villa_name) AS villa_name,
+                MAX(f.member_number) AS member_number,
+                MAX(m.member_full_name) AS member_full_name,
+                MAX(m.member_name) AS member_name,
+                MAX(m.email) AS email,
+                MAX(f.guest_name) AS guest_name,
+                MAX(f.persons) AS persons,
+                MAX(f.bedroom_count) AS bedroom_count,
+                MIN(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                MAX(f.check_out_date - f.check_in_date) AS nights
+            FROM folios f
+            LEFT JOIN members m
+              ON m.member_number = f.member_number
+            WHERE f.conf_code IS NOT NULL
+              AND f.bedroom_count = :beds
+              AND f.check_in_date IS NOT NULL
+              AND f.check_out_date IS NOT NULL
+              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+                'cancelled', 'canceled', 'no-show'
+              )
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code
+        )
+        SELECT *
+        FROM booking_rows
+        ORDER BY check_in_date DESC
+    """, {"beds": beds, **filter_params(year, month)})
 
 @router.get("/monthly-revenue")
-def monthly_revenue(db: Session = Depends(get_db)):
-    return rows(db, """
+def monthly_revenue(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
+        WITH booking_rows AS (
+            SELECT
+                f.conf_code,
+                MIN(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                SUM(
+                    CASE
+                        WHEN f.description ILIKE '%villa%'
+                          OR f.description ILIKE '%room%'
+                          OR f.description ILIKE '%rental%'
+                          OR f.description ILIKE '%accommodation%'
+                        THEN COALESCE(f.amount, 0)
+                        ELSE 0
+                    END
+                ) AS revenue
+            FROM folios f
+            WHERE f.conf_code IS NOT NULL
+              AND f.check_in_date IS NOT NULL
+              AND f.check_out_date IS NOT NULL
+              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+                'cancelled', 'canceled', 'no-show'
+              )
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code
+        )
         SELECT
-          TO_CHAR(f.check_in_date, 'Mon') AS month,
-          EXTRACT(MONTH FROM f.check_in_date)::int AS month_num,
-          COUNT(DISTINCT f.conf_code) AS bookings,
-          SUM(f.amount) FILTER (
-            WHERE f.description ILIKE '%villa%'
-               OR f.description ILIKE '%room%'
-               OR f.description ILIKE '%accommodation%'
-          ) AS revenue
-        FROM folios f
-        WHERE COALESCE(LOWER(f.reservation_status), '') NOT IN ('cancelled', 'canceled', 'no-show')
-          AND f.check_in_date IS NOT NULL
+          TO_CHAR(check_in_date, 'Mon') AS month,
+          EXTRACT(MONTH FROM check_in_date)::int AS month_num,
+          COUNT(*) AS bookings,
+          COALESCE(SUM(revenue), 0) AS revenue
+        FROM booking_rows
         GROUP BY month, month_num
         ORDER BY month_num
-    """)
-
-
-@router.get("/lead-time")
-def lead_time(db: Session = Depends(get_db)):
-    return rows(db, """
-        SELECT
-          CASE
-            WHEN (f.check_in_date - f.created_at::date) = 0 THEN 'Same day'
-            WHEN (f.check_in_date - f.created_at::date) BETWEEN 1 AND 3 THEN '1–3 days'
-            WHEN (f.check_in_date - f.created_at::date) BETWEEN 4 AND 7 THEN '4–7 days'
-            WHEN (f.check_in_date - f.created_at::date) BETWEEN 8 AND 14 THEN '1–2 weeks'
-            WHEN (f.check_in_date - f.created_at::date) BETWEEN 15 AND 28 THEN '2–4 weeks'
-            WHEN (f.check_in_date - f.created_at::date) BETWEEN 29 AND 90 THEN '1–3 months'
-            ELSE '3+ months'
-          END AS range,
-          COUNT(DISTINCT f.conf_code) AS bookings,
-          ROUND(
-            COUNT(DISTINCT f.conf_code)::numeric
-            / SUM(COUNT(DISTINCT f.conf_code)) OVER () * 100,
-            1
-          ) AS pct
-        FROM folios f
-        WHERE f.check_in_date IS NOT NULL
-          AND f.created_at IS NOT NULL
-          AND COALESCE(LOWER(f.reservation_status), '') NOT IN ('cancelled', 'canceled', 'no-show')
-        GROUP BY range
-        ORDER BY MIN(f.check_in_date - f.created_at::date)
-    """)
+    """, filter_params(year, month))
 
 @router.get("/visits-tab-summary")
-def visits_tab_summary(db: Session = Depends(get_db)):
-    return one(db, """
+def visits_tab_summary(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return one(db, f"""
         WITH bookings AS (
             SELECT
                 f.conf_code,
                 MAX(f.member_number) AS member_number,
+                MAX(m.member_or_guest) AS member_or_guest,
                 MAX(f.persons) AS persons,
                 MAX(f.check_in_date) AS check_in_date,
                 MAX(f.check_out_date) AS check_out_date,
@@ -1384,28 +1473,38 @@ def visits_tab_summary(db: Session = Depends(get_db)):
                     END
                 ) AS villa_revenue
             FROM folios f
-            WHERE f.conf_code IS NOT NULL
+            LEFT JOIN members m
+              ON m.member_number = f.member_number
+            WHERE {valid_booking_sql("f")}
               AND f.villa_name IS NOT NULL
-              AND f.check_in_date IS NOT NULL
-              AND f.check_out_date IS NOT NULL
-              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
-                'cancelled', 'canceled', 'no-show'
-              )
+              {date_filter_sql("f")}
             GROUP BY f.conf_code
         )
         SELECT
-            COUNT(DISTINCT member_number) AS total_members_booked,
-            COALESCE(SUM(persons), 0) AS total_guests_booked,
+            COUNT(DISTINCT member_number) FILTER (
+                WHERE member_or_guest = 'Member'
+                   OR member_or_guest IS NULL
+            ) AS total_members_booked,
+
+            COUNT(DISTINCT member_number) FILTER (
+                WHERE member_or_guest = 'Guest'
+            ) AS total_guests_booked,
+
             ROUND(AVG(nights)::numeric, 1) AS avg_length_of_stay,
             ROUND(AVG(persons)::numeric, 1) AS avg_party_size,
             COALESCE(SUM(nights), 0) AS total_room_nights,
             COALESCE(SUM(villa_revenue), 0) AS villa_rental_revenue
         FROM bookings
-    """)
+    """, filter_params(year, month))
 
 @router.get("/villa-bookings")
-def villa_bookings(villa: str = Query(...), db: Session = Depends(get_db)):
-    return rows(db, """
+def villa_bookings(
+    villa: str = Query(...),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
         WITH booking_rows AS (
             SELECT
                 f.conf_code,
@@ -1444,6 +1543,7 @@ def villa_bookings(villa: str = Query(...), db: Session = Depends(get_db)):
               AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
                 'cancelled', 'canceled', 'no-show'
               )
+              {date_filter_sql("f")}
             GROUP BY f.conf_code
         )
         SELECT
@@ -1480,4 +1580,95 @@ def villa_bookings(villa: str = Query(...), db: Session = Depends(get_db)):
             br.nights,
             br.revenue
         ORDER BY br.check_in_date DESC
-    """, {"villa": villa})
+    """, {"villa": villa, **filter_params(year, month)})
+@router.get("/booked-people")
+def booked_people(
+    kind: str = Query(pattern="^(members|guests)$"),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    member_filter = """
+      AND (
+        m.member_or_guest = 'Member'
+        OR m.member_or_guest IS NULL
+      )
+    """ if kind == "members" else """
+      AND m.member_or_guest = 'Guest'
+    """
+
+    return rows(db, f"""
+        WITH booked_accounts AS (
+            SELECT
+                f.conf_code,
+                f.member_number,
+                MAX(m.member_full_name) AS member_full_name,
+                MAX(m.member_name) AS member_name,
+                MAX(m.member_type) AS member_type,
+                MAX(m.member_or_guest) AS member_or_guest,
+                MAX(m.email) AS email,
+                MAX(f.guest_name) AS folio_guest_name,
+                MAX(f.persons) AS persons,
+                MIN(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                MAX(f.check_out_date - f.check_in_date) AS nights
+            FROM folios f
+            LEFT JOIN members m
+              ON m.member_number = f.member_number
+            WHERE {valid_booking_sql("f")}
+              {member_filter}
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code, f.member_number
+        ),
+        reservation_guest_rows AS (
+            SELECT
+                ba.conf_code,
+                rg.member_number AS reservation_member_number,
+                rg.guest_name,
+                rg.room_number,
+                rg.is_owner,
+                rg.check_in_date AS guest_check_in_date,
+                rg.check_out_date AS guest_check_out_date
+            FROM booked_accounts ba
+            LEFT JOIN reservation_guests rg
+              ON rg.conf_code = ba.conf_code
+        )
+        SELECT
+            ba.member_number,
+            ba.member_full_name,
+            ba.member_name,
+            ba.member_type,
+            ba.member_or_guest,
+            ba.email,
+            MAX(ba.folio_guest_name) AS folio_guest_name,
+            COUNT(DISTINCT ba.conf_code) AS bookings,
+            MIN(ba.check_in_date) AS first_check_in,
+            MAX(ba.check_out_date) AS last_check_out,
+            SUM(ba.nights) AS nights,
+            SUM(COALESCE(ba.persons, 0)) AS total_party_size,
+            COALESCE(
+                json_agg(
+                    DISTINCT jsonb_build_object(
+                        'guest_name', rgr.guest_name,
+                        'member_number', rgr.reservation_member_number,
+                        'room_number', rgr.room_number,
+                        'is_owner', rgr.is_owner,
+                        'check_in_date', rgr.guest_check_in_date,
+                        'check_out_date', rgr.guest_check_out_date
+                    )
+                ) FILTER (WHERE rgr.guest_name IS NOT NULL),
+                '[]'
+            ) AS reservation_guests
+        FROM booked_accounts ba
+        LEFT JOIN reservation_guest_rows rgr
+          ON rgr.conf_code = ba.conf_code
+        GROUP BY
+            ba.member_number,
+            ba.member_full_name,
+            ba.member_name,
+            ba.member_type,
+            ba.member_or_guest,
+            ba.email
+        ORDER BY bookings DESC, member_full_name, member_name
+        LIMIT 1000
+    """, filter_params(year, month))

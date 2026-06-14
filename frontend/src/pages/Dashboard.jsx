@@ -101,8 +101,7 @@ export default function Dashboard() {
   const [averageLengthOfStay, setAverageLengthOfStay] = useState(null);
   const [mostUsedRoomTypes, setMostUsedRoomTypes] = useState([]);
   const [leastUsedRoomTypes, setLeastUsedRoomTypes] = useState([]);
-  const [liveInHouseCount, setLiveInHouseCount] = useState(null);
-  const [liveInHouseRoster, setLiveInHouseRoster] = useState([]);
+
   const [spendByMonth, setSpendByMonth] = useState([]);
   const [totalRecentActivitySpend, setTotalRecentActivitySpend] =
     useState(null);
@@ -130,7 +129,7 @@ export default function Dashboard() {
   const [villaMonthly, setVillaMonthly] = useState([]);
   const [bookingsByBedroom, setBookingsByBedroom] = useState([]);
   const [monthlyRevenue, setMonthlyRevenue] = useState([]);
-  const [leadTimeData, setLeadTimeData] = useState([]);
+
   const [visitsTabSummary, setVisitsTabSummary] = useState(null);
   const [selectedVillaName, setSelectedVillaName] = useState(null);
 
@@ -153,8 +152,7 @@ export default function Dashboard() {
         setAverageLengthOfStay(data.averageLengthOfStay ?? null);
         setMostUsedRoomTypes(data.mostUsedRoomTypes ?? []);
         setLeastUsedRoomTypes(data.leastUsedRoomTypes ?? []);
-        setLiveInHouseCount(data.liveInHouseCount ?? null);
-        setLiveInHouseRoster(data.liveInHouseRoster ?? []);
+
         setSpendByMonth(data.spendByMonth ?? []);
         setTotalRecentActivitySpend(data.totalRecentActivitySpend ?? null);
         setTopSpendDescriptions(data.topSpendDescriptions ?? []);
@@ -175,7 +173,7 @@ export default function Dashboard() {
       .then(setBookingsByBedroom)
       .catch(console.error);
     analyticsApi.monthlyRevenue().then(setMonthlyRevenue).catch(console.error);
-    analyticsApi.leadTimeAnalysis().then(setLeadTimeData).catch(console.error);
+
     analyticsApi
       .visitsTabSummary()
       .then(setVisitsTabSummary)
@@ -230,8 +228,7 @@ export default function Dashboard() {
   const totalMembers = membersByType.reduce((a, b) => a + (b.total || 0), 0);
 
   const visibleAccountTypes = accountsByType.filter(
-    (item) =>
-      item.account_category?.trim() === accountTypeView,
+    (item) => item.account_category?.trim() === accountTypeView,
   );
 
   const getCV = (v) => {
@@ -397,11 +394,7 @@ export default function Dashboard() {
                   value: totalMembers ? totalMembers.toLocaleString() : "—",
                   delta: "All membership types",
                 },
-                {
-                  label: "Currently In-House",
-                  value: String(liveInHouseCount?.total_in_house ?? 0),
-                  delta: "Live roster",
-                },
+
                 {
                   label: "Avg. Tenure",
                   value:
@@ -717,7 +710,10 @@ export default function Dashboard() {
         {/* ════ DEMOGRAPHICS ════ */}
         {activeTab === "demographics" && (
           <div className="dashboard-section">
-            <Card title="Account Types" sub="Distribution of member and guest account types">
+            <Card
+              title="Account Types"
+              sub="Distribution of member and guest account types"
+            >
               <div
                 style={{
                   display: "flex",
@@ -741,8 +737,7 @@ export default function Dashboard() {
                     fontWeight: 600,
                     background:
                       accountTypeView === "Member" ? "#2C3B4D" : "transparent",
-                    color:
-                      accountTypeView === "Member" ? "#FFFFFF" : "#2C3B4D",
+                    color: accountTypeView === "Member" ? "#FFFFFF" : "#2C3B4D",
                     transition: "all 0.2s ease",
                   }}
                 >
@@ -760,8 +755,7 @@ export default function Dashboard() {
                     fontWeight: 600,
                     background:
                       accountTypeView === "Guest" ? "#2C3B4D" : "transparent",
-                    color:
-                      accountTypeView === "Guest" ? "#FFFFFF" : "#2C3B4D",
+                    color: accountTypeView === "Guest" ? "#FFFFFF" : "#2C3B4D",
                     transition: "all 0.2s ease",
                   }}
                 >
@@ -811,9 +805,7 @@ export default function Dashboard() {
                       dataKey="total"
                       name="Accounts"
                       fill={
-                        accountTypeView === "Member"
-                          ? "#FFB162"
-                          : "#5B8FA8"
+                        accountTypeView === "Member" ? "#FFB162" : "#5B8FA8"
                       }
                       radius={[0, 6, 6, 0]}
                       maxBarSize={20}
@@ -822,7 +814,7 @@ export default function Dashboard() {
                 </ResponsiveContainer>
               </div>
             </Card>
-  
+
             <SectionLabel>Age / Gender / Status</SectionLabel>
             <div className="dashboard-grid dashboard-grid-3">
               <Card title="Age Groups" sub="Accounts by age segment">
@@ -859,7 +851,10 @@ export default function Dashboard() {
             </div>
             <SectionLabel>Member Status &amp; Tenure</SectionLabel>
             <div className="dashboard-grid dashboard-grid-side">
-              <Card title="Member & Guest Status" sub="Status comparison between members and guests">
+              <Card
+                title="Member & Guest Status"
+                sub="Status comparison between members and guests"
+              >
                 <div className="dashboard-chart dashboard-chart-200">
                   <ResponsiveContainer>
                     <BarChart
@@ -868,16 +863,8 @@ export default function Dashboard() {
                       barGap={4}
                     >
                       <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis
-                        dataKey="status"
-                        stroke={AX}
-                        fontSize={11}
-                      />
-                      <YAxis
-                        stroke={AX}
-                        fontSize={11}
-                        allowDecimals={false}
-                      />
+                      <XAxis dataKey="status" stroke={AX} fontSize={11} />
+                      <YAxis stroke={AX} fontSize={11} allowDecimals={false} />
                       <Tooltip contentStyle={TIP} />
                       <Legend
                         wrapperStyle={{
@@ -901,7 +888,10 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
               </Card>
-              <Card title="New Members & Guests per Year" sub="Member and guest acquisition over time">
+              <Card
+                title="New Members & Guests per Year"
+                sub="Member and guest acquisition over time"
+              >
                 <div className="dashboard-chart dashboard-chart-200">
                   <ResponsiveContainer>
                     <LineChart
@@ -915,11 +905,7 @@ export default function Dashboard() {
                         fontSize={11}
                         allowDecimals={false}
                       />
-                      <YAxis
-                        stroke={AX}
-                        fontSize={11}
-                        allowDecimals={false}
-                      />
+                      <YAxis stroke={AX} fontSize={11} allowDecimals={false} />
                       <Tooltip contentStyle={TIP} />
                       <Legend
                         wrapperStyle={{
@@ -1059,14 +1045,11 @@ export default function Dashboard() {
 
         {activeTab === "visits" && (
           <VisitsRoomsTab
-            liveInHouseCount={liveInHouseCount}
-            liveInHouseRoster={liveInHouseRoster}
             visitsTabSummary={visitsTabSummary}
             villaStats={villaStats}
             villaMonthly={villaMonthly}
             bookingsByBedroom={bookingsByBedroom}
             monthlyRevenue={monthlyRevenue}
-            leadTimeData={leadTimeData}
             selectedVillaName={selectedVillaName}
             onVillaSelect={setSelectedVillaName}
             onGoToML={() => setActiveTab("ml")}
