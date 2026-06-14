@@ -430,27 +430,30 @@ export default function VisitsRoomsTab({
       setVisitsDataLoading(true);
 
       try {
-        const [summary, stats, bedroomStats, revenueByMonth] =
-          await Promise.all([
-            analyticsApi.visitsTabSummary(activeFilters),
-            analyticsApi.villaStats(activeFilters),
-            analyticsApi.bookingsByBedroom(activeFilters),
-            analyticsApi.monthlyRevenue(activeFilters),
-          ]);
+        const data = await analyticsApi.visitsRoomsDashboard({
+          ...activeFilters,
+          villa: selectedVillaName,
+        });
 
         if (cancelled) return;
 
-        setSummaryData(summary ?? {});
-        setVillaStatsData(Array.isArray(stats) ? stats : []);
+        setSummaryData(data?.summary ?? {});
+        setVillaStatsData(
+          Array.isArray(data?.villa_stats) ? data.villa_stats : [],
+        );
         setBookingsByBedroomData(
-          Array.isArray(bedroomStats) ? bedroomStats : [],
+          Array.isArray(data?.bookings_by_bedroom)
+            ? data.bookings_by_bedroom
+            : [],
         );
         setMonthlyRevenueData(
-          Array.isArray(revenueByMonth) ? revenueByMonth : [],
+          Array.isArray(data?.monthly_revenue) ? data.monthly_revenue : [],
+        );
+        setVillaMonthlyData(
+          Array.isArray(data?.villa_monthly) ? data.villa_monthly : [],
         );
       } catch (err) {
         console.error(err);
-        // Keep the last good data on screen instead of clearing the tab.
       } finally {
         if (!cancelled) setVisitsDataLoading(false);
       }
@@ -461,7 +464,7 @@ export default function VisitsRoomsTab({
     return () => {
       cancelled = true;
     };
-  }, [activeFilters]);
+  }, [activeFilters, selectedVillaName]);
 
   const filteredVillas = villaStatsData;
 
@@ -476,32 +479,6 @@ export default function VisitsRoomsTab({
     filteredVillas.find((v) => v.villa_name === selectedVillaName) ??
     mostVilla ??
     null;
-
-  useEffect(() => {
-    let cancelled = false;
-    const villaName = selectedVilla?.villa_name;
-
-    async function loadVillaMonthly() {
-      if (!villaName) {
-        setVillaMonthlyData([]);
-        return;
-      }
-
-      try {
-        const data = await analyticsApi.villaMonthly(villaName, activeFilters);
-        if (!cancelled) setVillaMonthlyData(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) setVillaMonthlyData([]);
-      }
-    }
-
-    loadVillaMonthly();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedVilla?.villa_name, activeFilters]);
 
   const bedroomsLabel = (villa) => {
     if (!villa) return "—";
