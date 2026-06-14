@@ -125,12 +125,6 @@ export default function Dashboard() {
   const [columnVisibilityOpen, setColumnVisibilityOpen] = useState(false);
   const [exportMenu, setExportMenu] = useState(false);
 
-  const [villaStats, setVillaStats] = useState([]);
-  const [villaMonthly, setVillaMonthly] = useState([]);
-  const [bookingsByBedroom, setBookingsByBedroom] = useState([]);
-  const [monthlyRevenue, setMonthlyRevenue] = useState([]);
-
-  const [visitsTabSummary, setVisitsTabSummary] = useState(null);
   const [selectedVillaName, setSelectedVillaName] = useState(null);
 
   useEffect(() => {
@@ -166,28 +160,7 @@ export default function Dashboard() {
       .catch(console.error);
 
     analyticsApi.getTables().then(setAvailableTables).catch(console.error);
-
-    analyticsApi.villaStats().then(setVillaStats).catch(console.error);
-    analyticsApi
-      .bookingsByBedroom()
-      .then(setBookingsByBedroom)
-      .catch(console.error);
-    analyticsApi.monthlyRevenue().then(setMonthlyRevenue).catch(console.error);
-
-    analyticsApi
-      .visitsTabSummary()
-      .then(setVisitsTabSummary)
-      .catch(console.error);
   }, []);
-
-  useEffect(() => {
-    if (!selectedVillaName) return;
-
-    analyticsApi
-      .villaMonthly(selectedVillaName)
-      .then(setVillaMonthly)
-      .catch(console.error);
-  }, [selectedVillaName]);
 
   useEffect(() => {
     if (!selectedTable) {
@@ -1045,11 +1018,6 @@ export default function Dashboard() {
 
         {activeTab === "visits" && (
           <VisitsRoomsTab
-            visitsTabSummary={visitsTabSummary}
-            villaStats={villaStats}
-            villaMonthly={villaMonthly}
-            bookingsByBedroom={bookingsByBedroom}
-            monthlyRevenue={monthlyRevenue}
             selectedVillaName={selectedVillaName}
             onVillaSelect={setSelectedVillaName}
             onGoToML={() => setActiveTab("ml")}

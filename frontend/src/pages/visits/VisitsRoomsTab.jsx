@@ -374,11 +374,6 @@ function Select({ label, value, onChange, options }) {
 }
 
 export default function VisitsRoomsTab({
-  visitsTabSummary: initialVisitsTabSummary,
-  villaStats: initialVillaStats = [],
-  villaMonthly: initialVillaMonthly = [],
-  bookingsByBedroom: initialBookingsByBedroom = [],
-  monthlyRevenue: initialMonthlyRevenue = [],
   selectedVillaName,
   onVillaSelect,
   onGoToML,
@@ -386,36 +381,12 @@ export default function VisitsRoomsTab({
   const [year, setYear] = useState("All");
   const [month, setMonth] = useState("All");
 
-  const [summaryData, setSummaryData] = useState(initialVisitsTabSummary ?? {});
-  const [villaStatsData, setVillaStatsData] = useState(initialVillaStats);
-  const [villaMonthlyData, setVillaMonthlyData] = useState(initialVillaMonthly);
-  const [bookingsByBedroomData, setBookingsByBedroomData] = useState(
-    initialBookingsByBedroom,
-  );
-  const [monthlyRevenueData, setMonthlyRevenueData] = useState(
-    initialMonthlyRevenue,
-  );
+  const [summaryData, setSummaryData] = useState({});
+  const [villaStatsData, setVillaStatsData] = useState([]);
+  const [villaMonthlyData, setVillaMonthlyData] = useState([]);
+  const [bookingsByBedroomData, setBookingsByBedroomData] = useState([]);
+  const [monthlyRevenueData, setMonthlyRevenueData] = useState([]);
   const [visitsDataLoading, setVisitsDataLoading] = useState(false);
-
-  useEffect(() => {
-    setSummaryData(initialVisitsTabSummary ?? {});
-  }, [initialVisitsTabSummary]);
-
-  useEffect(() => {
-    setVillaStatsData(initialVillaStats);
-  }, [initialVillaStats]);
-
-  useEffect(() => {
-    setVillaMonthlyData(initialVillaMonthly);
-  }, [initialVillaMonthly]);
-
-  useEffect(() => {
-    setBookingsByBedroomData(initialBookingsByBedroom);
-  }, [initialBookingsByBedroom]);
-
-  useEffect(() => {
-    setMonthlyRevenueData(initialMonthlyRevenue);
-  }, [initialMonthlyRevenue]);
 
   const months = [
     "All",
@@ -442,22 +413,6 @@ export default function VisitsRoomsTab({
   );
 
   const years = useMemo(() => {
-    const fromData = [
-      ...initialVillaStats,
-      ...initialMonthlyRevenue,
-      ...villaStatsData,
-      ...monthlyRevenueData,
-    ]
-      .map((r) => r.year ?? r.booking_year)
-      .filter(Boolean)
-      .map(Number);
-
-    const uniqueYears = Array.from(new Set(fromData)).sort((a, b) => b - a);
-
-    if (uniqueYears.length) {
-      return ["All", ...uniqueYears];
-    }
-
     const currentYear = new Date().getFullYear();
     return [
       "All",
@@ -466,12 +421,7 @@ export default function VisitsRoomsTab({
         (_, i) => currentYear - i,
       ),
     ];
-  }, [
-    initialVillaStats,
-    initialMonthlyRevenue,
-    villaStatsData,
-    monthlyRevenueData,
-  ]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -500,12 +450,7 @@ export default function VisitsRoomsTab({
         );
       } catch (err) {
         console.error(err);
-        if (!cancelled) {
-          setSummaryData({});
-          setVillaStatsData([]);
-          setBookingsByBedroomData([]);
-          setMonthlyRevenueData([]);
-        }
+        // Keep the last good data on screen instead of clearing the tab.
       } finally {
         if (!cancelled) setVisitsDataLoading(false);
       }

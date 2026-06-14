@@ -102,9 +102,6 @@ export const analyticsApi = {
   monthlyRevenue: (params = {}) =>
     fetchData(withQuery("/analytics/monthly-revenue", params)),
 
-  visitsTabSummary: (params = {}) =>
-    fetchData(withQuery("/analytics/visits-tab-summary", params)),
-
   villaBookings: (villaName, params = {}) =>
     fetchData(
       withQuery("/analytics/villa-bookings", { villa: villaName, ...params }),
