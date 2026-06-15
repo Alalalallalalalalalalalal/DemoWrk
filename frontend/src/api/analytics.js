@@ -76,10 +76,8 @@ export const analyticsApi = {
   // Reports
   getTables: () => fetchData("/analytics/tables"),
 
-  getTableData: (table, limit = 100, offset = 0) =>
-    fetchData(
-      `/analytics/table/${encodeURIComponent(table)}?limit=${limit}&offset=${offset}`,
-    ),
+  getTableData: (table) =>
+    fetchData(`/analytics/table/${encodeURIComponent(table)}`),
 
   searchTable: (table, column, value) =>
     fetchData(

@@ -204,7 +204,7 @@ export default function OverviewTab({
                 </div>
 
                 <div style={block}>
-                    <CardHeader label="Finance at a glance" tip="Outstanding dues, villa rental revenue, and revenue by customer type." />
+                    <CardHeader label="Finance at a glance ($US)" tip="Outstanding dues, villa rental revenue, and revenue by customer type." />
                     <StatRow label="Villa rental revenue" value={money(totalVillaRevenue)} />
                     <StatRow label="Rev. per booking" value={revPerBooking != null ? money(revPerBooking) : "—"} />
                     <StatRow label="Outstanding balance" value={totalAmountDue?.total_amount_due != null ? `$${(Number(totalAmountDue.total_amount_due) / 1_000_000).toFixed(2)}M` : "—"} warn />
@@ -289,7 +289,7 @@ export default function OverviewTab({
 
                 {/* Monthly revenue */}
                 <div style={block}>
-                    <CardHeader label="Revenue by month" tip="Monthly revenue totals. Negative values are credits or adjustments. April is peak season." />
+                    <CardHeader label="Revenue by month ($US)" tip="Monthly revenue totals. Negative values are credits or adjustments. April is peak season." />
                     {monthlyRevenue.map((m, i, arr) => {
                         const absMax = Math.max(...monthlyRevenue.map(x => Math.abs(x.revenue)));
                         const pct = absMax > 0 ? Math.round((Math.abs(m.revenue) / absMax) * 100) : 0;
@@ -350,7 +350,7 @@ export default function OverviewTab({
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 
                     <div style={block}>
-                        <CardHeader label="Member vs guest revenue" tip="Revenue and transaction breakdown between member and guest folio accounts." />
+                        <CardHeader label="Member vs guest revenue ($US)" tip="Revenue and transaction breakdown between member and guest folio accounts." />
                         {memberVsGuestRevenue.map((r, i, arr) => {
                             const pct = totalRev > 0 ? Math.round((r.revenue / totalRev) * 100) : 0;
                             const col = r.customerType === "Member" ? C.navy : C.flame;

@@ -652,8 +652,7 @@ def get_tables(db: Session = Depends(get_db)):
     return allowed_tables
 
 @router.get("/table/{table_name}")
-def get_table_data(table_name: str, limit: int = 100,
-                    offset: int = 0, db: Session = Depends(get_db)):
+def get_table_data(table_name: str, db: Session = Depends(get_db)):
     allowed_tables = {
         "amenity_season_spend",
         "dependent_addresses",
@@ -686,13 +685,7 @@ def get_table_data(table_name: str, limit: int = 100,
         raise HTTPException(status_code=400, detail="Invalid table")
 
     result = db.execute(
-        text(f"""
-            SELECT *
-            FROM {table_name}
-            LIMIT :limit
-            OFFSET :offset
-        """),
-        {"limit": limit, "offset": offset}
+        text(f"SELECT * FROM {table_name}")
     ).mappings().all()
 
     return [dict(row) for row in result]
