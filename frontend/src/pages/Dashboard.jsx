@@ -57,6 +57,9 @@ import VisitsRoomsTab from "./visits/VisitsRoomsTab";
 import DemographicsTab from "./demographics/DemographicsTab";
 import FinanceTab from "./finance/FinanceTab";
 
+//Overview tab components
+import OverviewTab from "./OverviewTab";
+
 /* ─── Sidebar nav config ─────────────────────────────────────── */
 const TABS = [
   { id: "overview", label: "Overview", Icon: LayoutDashboard },
@@ -127,6 +130,12 @@ export default function Dashboard() {
   const [exportMenu, setExportMenu] = useState(false);
 
   const [selectedVillaName, setSelectedVillaName] = useState(null);
+  const [memberVsGuestRevenue, setMemberVsGuestRevenue] = useState([]);
+  const [villaStats, setVillaStats] = useState([]);
+  const [visitsTabSummary, setVisitsTabSummary] = useState(null);
+  const [bedroomBookings, setBedroomBookings] = useState([]);
+  const [villaRevenue, setVillaRevenue] = useState([]);
+  const [monthlyRevenue, setMonthlyRevenue] = useState([]);
 
   useEffect(() => {
     analyticsApi
@@ -162,6 +171,18 @@ export default function Dashboard() {
       .catch(console.error);
 
     analyticsApi.getTables().then(setAvailableTables).catch(console.error);
+    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/finance/member-vs-guest`)
+      .then(r => r.json()).then(setMemberVsGuestRevenue).catch(console.error);
+    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/analytics/villa-stats`)
+      .then(r => r.json()).then(setVillaStats).catch(console.error);
+    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/analytics/visits-tab-summary`)
+      .then(r => r.json()).then(setVisitsTabSummary).catch(console.error);
+    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/analytics/bookings-by-bedroom`)
+      .then(r => r.json()).then(setBedroomBookings).catch(console.error);
+    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/finance/villa-revenue`)
+      .then(r => r.json()).then(setVillaRevenue).catch(console.error);
+    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/analytics/monthly-revenue`)
+      .then(r => r.json()).then(setMonthlyRevenue).catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -249,9 +270,9 @@ export default function Dashboard() {
     rowLimit === "all"
       ? sortedRows
       : sortedRows.slice(
-          (page - 1) * Number(rowLimit),
-          page * Number(rowLimit),
-        );
+        (page - 1) * Number(rowLimit),
+        page * Number(rowLimit),
+      );
 
   const getExportRows = () =>
     sortedRows.map((row) => {
@@ -353,329 +374,31 @@ export default function Dashboard() {
 
         {/* ════ OVERVIEW ════ */}
         {activeTab === "overview" && (
-          <div className="dashboard-section dashboard-section-lg">
-            {/* KPI band */}
-            <section
-              className="dashboard-kpi-band"
-              style={{ padding: "24px 28px" }}
-            >
-              {[
-                {
-                  label: "Total Members",
-                  value: totalMembers ? totalMembers.toLocaleString() : "—",
-                  delta: "All membership types",
-                },
-
-                {
-                  label: "Avg. Tenure",
-                  value:
-                    averageTenure?.average_tenure_years != null
-                      ? `${Number(averageTenure.average_tenure_years).toFixed(1)} yrs`
-                      : "—",
-                  delta: "Across all members",
-                },
-                {
-                  label: "Outstanding Balance",
-                  value:
-                    totalAmountDue?.total_amount_due != null
-                      ? `$${Number(totalAmountDue.total_amount_due).toLocaleString()}`
-                      : "—",
-                  delta: "Total dues owed",
-                },
-              ].map((k, i) => (
-                <div
-                  key={k.label}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 4,
-                    padding: "0 24px",
-                    borderLeft: i > 0 ? "1px solid #DDD6CA" : "none",
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: 10,
-                      letterSpacing: "0.18em",
-                      textTransform: "uppercase",
-                      color: "#9A8E84",
-                    }}
-                  >
-                    {k.label}
-                  </span>
-                  <span
-                    style={{
-                      fontFamily: "'Cormorant Garamond', serif",
-                      fontSize: 32,
-                      lineHeight: 1.1,
-                      color: "#1B2632",
-                    }}
-                  >
-                    {k.value}
-                  </span>
-                  <span style={{ fontSize: 11, color: "#A35139" }}>
-                    {k.delta}
-                  </span>
-                </div>
-              ))}
-            </section>
-
-            {/* Main grid */}
-            <div className="dashboard-grid dashboard-grid-main">
-              {/* Member acquisition card */}
-              <div className="dashboard-card">
-                <div
-                  style={{
-                    fontSize: 10,
-                    letterSpacing: "0.18em",
-                    textTransform: "uppercase",
-                    color: "#9A8E84",
-                    marginBottom: 4,
-                  }}
-                >
-                  Member Acquisition
-                </div>
-                <h2 className="dashboard-card-title dashboard-card-title-lg">
-                  New members per year
-                </h2>
-                <div className="dashboard-chart dashboard-chart-200">
-                  <ResponsiveContainer>
-                    <LineChart
-                      data={newMembersPerYear}
-                      margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis dataKey="year" stroke={AX} fontSize={11} />
-                      <YAxis stroke={AX} fontSize={11} />
-                      <Tooltip contentStyle={TIP} />
-                      <Line
-                        type="monotone"
-                        dataKey="total"
-                        stroke="#FFB162"
-                        strokeWidth={2.5}
-                        dot={{ r: 3, fill: "#FFB162" }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-
-              {/* Satisfaction ring — deep navy card */}
-              <div
-                style={{
-                  borderRadius: 24,
-                  background: "#013A59",
-                  padding: 24,
-                  color: "#EEE9DF",
-                  display: "flex",
-                  flexDirection: "column",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginBottom: 8,
-                  }}
-                >
-                  <div>
-                    <div
-                      style={{
-                        fontSize: 10,
-                        letterSpacing: "0.18em",
-                        textTransform: "uppercase",
-                        color: "#3783ac95",
-                        marginBottom: 4,
-                      }}
-                    >
-                      Member Type Mix
-                    </div>
-                    <div
-                      style={{
-                        fontFamily: "'Cormorant Garamond', serif",
-                        fontSize: 20,
-                        color: "#EEE9DF",
-                      }}
-                    >
-                      Breakdown
-                    </div>
-                  </div>
-                  <MoreHorizontal
-                    style={{
-                      width: 16,
-                      height: 16,
-                      color: "rgba(238,233,223,0.45)",
-                    }}
-                  />
-                </div>
-                <div style={{ flex: 1, marginTop: 12 }}>
-                  {membersByType.slice(0, 5).map((t, i) => {
-                    const max = Math.max(
-                      ...membersByType.map((x) => x.total || 0),
-                      1,
-                    );
-                    const pct = Math.round(((t.total || 0) / max) * 100);
-                    return (
-                      <div key={i} style={{ marginBottom: 12 }}>
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            fontSize: 11,
-                            marginBottom: 4,
-                            color: "rgba(238,233,223,0.75)",
-                          }}
-                        >
-                          <span>{t.member_type ?? t.name ?? "—"}</span>
-                          <span style={{ color: "#FFB162", fontWeight: 600 }}>
-                            {(t.total || 0).toLocaleString()}
-                          </span>
-                        </div>
-                        <div
-                          style={{
-                            height: 4,
-                            background: "rgba(238,233,223,0.1)",
-                            borderRadius: 2,
-                            overflow: "hidden",
-                          }}
-                        >
-                          <div
-                            style={{
-                              height: "100%",
-                              width: `${pct}%`,
-                              background: COLORS[i % COLORS.length],
-                              borderRadius: 2,
-                              transition: "width 0.4s",
-                            }}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div
-                  style={{
-                    marginTop: 16,
-                    display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
-                    gap: 8,
-                  }}
-                >
-                  {[
-                    { l: "Countries", v: membersByCountry.length || "—" },
-                    { l: "Room Types", v: bookingsByRoomType.length || "—" },
-                  ].map((m) => (
-                    <div
-                      key={m.l}
-                      style={{
-                        borderRadius: 12,
-                        border: "1px solid #022132",
-                        background: "#023652",
-                        padding: "10px 12px",
-                        textAlign: "center",
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontFamily: "'Cormorant Garamond', serif",
-                          fontSize: 24,
-                          color: "#EEE9DF",
-                        }}
-                      >
-                        {m.v}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 10,
-                          letterSpacing: "0.14em",
-                          textTransform: "uppercase",
-                          color: "rgba(238,233,223,0.5)",
-                          marginTop: 2,
-                        }}
-                      >
-                        {m.l}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Bookings + Spend row */}
-            <div className="dashboard-grid dashboard-grid-main">
-              <div className="dashboard-card">
-                <div
-                  style={{
-                    fontSize: 10,
-                    letterSpacing: "0.18em",
-                    textTransform: "uppercase",
-                    color: "#9A8E84",
-                    marginBottom: 4,
-                  }}
-                >
-                  Bookings &amp; Spend
-                </div>
-                <h2 className="dashboard-card-title dashboard-card-title-lg">
-                  Bookings by month
-                </h2>
-                <div className="dashboard-chart dashboard-chart-180">
-                  <ResponsiveContainer>
-                    <LineChart
-                      data={bookingsByMonth}
-                      margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis dataKey="month" stroke={AX} fontSize={11} />
-                      <YAxis stroke={AX} fontSize={11} />
-                      <Tooltip contentStyle={TIP} />
-                      <Line
-                        type="monotone"
-                        dataKey="total"
-                        stroke="#2C3B4D"
-                        strokeWidth={2.5}
-                        dot={{ r: 3 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-              <div className="dashboard-card">
-                <div
-                  style={{
-                    fontSize: 10,
-                    letterSpacing: "0.18em",
-                    textTransform: "uppercase",
-                    color: "#9A8E84",
-                    marginBottom: 4,
-                  }}
-                >
-                  Revenue
-                </div>
-                <h2 className="dashboard-card-title dashboard-card-title-lg">
-                  Spend by month
-                </h2>
-                <div className="dashboard-chart dashboard-chart-180">
-                  <ResponsiveContainer>
-                    <BarChart
-                      data={spendByMonth}
-                      margin={{ top: 5, right: 12, bottom: 0, left: 0 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis dataKey="month" stroke={AX} fontSize={11} />
-                      <YAxis stroke={AX} fontSize={11} />
-                      <Tooltip contentStyle={TIP} />
-                      <Bar
-                        dataKey="total"
-                        fill="#FFB162"
-                        radius={[6, 6, 0, 0]}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            </div>
-          </div>
+          <OverviewTab
+            membersByType={membersByType}
+            membersByStatus={membersByStatus}
+            membersByCountry={membersByCountry}
+            membersByState={membersByState}
+            membersByMaritalStatus={membersByMaritalStatus}
+            averageTenure={averageTenure}
+            averageLengthOfStay={averageLengthOfStay}
+            bookingsByMonth={bookingsByMonth}
+            bookingsByRoomType={bookingsByRoomType}
+            mostUsedRoomTypes={mostUsedRoomTypes}
+            totalDependents={totalDependents}
+            dependentsPerMember={dependentsPerMember}
+            totalAmountDue={totalAmountDue}
+            amountDueByPeriod={amountDueByPeriod}
+            totalRecentActivitySpend={totalRecentActivitySpend}
+            topSpendDescriptions={topSpendDescriptions}
+            directoryMembers={[]}
+            memberVsGuestRevenue={memberVsGuestRevenue}
+            villaStats={villaStats}
+            visitsTabSummary={visitsTabSummary}
+            bedroomBookings={bedroomBookings}
+            villaRevenue={villaRevenue}
+            monthlyRevenue={monthlyRevenue}
+          />
         )}
 
         {/* ════ DEMOGRAPHICS ════ */}

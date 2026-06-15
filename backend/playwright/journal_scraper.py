@@ -1,27 +1,9 @@
 """
 journal_scraper.py — Build per-member journal folders.
-Reads member_id_map.csv, navigates to each member's folio via
-retrieve.jsp?memberid=X, scrapes 5 specific tabs, and saves
-one CSV per tab under journal/{folder_name}/.
-Folder naming:
-    - Unique member numbers (1C, 22A)    → journal/1C/
-    - Generic labels (Guests, Dependent) → journal/Guests_35849/
-Output structure:
-    journal/
-        1C/
-            1C_rooms.csv
-            1C_interests.csv
-            1C_recent_activity.csv
-            1C_statements.csv
-            1C_services.csv
-Usage:
-    python journal_scraper.py                        # First 10 members (test)
-    python journal_scraper.py --all                  # All members, 8 workers
-    python journal_scraper.py --limit 50             # Custom limit
-    python journal_scraper.py --workers 8            # Custom worker count
-    python journal_scraper.py --member 1C            # Single member by number
-    python journal_scraper.py --id 32845             # Single member by portal ID
-    python journal_scraper.py --reset                # Clear done log, rescrape all
+Scrapes the Rooms tab for each member, opens each reservation popup
+to extract contact info, and saves:
+  - rooms CSV per member
+  - enriched profile CSV (contact/address fields filled from popup)
 """
 import os
 import csv
@@ -29,6 +11,7 @@ import argparse
 import math
 import time
 import signal
+import re
 from datetime import datetime
 from multiprocessing import Pool
 import sys
@@ -49,27 +32,29 @@ DEFAULT_LIMIT   = None
 DEFAULT_WORKERS = 10
 
 # Timeouts (ms)
-NAV_TIMEOUT   = 6000
-TAB_TIMEOUT   = 4000
-FRAME_TIMEOUT = 4000
-CLICK_TIMEOUT = 2000
-
+NAV_TIMEOUT     = 6000
+TAB_TIMEOUT     = 4000
+FRAME_TIMEOUT   = 4000
+CLICK_TIMEOUT   = 2000
+POPUP_TIMEOUT   = 8000
 TAB_MAX_RETRIES = 3
 
 GENERIC_LABELS = {"Guests", "Dependent", "Guest", "Staff"}
 
-TABS = [
-    {"tabname": "Member_Info", "tab_id": "rooms",          "tab_label": "Rooms",           "suffix": "rooms"},
-    {"tabname": "Billing",     "tab_id": "recentActivity", "tab_label": "Recent Activity", "suffix": "recent_activity"},
-    {"tabname": "Billing",     "tab_id": "statements",     "tab_label": "Statements",      "suffix": "statements"},
-    {"tabname": "Billing",     "tab_id": "services",       "tab_label": "Services",        "suffix": "services"},
-]
+TAB_HREF_FALLBACKS = {"rooms": "roomsInfo.do"}
 
-TAB_HREF_FALLBACKS = {
-    "rooms":          "roomsInfo.do",
-    "recentActivity": "recentCharges.jsp",
-    "statements":     "memberStatements.jsp",
-    "services":       "members_enrolled_services.jsp",
+# Profile CSV fields to fill only if currently empty
+PROFILE_CONTACT_FIELDS = {
+    "Email":            "Email",
+    "Home Phone":       "Home Phone",
+    "Cell Phone":       "Cell Phone",
+    "Address Line1":    "Address Line1",
+    "Address Line2":    "Address Line2",
+    "City":             "City",
+    "State":            "State",
+    "Postal Code":      "Postal Code",
+    "Country":          "Country",
+    "Complete Address": "Complete Address",
 }
 
 # ─────────────────────────────────────────────
@@ -129,182 +114,60 @@ def save_tab_csv(folder_name, suffix, rows):
         writer.writerows(rows)
     return filepath
 
-# ─────────────────────────────────────────────
-# FRAME FINDERS — poll with timeout, never crash
-# ─────────────────────────────────────────────
-def get_landing_frame(page, timeout_ms=FRAME_TIMEOUT):
-    """
-    Find the landingFrame by name. Polls until timeout.
-    This is the frame where ALL tab content loads — identified by
-    name="landingFrame" in the portal's frameset.
-    """
-    deadline = time.time() + timeout_ms / 1000
-    while time.time() < deadline:
-        for frame in page.frames:
-            try:
-                if frame.name == "landingFrame":
-                    _ = frame.url  # probe — raises if detached
-                    return frame
-            except Exception:
-                continue
-        page.wait_for_timeout(300)
-    # Fallback: any frame with "landing" in the name
-    for frame in page.frames:
-        try:
-            if "landing" in frame.name.lower():
-                return frame
-        except Exception:
-            continue
-    return None
-
-def get_shell_frame(page, timeout_ms=FRAME_TIMEOUT):
-    """
-    Find the folio navigation shell — the frame that contains
-    #btnTab1 and the subtab links. Polls until timeout.
-    """
-    deadline = time.time() + timeout_ms / 1000
-    while time.time() < deadline:
-        for frame in page.frames:
-            try:
-                if frame.query_selector("#btnTab1"):
-                    return frame
-            except Exception:
-                continue
-        page.wait_for_timeout(300)
-    # Fallback: frame whose URL contains retrieve.jsp
-    for frame in page.frames:
-        try:
-            if "retrieve.jsp" in frame.url:
-                return frame
-        except Exception:
-            continue
-    return None
+def strip_val(val):
+    if val is None:
+        return ""
+    return str(val).strip()
 
 # ─────────────────────────────────────────────
-# CONTENT CHANGE DETECTION
+# PROFILE CSV ENRICHMENT
 # ─────────────────────────────────────────────
-def get_landing_fingerprint(page):
-    """
-    Snapshot the first 3 table rows of landingFrame as a string.
-    Changes whenever a different tab loads new content.
-    Returns None if frame or tables aren't ready yet.
-    """
+def load_profile_csv(folder_name):
+    profile_path = os.path.join(JOURNAL_FOLDER, folder_name, f"{folder_name}_profile.csv")
+    if not os.path.exists(profile_path):
+        return None, None, None
     try:
-        frame = get_landing_frame(page, timeout_ms=1000)
-        if not frame:
-            return None
-        rows = frame.query_selector_all("table tr")
-        if not rows:
-            return None
-        return "|".join(r.inner_text().strip() for r in rows[:3])
-    except Exception:
-        return None
+        with open(profile_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            fieldnames = reader.fieldnames or []
+            rows = list(reader)
+        return profile_path, fieldnames, rows
+    except Exception as e:
+        print(f"    Could not load profile CSV: {e}")
+        return None, None, None
 
-def wait_for_content_change(page, previous_fingerprint, timeout_ms=TAB_TIMEOUT):
-    """
-    Wait until landingFrame has a table AND its content has changed
-    from previous_fingerprint. Accepts immediately if no baseline given.
-    Returns True when content is ready, False on timeout.
-    """
-    deadline = time.time() + timeout_ms / 1000
-    while time.time() < deadline:
-        current = get_landing_fingerprint(page)
-        if current is not None:
-            if previous_fingerprint is None or current != previous_fingerprint:
-                return True
-        page.wait_for_timeout(300)
-    return False
-
-# ─────────────────────────────────────────────
-# SESSION MANAGEMENT
-# ─────────────────────────────────────────────
-def session_alive(page):
-    return get_landing_frame(page, timeout_ms=2000) is not None
-
-def ensure_session(page, worker_id=0):
-    """Re-login and restore Membership module if session was lost."""
-    if session_alive(page):
+def enrich_profile_csv(folder_name, contact_data, prefix=""):
+    """Write contact_data into profile CSV, only filling empty/null fields."""
+    profile_path, fieldnames, rows = load_profile_csv(folder_name)
+    if profile_path is None or not rows:
         return False
-    prefix = f"[W{worker_id}] "
-    print(f"  {prefix}Session lost — re-logging in...")
+    updated = False
+    new_fieldnames = list(fieldnames)
+    for col in PROFILE_CONTACT_FIELDS.values():
+        if col not in new_fieldnames:
+            new_fieldnames.append(col)
+    for row in rows:
+        for label, col in PROFILE_CONTACT_FIELDS.items():
+            new_val = contact_data.get(col, "").strip()
+            if not new_val:
+                continue
+            if not row.get(col, "").strip():
+                row[col] = new_val
+                updated = True
+    if not updated:
+        print(f"    {prefix}Profile already complete — no enrichment needed")
+        return False
     try:
-        login(page)
-        dismiss_popup(page)
-        main_frame = get_frame_by_url(page, "default.jsp") or page
-        try:
-            main_frame.evaluate("changeSelModule(1,1,1,'#003565','Membership')")
-        except Exception:
-            pass
-        page.wait_for_timeout(4000)
-        landing = get_landing_frame(page, timeout_ms=10000)
-        if landing:
-            landing.goto(LIST_MEMBERS_URL)
-            page.wait_for_timeout(3000)
-        print(f"  {prefix}Re-login complete.")
+        with open(profile_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=new_fieldnames, extrasaction="ignore", restval=""
+            )
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"    {prefix}Profile enriched with contact/address data")
         return True
     except Exception as e:
-        print(f"  {prefix}Re-login failed: {e}")
-        return False
-
-# ─────────────────────────────────────────────
-# POPUP DISMISSAL
-# ─────────────────────────────────────────────
-def dismiss_popup(page):
-    """
-    Dismiss any notification or dialog popup.
-    Tries close buttons in every frame, then falls back to Escape.
-    Called after login and before each member scrape.
-    """
-    try:
-        close_selectors = (
-            "a[onclick*='close'], button[onclick*='close'], "
-            ".ui-dialog-titlebar-close, button.close, .close, "
-            "a.ui-dialog-titlebar-close, button[aria-label='Close']"
-        )
-        for frame in page.frames:
-            try:
-                btn = frame.query_selector(close_selectors)
-                if btn:
-                    btn.click()
-                    page.wait_for_timeout(800)
-                    return
-            except Exception:
-                continue
-        # Fallback: Escape key closes most modal dialogs
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(400)
-    except Exception:
-        pass
-
-# ─────────────────────────────────────────────
-# NAVIGATION
-# ─────────────────────────────────────────────
-def navigate_to_member(page, member_id, prefix=""):
-    """
-    Navigate landingFrame to the member folio page.
-    Returns True on success.
-    """
-    url = f"{BASE_URL}/Membership/retrieve.jsp?memberid={member_id}"
-    landing = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
-    if not landing:
-        print(f"  {prefix}landingFrame not found. Frames present:")
-        for frame in page.frames:
-            try:
-                print(f"    name='{frame.name}' url='{frame.url[:80]}'")
-            except Exception:
-                continue
-        return False
-    try:
-        landing.goto(url)
-        # Wait for the shell frame to appear — it only exists on member folio pages
-        shell = get_shell_frame(page, timeout_ms=NAV_TIMEOUT)
-        if shell:
-            print(f"  {prefix}Loaded member {member_id}")
-            return True
-        print(f"  {prefix}Shell frame missing after loading member {member_id}")
-        return False
-    except Exception as e:
-        print(f"  {prefix}Navigation error for {member_id}: {e}")
+        print(f"    {prefix}Profile CSV write failed: {e}")
         return False
 
 # ─────────────────────────────────────────────
@@ -366,15 +229,196 @@ def append_member_info_to_profile(folder_name, info_data, prefix=""):
         return False
 
 # ─────────────────────────────────────────────
+# FRAME FINDERS
+# ─────────────────────────────────────────────
+def get_landing_frame(page, timeout_ms=FRAME_TIMEOUT):
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        for frame in page.frames:
+            try:
+                if frame.name == "landingFrame":
+                    _ = frame.url
+                    return frame
+            except Exception:
+                continue
+        page.wait_for_timeout(300)
+    for frame in page.frames:
+        try:
+            if "landing" in frame.name.lower():
+                return frame
+        except Exception:
+            continue
+    return None
+
+def get_shell_frame(page, timeout_ms=FRAME_TIMEOUT):
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        for frame in page.frames:
+            try:
+                if frame.query_selector("#btnTab1"):
+                    return frame
+            except Exception:
+                continue
+        page.wait_for_timeout(300)
+    for frame in page.frames:
+        try:
+            if "retrieve.jsp" in frame.url:
+                return frame
+        except Exception:
+            continue
+    return None
+
+def get_popup_frame(page, timeout_ms=POPUP_TIMEOUT):
+    """Wait for the reservation popup iframe to load content."""
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        for frame in page.frames:
+            try:
+                if frame.name == "DialogWindowFrame_0":
+                    _ = frame.url
+                    if frame.query_selector("input, select, textarea, table"):
+                        return frame
+            except Exception:
+                continue
+        page.wait_for_timeout(400)
+    return None
+
+# ─────────────────────────────────────────────
+# CONTENT CHANGE DETECTION
+# ─────────────────────────────────────────────
+def get_landing_fingerprint(page):
+    try:
+        frame = get_landing_frame(page, timeout_ms=1000)
+        if not frame:
+            return None
+        rows = frame.query_selector_all("table tr")
+        if not rows:
+            return None
+        return "|".join(r.inner_text().strip() for r in rows[:3])
+    except Exception:
+        return None
+
+def wait_for_content_change(page, previous_fingerprint, timeout_ms=TAB_TIMEOUT):
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        current = get_landing_fingerprint(page)
+        if current is not None:
+            if previous_fingerprint is None or current != previous_fingerprint:
+                return True
+        page.wait_for_timeout(300)
+    return False
+
+# ─────────────────────────────────────────────
+# SESSION MANAGEMENT
+# ─────────────────────────────────────────────
+def session_alive(page):
+    return get_landing_frame(page, timeout_ms=2000) is not None
+
+def ensure_session(page, worker_id=0):
+    if session_alive(page):
+        return False
+    prefix = f"[W{worker_id}] "
+    print(f"  {prefix}Session lost — re-logging in...")
+    try:
+        login(page)
+        dismiss_popup(page)
+        main_frame = get_frame_by_url(page, "default.jsp") or page
+        try:
+            main_frame.evaluate("changeSelModule(1,1,1,'#003565','Membership')")
+        except Exception:
+            pass
+        page.wait_for_timeout(4000)
+        landing = get_landing_frame(page, timeout_ms=10000)
+        if landing:
+            landing.goto(LIST_MEMBERS_URL)
+            page.wait_for_timeout(3000)
+        print(f"  {prefix}Re-login complete.")
+        return True
+    except Exception as e:
+        print(f"  {prefix}Re-login failed: {e}")
+        return False
+
+# ─────────────────────────────────────────────
+# POPUP DISMISSAL
+# ─────────────────────────────────────────────
+def dismiss_popup(page):
+    try:
+        close_selectors = (
+            "a[onclick*='close'], button[onclick*='close'], "
+            ".ui-dialog-titlebar-close, button.close, .close, "
+            "a.ui-dialog-titlebar-close, button[aria-label='Close']"
+        )
+        for frame in page.frames:
+            try:
+                btn = frame.query_selector(close_selectors)
+                if btn:
+                    btn.click()
+                    page.wait_for_timeout(800)
+                    return
+            except Exception:
+                continue
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+def close_reservation_popup(page, prefix=""):
+    try:
+        for frame in page.frames:
+            try:
+                btn = frame.query_selector(
+                    "#closeButtonId_0, "
+                    "button[onclick='closeJQueryDialog()'], "
+                    "button[data-dismiss='modal']"
+                )
+                if btn:
+                    btn.click()
+                    page.wait_for_timeout(600)
+                    return True
+            except Exception:
+                continue
+        try:
+            page.evaluate("closeJQueryDialog()")
+            page.wait_for_timeout(600)
+            return True
+        except Exception:
+            pass
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(400)
+        return True
+    except Exception as e:
+        print(f"    {prefix}Popup close error: {e}")
+        return False
+
+# ─────────────────────────────────────────────
+# NAVIGATION
+# ─────────────────────────────────────────────
+def navigate_to_member(page, member_id, prefix=""):
+    url = f"{BASE_URL}/Membership/retrieve.jsp?memberid={member_id}"
+    landing = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+    if not landing:
+        print(f"  {prefix}landingFrame not found")
+        return False
+    try:
+        landing.goto(url)
+        shell = get_shell_frame(page, timeout_ms=NAV_TIMEOUT)
+        if shell:
+            print(f"  {prefix}Loaded member {member_id}")
+            return True
+        print(f"  {prefix}Shell frame missing after loading member {member_id}")
+        return False
+    except Exception as e:
+        print(f"  {prefix}Navigation error for {member_id}: {e}")
+        return False
+
+# ─────────────────────────────────────────────
 # TAB NAVIGATION
 # ─────────────────────────────────────────────
 def open_member_dropdown(shell_frame, page):
-    """Click #btnTab1 to open the member nav dropdown."""
     try:
         btn = shell_frame.query_selector("#btnTab1")
         if btn:
             btn.click()
-            # Wait for dropdown items to become visible
             try:
                 shell_frame.wait_for_selector(
                     "div[tabname], a.subtablink",
@@ -389,12 +433,10 @@ def open_member_dropdown(shell_frame, page):
     return False
 
 def click_section(shell_frame, page, tabname):
-    """Click the section header (e.g. Billing, Member_Info) to reveal its subtabs."""
     try:
         div = shell_frame.query_selector(f'div[tabname="{tabname}"]')
         if div:
             div.click()
-            # Wait until at least one subtab link is visible
             try:
                 shell_frame.wait_for_selector(
                     "a.subtablink",
@@ -409,11 +451,6 @@ def click_section(shell_frame, page, tabname):
     return False
 
 def click_subtab(shell_frame, page, tab_id, href_fallback, prefix=""):
-    """
-    Click the subtab link. Snapshots landingFrame content before clicking
-    and waits for it to change afterwards, so we never scrape stale data.
-    """
-    # Find the link
     link = None
     for frame in [shell_frame] + [f for f in page.frames if f != shell_frame]:
         try:
@@ -423,30 +460,84 @@ def click_subtab(shell_frame, page, tab_id, href_fallback, prefix=""):
                 break
         except Exception:
             continue
-
     if not link:
         print(f"    {prefix}Tab link not found: {tab_id}")
         return False
-
-    # Fingerprint current content before clicking
     fingerprint_before = get_landing_fingerprint(page)
-
     try:
         link.click()
     except Exception as e:
         print(f"    {prefix}Click failed on {tab_id}: {e}")
         return False
-
-    # Wait for content to actually change in landingFrame
     changed = wait_for_content_change(page, fingerprint_before, timeout_ms=TAB_TIMEOUT)
     if not changed:
-        print(f"    {prefix}Content did not change after clicking {tab_id} — may still be loading")
-
+        print(f"    {prefix}Content did not change after clicking {tab_id}")
     return True
 
 # ─────────────────────────────────────────────
-# EXTRACTION
+# EXTRACTION HELPERS
 # ─────────────────────────────────────────────
+def get_input_val(frame, selector):
+    for sel in [s.strip() for s in selector.split(",")]:
+        try:
+            el = frame.query_selector(sel)
+            if el:
+                val = strip_val(el.evaluate("el => el.value || el.innerText || ''"))
+                if val:
+                    return val
+        except Exception:
+            continue
+    return ""
+
+def get_select_text(frame, selector):
+    for sel in [s.strip() for s in selector.split(",")]:
+        try:
+            el = frame.query_selector(sel)
+            if el:
+                val = strip_val(el.evaluate(
+                    "(el) => el.options[el.selectedIndex] "
+                    "? el.options[el.selectedIndex].text : ''"
+                ))
+                if val:
+                    return val
+        except Exception:
+            continue
+    return ""
+
+def get_textarea_val(frame, selector):
+    for sel in [s.strip() for s in selector.split(",")]:
+        try:
+            el = frame.query_selector(sel)
+            if el:
+                val = strip_val(el.evaluate("el => el.value || el.innerText || ''"))
+                if val:
+                    return val
+        except Exception:
+            continue
+    return ""
+
+def dump_popup_fields(frame, conf_code, prefix=""):
+    """Debug: print every input/select/textarea name+value in the popup."""
+    print(f"    {prefix}[DEBUG] Popup field dump for conf {conf_code}:")
+    try:
+        elements = frame.query_selector_all("input, select, textarea")
+        for el in elements:
+            try:
+                tag  = el.evaluate("el => el.tagName.toLowerCase()")
+                name = el.get_attribute("name") or el.get_attribute("id") or "(no name)"
+                if tag == "select":
+                    val = strip_val(el.evaluate(
+                        "(el) => el.options[el.selectedIndex] "
+                        "? el.options[el.selectedIndex].text : ''"
+                    ))
+                else:
+                    val = strip_val(el.get_attribute("value") or el.inner_text() or "")
+                print(f"      [{tag}] name={name!r:30s}  val={val!r}")
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"    {prefix}[DEBUG] dump failed: {e}")
+
 def extract_table(table_el):
     rows_data = []
     try:
@@ -469,47 +560,215 @@ def extract_table(table_el):
         rows_data.append({"error": str(e)})
     return rows_data
 
-def scrape_landing_frame(page, folder_name, section, tab_label, prefix=""):
+# ─────────────────────────────────────────────
+# RESERVATION POPUP — contact data only
+# ─────────────────────────────────────────────
+def scrape_reservation_popup(page, conf_code, prefix=""):
     """
-    Scrape all tables from the landingFrame.
-    Always re-acquires the frame fresh — never reuses a stale reference.
+    Scrape contact/address data from the reservation popup.
+    Returns contact_data dict, or None on failure.
     """
-    rows = []
+    popup_frame = get_popup_frame(page, timeout_ms=POPUP_TIMEOUT)
+    if not popup_frame:
+        print(f"    {prefix}Popup frame not found for conf {conf_code}")
+        return None
+
+    # Wait for JS to finish populating fields before reading anything
+    try:
+        popup_frame.wait_for_function(
+            """() => {
+                const el = document.querySelector(
+                    '#memberName, input[name="memberName"], #guestName'
+                );
+                return el && el.value && el.value.trim().length > 0;
+            }""",
+            timeout=6000
+        )
+    except Exception:
+        page.wait_for_timeout(1500)
+
+    print(f"    {prefix}Scraping popup for conf {conf_code}...")
+
+    try:
+        # ── Contact fields ─────────────────────────────────────────
+        home_phone = get_input_val(popup_frame,
+            "input[name='homePhone'], input[id='homePhone'], "
+            "input[name='phone'],     input[id='phone']"
+        )
+        cell_phone = get_input_val(popup_frame,
+            "input[name='cellPhone'],   input[id='cellPhone'], "
+            "input[name='mobilePhone'], input[id='mobilePhone']"
+        )
+        email = get_input_val(popup_frame,
+            "input[name='emailAddress'], input[id='primaryEmail'], "
+            "input[name='email'],        input[id='email'], "
+            "input[type='email']"
+        )
+
+        # ── Address ────────────────────────────────────────────────
+        address_raw = get_textarea_val(popup_frame,
+            "textarea[id='contactInfo'], textarea[name='contactInfo'], "
+            "textarea[name='addressInfo'], #addressInfo, .addressDisplay, "
+            "textarea[name='address'],     #address"
+        )
+        addr1 = addr2 = city = state = zip_ = country = ""
+        if address_raw:
+            lines = [l.strip() for l in address_raw.replace("\r", "\n").split("\n") if l.strip()]
+            addr1 = lines[0] if lines else ""
+            if len(lines) > 1:
+                m = re.match(
+                    r'^(.+?),\s*([A-Z]{2,3})\.?\s+([\w\s\-]+?)\s+([\w\s]+)$',
+                    lines[1]
+                )
+                if m:
+                    city    = m.group(1).strip()
+                    state   = m.group(2).strip()
+                    zip_    = m.group(3).strip()
+                    country = m.group(4).strip()
+                else:
+                    city = lines[1]
+        else:
+            addr1   = get_input_val(popup_frame, "input[name='addr1'], input[id='addr1'], input[name='address1']")
+            addr2   = get_input_val(popup_frame, "input[name='addr2'], input[id='addr2'], input[name='address2']")
+            city    = get_input_val(popup_frame, "input[name='city'],  input[id='city']")
+            state   = get_input_val(popup_frame, "input[name='state'], input[id='state']")
+            zip_    = get_input_val(popup_frame, "input[name='zip'],   input[name='postalCode'], input[id='postalCode']")
+            country = get_input_val(popup_frame, "input[name='country'], input[id='country']")
+
+        # ── Debug dump when contact fields are all empty ───────────
+        if not any([home_phone, cell_phone, email, addr1]):
+            dump_popup_fields(popup_frame, conf_code, prefix)
+
+        return {
+            "Email":            email,
+            "Home Phone":       home_phone,
+            "Cell Phone":       cell_phone,
+            "Address Line1":    addr1,
+            "Address Line2":    addr2,
+            "City":             city,
+            "State":            state,
+            "Postal Code":      zip_,
+            "Country":          country,
+            "Complete Address": address_raw,
+        }
+
+    except Exception as e:
+        print(f"    {prefix}Popup scrape error for conf {conf_code}: {e}")
+        return None
+
+# ─────────────────────────────────────────────
+# ROOMS TAB
+# ─────────────────────────────────────────────
+def scrape_rooms_with_popups(page, folder_name, prefix=""):
+    """
+    1. Scrape the rooms table rows.
+    2. For each row, click the confirmation code link to open the popup.
+    3. Extract contact info from the popup.
+    4. Close the popup and move to the next row.
+    Returns (room_rows, merged_contact_data)
+    """
     frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not frame:
-        print(f"    {prefix}landingFrame missing when scraping {tab_label}")
-        return rows
+        return [], {}
+
+    room_rows      = []
+    merged_contact = {}
+
     try:
         tables = frame.query_selector_all("table")
         if not tables:
-            print(f"    {prefix}No tables in {tab_label}")
-            return rows
+            print(f"    {prefix}No tables found in rooms tab")
+            return [], {}
+
         for table in tables:
             for row in extract_table(table):
                 row["_folder"]  = folder_name
-                row["_section"] = section
-                row["_tab"]     = tab_label
-                rows.append(row)
+                row["_section"] = "Member_Info"
+                row["_tab"]     = "Rooms"
+                room_rows.append(row)
+
+        if not room_rows:
+            print(f"    {prefix}Rooms table is empty")
+            return [], {}
+
+        print(f"    {prefix}Found {len(room_rows)} room row(s) — opening popups...")
+
+        for i, room_row in enumerate(room_rows, 1):
+            conf_code = (
+                room_row.get("Confirmation Code") or
+                room_row.get("Conf. Code") or
+                room_row.get("col_0") or
+                ""
+            ).strip()
+
+            if not conf_code:
+                print(f"    {prefix}Row {i}: no conf code — skipping popup")
+                continue
+
+            print(f"    {prefix}Row {i}/{len(room_rows)}: conf {conf_code}")
+
+            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not frame:
+                print(f"    {prefix}Lost landing frame at row {i}")
+                break
+
+            # Click the confirmation code link
+            clicked = False
+            try:
+                for link in frame.query_selector_all("a"):
+                    try:
+                        if strip_val(link.inner_text()) == conf_code:
+                            link.click()
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if not clicked:
+                    link = frame.query_selector(
+                        f"a[href*='reservationId={conf_code}'], "
+                        f"a[onclick*='{conf_code}']"
+                    )
+                    if link:
+                        link.click()
+                        clicked = True
+            except Exception as e:
+                print(f"    {prefix}Click error for conf {conf_code}: {e}")
+
+            if not clicked:
+                print(f"    {prefix}Could not click conf code {conf_code} — skipping popup")
+                continue
+
+            contact_data = scrape_reservation_popup(page, conf_code, prefix)
+            if contact_data:
+                for col, val in contact_data.items():
+                    if val and not merged_contact.get(col):
+                        merged_contact[col] = val
+
+            close_reservation_popup(page, prefix)
+            page.wait_for_timeout(800)
+
+            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not frame:
+                print(f"    {prefix}Landing frame lost after closing popup — stopping")
+                break
+
     except Exception as e:
-        print(f"    {prefix}Scrape error on {tab_label}: {e}")
-    return rows
+        print(f"    {prefix}Rooms+popup scrape error: {e}")
+
+    return room_rows, merged_contact
 
 # ─────────────────────────────────────────────
 # PER-MEMBER SCRAPE
 # ─────────────────────────────────────────────
 def scrape_member(page, member_number, member_id, prefix=""):
-    """Scrape all tabs for one member. Returns dict of {suffix: filepath}."""
     folder_name = get_folder_name(member_number, member_id)
     saved = {}
 
-    # Dismiss any popup that may have opened since last member
     dismiss_popup(page)
-
     if not navigate_to_member(page, member_id, prefix):
         print(f"  {prefix}Navigation failed for {member_number}")
         return saved
 
-    # Scrape extra fields from the default member info landing page
     member_info = scrape_member_info_fields(page, prefix)
     append_member_info_to_profile(folder_name, member_info, prefix)
 
@@ -519,96 +778,65 @@ def scrape_member(page, member_number, member_id, prefix=""):
         take_screenshot(page, f"no_shell_{folder_name}")
         return saved
 
-    current_tabname = None
+    tab_done = False
+    for attempt in range(1, TAB_MAX_RETRIES + 1):
+        note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
+        print(f"    {prefix}Rooms{note}")
 
-    for tab in TABS:
-        tabname   = tab["tabname"]
-        tab_id    = tab["tab_id"]
-        tab_label = tab["tab_label"]
-        suffix    = tab["suffix"]
-        href_fb   = TAB_HREF_FALLBACKS.get(tab_id, "")
-        tab_done  = False
+        shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+        if not shell:
+            print(f"    {prefix}Shell lost — re-navigating to member")
+            if not navigate_to_member(page, member_id, prefix):
+                break
+            shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not shell:
+                break
 
-        for attempt in range(1, TAB_MAX_RETRIES + 1):
-            try:
-                note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
-                print(f"    {prefix}{tab_label}{note}")
+        open_member_dropdown(shell, page)
+        click_section(shell, page, "Member_Info")
+        if not click_subtab(shell, page, "rooms", TAB_HREF_FALLBACKS["rooms"], prefix):
+            take_screenshot(page, f"no_tab_{folder_name}_rooms")
+            if attempt < TAB_MAX_RETRIES:
+                page.wait_for_timeout(1000 * attempt)
+            continue
 
-                # Re-acquire shell — it can be replaced on page transitions
-                shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
-                if not shell:
-                    print(f"    {prefix}Shell lost — re-navigating to member")
-                    if not navigate_to_member(page, member_id, prefix):
-                        break
-                    shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
-                    if not shell:
-                        break
-                    current_tabname = None  # Reset — we're on a fresh page
+        room_rows, merged_contact = scrape_rooms_with_popups(page, folder_name, prefix)
 
-                # Open dropdown before every single tab click
-                open_member_dropdown(shell, page)
+        if room_rows:
+            fp = save_tab_csv(folder_name, "rooms", room_rows)
+            if fp:
+                saved["rooms"] = fp
+                print(f"    {prefix}Rooms: {len(room_rows)} row(s) → {os.path.basename(fp)}")
+            if merged_contact:
+                enrich_profile_csv(folder_name, merged_contact, prefix)
+        else:
+            print(f"    {prefix}Rooms: no data — skipping member")
 
-                # Switch section if needed
-                if tabname != current_tabname:
-                    if not click_section(shell, page, tabname):
-                        print(f"    {prefix}Could not open section: {tabname}")
-                    current_tabname = tabname
+        tab_done = True
+        break
 
-                # Click the subtab (waits for content change internally)
-                if not click_subtab(shell, page, tab_id, href_fb, prefix):
-                    take_screenshot(page, f"no_tab_{folder_name}_{suffix}")
-                    if attempt < TAB_MAX_RETRIES:
-                        page.wait_for_timeout(1000 * attempt)
-                    continue
-
-                # Scrape fresh content from landingFrame
-                rows = scrape_landing_frame(page, folder_name, tabname, tab_label, prefix)
-
-                if rows:
-                    fp = save_tab_csv(folder_name, suffix, rows)
-                    if fp:
-                        saved[suffix] = fp
-                        print(f"    {prefix}{tab_label}: {len(rows)} rows → {os.path.basename(fp)}")
-                        tab_done = True
-                        break
-                else:
-                    print(f"    {prefix}{tab_label}: no data")
-                    if suffix == "rooms":
-                        print(f"    {prefix}No room data — skipping remaining tabs")
-                        return saved
-                    tab_done = True  # Empty is valid — don't retry
-                    break
-
-            except Exception as e:
-                print(f"    {prefix}{tab_label} error (attempt {attempt}): {e}")
-                if attempt < TAB_MAX_RETRIES:
-                    page.wait_for_timeout(1500 * attempt)
-
-        if not tab_done:
-            print(f"    {prefix}{tab_label}: exhausted retries — skipping")
+    if not tab_done:
+        print(f"    {prefix}Rooms: exhausted retries")
 
     return saved
 
 # ─────────────────────────────────────────────
-# WORKER INIT
+# WORKER
 # ─────────────────────────────────────────────
 def _worker_init():
-    """Workers ignore Ctrl+C — main process handles shutdown."""
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-# ─────────────────────────────────────────────
-# PARALLEL WORKER
-# ─────────────────────────────────────────────
 def scrape_chunk(args):
     members_chunk, worker_id = args
-    time.sleep(worker_id * 3)  # Stagger logins
-    prefix  = f"[W{worker_id}] "
-    results = {"success": [], "failed": [], "skipped": []}
+    time.sleep(worker_id * 3)
+    prefix   = f"[W{worker_id}] "
+    results  = {"success": [], "failed": [], "skipped": []}
     done_set = load_done_set()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page    = browser.new_page()
+        headless = os.environ.get("HEADFUL", "").lower() not in ("1", "true", "yes")
+        browser  = p.chromium.launch(headless=headless)
+        page     = browser.new_page()
         try:
             print(f"  {prefix}Logging in...")
             login(page)
@@ -643,9 +871,7 @@ def scrape_chunk(args):
                     continue
 
                 saved = scrape_member(page, member_number, member_id, prefix)
-
                 if not saved:
-                    # One retry after session check
                     if ensure_session(page, worker_id):
                         print(f"  {prefix}Retrying {member_number} after re-login...")
                         saved = scrape_member(page, member_number, member_id, prefix)
@@ -696,6 +922,7 @@ def main():
 
     all_members = load_member_map(MAP_FILE)
     print(f"Loaded {len(all_members)} members from map.")
+
     done_count = len(load_done_set())
     if done_count:
         print(f"Already done: {done_count} (use --reset to rescrape)")
@@ -713,7 +940,7 @@ def main():
     elif args.all:
         members = all_members
     else:
-        members = all_members[:args.limit]
+        members = all_members[:args.limit] if args.limit else all_members
 
     print("=" * 60)
     print("Journal Scraper")
@@ -722,19 +949,17 @@ def main():
     print(f"Output             : {JOURNAL_FOLDER}")
 
     if len(members) == 1 or args.workers == 1:
-        print("Mode               : single worker")
-        print()
+        print("Mode               : single worker\n")
         all_results = [scrape_chunk((members, 1))]
     else:
         num_workers = min(args.workers, len(members))
         chunk_size  = math.ceil(len(members) / num_workers)
         chunks = [
-            (members[i : i + chunk_size], wid)
+            (members[i: i + chunk_size], wid)
             for wid, i in enumerate(range(0, len(members), chunk_size), 1)
         ]
         print(f"Workers            : {num_workers}")
-        print(f"Per worker         : ~{chunk_size} members")
-        print()
+        print(f"Per worker         : ~{chunk_size} members\n")
         pool = Pool(processes=num_workers, initializer=_worker_init)
         try:
             all_results = pool.map(scrape_chunk, chunks)
