@@ -1,7 +1,8 @@
 // frontend/src/pages/finance/FinanceOverview.jsx
-// Five headline revenue cards with click-to-drill.
+// Four headline revenue cards with click-to-drill.
+// Complimentary card removed — payment_type is 'Free' or 'Paid' direct values.
 
-import { DollarSign, Gift, Users, UserCheck, TrendingUp } from "lucide-react";
+import { DollarSign, Users, UserCheck, TrendingUp } from "lucide-react";
 
 const C = {
   bg:      "var(--dashboard-card)",
@@ -86,20 +87,20 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Paid Revenue",
       value: money(data.paidRevenue),
-      sub:   "Charged bookings",
+      sub:   "Paid bookings",
       icon:  DollarSign,
       accent: "#2D8A5F",
       drillType: "paid",
       drillValue: "Paid Revenue",
     },
     {
-      label: "Complimentary Value",
-      value: money(data.complimentaryValue),
-      sub:   "Free / comp stays",
-      icon:  Gift,
+      label: "Free / Comp Value",
+      value: money(data.freeValue),
+      sub:   "Free bookings",
+      icon:  DollarSign,
       accent: "#D98C2B",
-      drillType: "complimentary",
-      drillValue: "Complimentary Value",
+      drillType: "free",
+      drillValue: "Free / Comp Value",
     },
     {
       label: "Member Revenue",
