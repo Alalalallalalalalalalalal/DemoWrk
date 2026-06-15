@@ -10,10 +10,6 @@ from .database import engine   # same engine your analytics.py uses
 
 router = APIRouter(tags=["finance"])
 
-# ── free payment_type codes (comp / complimentary) ────────────────
-FREE_TYPES = ("HA", "HF", "CU", "HC", "HR", "CM", "CO")
-FREE_LIST  = ", ".join(f"'{t}'" for t in FREE_TYPES)
-
 # ── amenity keyword map (folio description → amenity category) ────
 AMENITY_KEYWORDS = {
     "Spa":         ["spa", "massage", "facial", "treatment"],
@@ -45,19 +41,21 @@ def _amenity_case_sql() -> str:
 
 # ══════════════════════════════════════════════════════════════════
 # 1. OVERVIEW
+# payment_type in business_source is either 'Free' or 'Paid'
+# member_type in folios is either 'Guest' or NULL — NULL = Member
 # ══════════════════════════════════════════════════════════════════
 @router.get("/overview")
 def finance_overview():
-    sql = text(f"""
+    sql = text("""
         SELECT
             SUM(f.amount)                                                   AS total_revenue,
-            SUM(CASE WHEN bs.payment_type NOT IN ({FREE_LIST})
+            SUM(CASE WHEN bs.payment_type = 'Paid'
                      THEN f.amount ELSE 0 END)                             AS paid_revenue,
-            SUM(CASE WHEN bs.payment_type IN ({FREE_LIST})
-                     THEN f.amount ELSE 0 END)                             AS complimentary_value,
-            SUM(CASE WHEN f.member_number IS NOT NULL AND f.member_number <> ''
+            SUM(CASE WHEN bs.payment_type = 'Free'
+                     THEN f.amount ELSE 0 END)                             AS free_value,
+            SUM(CASE WHEN (f.member_type IS NULL OR f.member_type != 'Guest')
                      THEN f.amount ELSE 0 END)                             AS member_revenue,
-            SUM(CASE WHEN f.member_number IS NULL OR f.member_number = ''
+            SUM(CASE WHEN f.member_type = 'Guest'
                      THEN f.amount ELSE 0 END)                             AS guest_revenue,
             COUNT(*)                                                        AS total_transactions
         FROM folios f
@@ -70,35 +68,37 @@ def finance_overview():
 
     if not row:
         return {
-            "totalRevenue": 0, "paidRevenue": 0, "complimentaryValue": 0,
+            "totalRevenue": 0, "paidRevenue": 0, "freeValue": 0,
             "memberRevenue": 0, "guestRevenue": 0, "totalTransactions": 0,
         }
 
     return {
-        "totalRevenue":       float(row[0] or 0),
-        "paidRevenue":        float(row[1] or 0),
-        "complimentaryValue": float(row[2] or 0),
-        "memberRevenue":      float(row[3] or 0),
-        "guestRevenue":       float(row[4] or 0),
-        "totalTransactions":  int(row[5]   or 0),
+        "totalRevenue":      float(row[0] or 0),
+        "paidRevenue":       float(row[1] or 0),
+        "freeValue":         float(row[2] or 0),
+        "memberRevenue":     float(row[3] or 0),
+        "guestRevenue":      float(row[4] or 0),
+        "totalTransactions": int(row[5]   or 0),
     }
 
 
 # ══════════════════════════════════════════════════════════════════
 # 2. REVENUE BY SOURCE
+# One row per source — group only by f.source, not by payment_type
+# payment_type comes from business_source (one value per source)
 # ══════════════════════════════════════════════════════════════════
 @router.get("/source-breakdown")
 def finance_source_breakdown():
     sql = text("""
         SELECT
             COALESCE(f.source, 'Unknown')  AS source_name,
-            bs.payment_type,
+            MAX(bs.payment_type)           AS payment_type,
             SUM(f.amount)                  AS revenue,
             COUNT(*)                       AS transactions
         FROM folios f
         LEFT JOIN business_source bs ON bs.source_name = f.source
         WHERE f.amount IS NOT NULL
-        GROUP BY f.source, bs.payment_type
+        GROUP BY f.source
         ORDER BY revenue DESC NULLS LAST
     """)
 
@@ -118,20 +118,21 @@ def finance_source_breakdown():
 
 # ══════════════════════════════════════════════════════════════════
 # 3. MEMBER vs GUEST
+# member_type = 'Guest' → Guest
+# member_type = NULL    → Member (assumption per business rule)
 # ══════════════════════════════════════════════════════════════════
 @router.get("/member-vs-guest")
 def finance_member_vs_guest():
     sql = text("""
         SELECT
             CASE
-                WHEN f.member_number IS NOT NULL AND f.member_number <> ''
-                THEN 'Member'
-                ELSE 'Guest'
+                WHEN f.member_type = 'Guests' THEN 'Guests'
+                ELSE 'Member'
             END                      AS customer_type,
             SUM(f.amount)            AS revenue,
             COUNT(*)                 AS transactions,
             COUNT(DISTINCT
-                CASE WHEN f.member_number IS NOT NULL AND f.member_number <> ''
+                CASE WHEN (f.member_type IS NULL OR f.member_type != 'Guests')
                      THEN f.member_number
                      ELSE f.guest_name
                 END
@@ -161,7 +162,6 @@ def finance_member_vs_guest():
 # ══════════════════════════════════════════════════════════════════
 @router.get("/villa-revenue")
 def finance_villa_revenue():
-    # Try pre-aggregated summary table first
     sql = text("""
         SELECT
             villa_name,
@@ -179,7 +179,6 @@ def finance_villa_revenue():
     with engine.connect() as conn:
         rows = _rows_to_dicts(conn.execute(sql))
 
-    # Fallback to folios if summary table is empty
     if not rows:
         sql2 = text("""
             SELECT
@@ -217,7 +216,6 @@ def finance_villa_revenue():
 # ══════════════════════════════════════════════════════════════════
 @router.get("/amenity-revenue")
 def finance_amenity_revenue():
-    # Try pre-aggregated amenity_season_spend first
     sql = text("""
         SELECT
             amenity,
@@ -234,7 +232,6 @@ def finance_amenity_revenue():
         rows = _rows_to_dicts(conn.execute(sql))
 
     if rows:
-        # Also pull per-season breakdown for each amenity
         sql_seasons = text("""
             SELECT
                 amenity,
@@ -267,7 +264,6 @@ def finance_amenity_revenue():
             for r in rows
         ]
 
-    # Fallback: classify folios by description keyword
     amenity_sql = _amenity_case_sql()
     sql2 = text(f"""
         SELECT
@@ -297,12 +293,18 @@ def finance_amenity_revenue():
 
 # ══════════════════════════════════════════════════════════════════
 # 6. DRILL-DOWN — underlying folio records
+# Enriched with member contact details from members + member_addresses + member_phones
+# Ordered highest amount first
+# Supports optional year / month filters
+# payment_type filtering uses 'Free' / 'Paid' string values directly
 # ══════════════════════════════════════════════════════════════════
 @router.get("/drilldown")
 def finance_drilldown(
     type:  str           = Query(...),
     value: Optional[str] = Query(None),
     limit: int           = Query(200, le=500),
+    year:  Optional[int] = Query(None),
+    month: Optional[int] = Query(None),
 ):
     base = """
         SELECT
@@ -323,46 +325,71 @@ def finance_drilldown(
             f.payment_type         AS folio_payment_type,
             f.member_type,
             f.reservation_status,
-            bs.payment_type        AS source_payment_type
+            bs.payment_type        AS source_payment_type,
+            m.email                AS member_email,
+            mp.phone_number        AS member_phone,
+            ma.city                AS member_city,
+            ma.country             AS member_country
         FROM folios f
-        LEFT JOIN business_source bs ON bs.source_name = f.source
+        LEFT JOIN business_source bs  ON bs.source_name = f.source
+        LEFT JOIN members m           ON m.member_number = f.member_number
+        LEFT JOIN LATERAL (
+            SELECT phone_number
+            FROM member_phones
+            WHERE member_number = f.member_number
+            ORDER BY id
+            LIMIT 1
+        ) mp ON true
+        LEFT JOIN member_addresses ma ON ma.member_number = f.member_number
         WHERE f.amount IS NOT NULL
     """
 
     params: dict = {}
+    where_clauses: list = []
 
+    # ── type-based filter ─────────────────────────────────────────
     if type == "source" and value:
-        where = " AND f.source = :val"
+        where_clauses.append("AND f.source = :val")
         params["val"] = value
 
     elif type == "villa" and value:
-        where = " AND f.villa_name = :val"
+        where_clauses.append("AND f.villa_name = :val")
         params["val"] = value
 
     elif type == "customer":
         if value == "Member":
-            where = " AND f.member_number IS NOT NULL AND f.member_number <> ''"
+            where_clauses.append("AND (f.member_type IS NULL OR f.member_type != 'Guest')")
         else:
-            where = " AND (f.member_number IS NULL OR f.member_number = '')"
+            where_clauses.append("AND f.member_type = 'Guest'")
 
     elif type == "paid":
-        where = f" AND bs.payment_type NOT IN ({FREE_LIST})"
+        where_clauses.append("AND bs.payment_type = 'Paid'")
 
     elif type == "complimentary":
-        where = f" AND bs.payment_type IN ({FREE_LIST})"
+        # kept for backwards compat — maps to Free
+        where_clauses.append("AND bs.payment_type = 'Free'")
+
+    elif type == "free":
+        where_clauses.append("AND bs.payment_type = 'Free'")
 
     elif type == "amenity" and value and value in AMENITY_KEYWORDS:
         kws = AMENITY_KEYWORDS[value]
         like_clauses = " OR ".join(
             f"LOWER(f.description) LIKE '%{kw}%'" for kw in kws
         )
-        where = f" AND ({like_clauses})"
+        where_clauses.append(f"AND ({like_clauses})")
 
-    else:
-        where = ""
+    # ── optional date filters ─────────────────────────────────────
+    if year:
+        where_clauses.append("AND EXTRACT(YEAR  FROM f.transaction_date) = :yr")
+        params["yr"] = year
+    if month:
+        where_clauses.append("AND EXTRACT(MONTH FROM f.transaction_date) = :mo")
+        params["mo"] = month
 
-    order = " ORDER BY f.transaction_date DESC NULLS LAST, f.amount DESC NULLS LAST"
-    full_sql = text(f"{base}{where}{order} LIMIT {limit}")
+    where_str = "\n        ".join(where_clauses)
+    order = "ORDER BY f.amount DESC NULLS LAST, f.transaction_date DESC NULLS LAST"
+    full_sql = text(f"{base}\n        {where_str}\n        {order}\n        LIMIT {limit}")
 
     with engine.connect() as conn:
         rows = _rows_to_dicts(conn.execute(full_sql, params))
@@ -378,7 +405,7 @@ def finance_drilldown(
             "confCode":          r["conf_code"],
             "memberNumber":      r["member_number"],
             "guestName":         r["guest_name"],
-            "checkInDate":       str(r["check_in_date"]) if r["check_in_date"] else None,
+            "checkInDate":       str(r["check_in_date"])  if r["check_in_date"]  else None,
             "checkOutDate":      str(r["check_out_date"]) if r["check_out_date"] else None,
             "roomNumber":        r["room_number"],
             "villaName":         r["villa_name"],
@@ -386,6 +413,10 @@ def finance_drilldown(
             "paymentType":       r["source_payment_type"] or r["folio_payment_type"],
             "memberType":        r["member_type"],
             "reservationStatus": r["reservation_status"],
+            "memberEmail":       r["member_email"],
+            "memberPhone":       r["member_phone"],
+            "memberCity":        r["member_city"],
+            "memberCountry":     r["member_country"],
         }
         for r in rows
     ]

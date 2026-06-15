@@ -1,4 +1,6 @@
 // frontend/src/pages/finance/SourceRevenueTable.jsx
+// payment_type from business_source is either 'Free' or 'Paid' — used directly.
+// One row per source (deduped in backend). Filter buttons: All | Paid | Free.
 
 import { useState } from "react";
 
@@ -14,8 +16,6 @@ const C = {
   accent2: "var(--dashboard-truffle)",
   accent3: "var(--dashboard-flame)",
 };
-
-const FREE_TYPES = new Set(["HA","HF","CU","HC","HR","CM","CO"]);
 
 const money = (v) =>
   v == null ? "—" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -48,8 +48,9 @@ const td = {
   fontFamily: "sans-serif",
 };
 
+// payment_type is exactly 'Paid' or 'Free' — no list needed
 function TypeBadge({ type }) {
-  const isPaid = type && !FREE_TYPES.has(type.toUpperCase());
+  const isPaid = type === "Paid";
   return (
     <span
       style={{
@@ -68,19 +69,19 @@ function TypeBadge({ type }) {
         fontFamily: "sans-serif",
       }}
     >
-      {isPaid ? "Paid" : "Comp"}
+      {isPaid ? "Paid" : "Free"}
     </span>
   );
 }
 
 export default function SourceRevenueTable({ data, onRowClick }) {
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState("All"); // All | Paid | Comp
+  const [filter, setFilter] = useState("All"); // All | Paid | Free
 
   const filtered = (data ?? []).filter((row) => {
-    const isPaid = !FREE_TYPES.has((row.paymentType ?? "").toUpperCase());
-    if (filter === "Paid" && !isPaid) return false;
-    if (filter === "Comp" && isPaid) return false;
+    // payment_type is 'Paid' or 'Free' directly
+    if (filter === "Paid" && row.paymentType !== "Paid") return false;
+    if (filter === "Free" && row.paymentType !== "Free") return false;
     if (search) {
       const q = search.toLowerCase();
       return (row.source ?? "").toLowerCase().includes(q);
@@ -89,7 +90,10 @@ export default function SourceRevenueTable({ data, onRowClick }) {
   });
 
   const totals = filtered.reduce(
-    (acc, r) => ({ revenue: acc.revenue + (r.revenue ?? 0), transactions: acc.transactions + (r.transactions ?? 0) }),
+    (acc, r) => ({
+      revenue:      acc.revenue      + (r.revenue      ?? 0),
+      transactions: acc.transactions + (r.transactions ?? 0),
+    }),
     { revenue: 0, transactions: 0 },
   );
 
@@ -117,9 +121,9 @@ export default function SourceRevenueTable({ data, onRowClick }) {
           }}
         />
 
-        {/* Paid / Comp toggle */}
+        {/* Paid / Free toggle */}
         <div style={{ display: "flex", gap: 4, background: C.panelAlt, borderRadius: 8, padding: 3 }}>
-          {["All", "Paid", "Comp"].map((f) => (
+          {["All", "Paid", "Free"].map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -173,7 +177,9 @@ export default function SourceRevenueTable({ data, onRowClick }) {
                     background: i % 2 === 0 ? "transparent" : C.panel,
                   }}
                   onMouseEnter={(e) => (e.currentTarget.style.background = C.panelAlt)}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = i % 2 === 0 ? "transparent" : C.panel)}
+                  onMouseLeave={(e) =>
+                    (e.currentTarget.style.background = i % 2 === 0 ? "transparent" : C.panel)
+                  }
                 >
                   <td style={{ ...td, fontWeight: 600 }}>{row.source}</td>
                   <td style={td}><TypeBadge type={row.paymentType} /></td>
@@ -190,6 +196,7 @@ export default function SourceRevenueTable({ data, onRowClick }) {
               ))
             )}
           </tbody>
+
           {/* Totals footer */}
           {filtered.length > 1 && (
             <tfoot>

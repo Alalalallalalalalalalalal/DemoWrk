@@ -59,6 +59,7 @@ FREE_KEYWORDS = [
     "homeowner family",
     "hf -",
     "ha -",
+    "ho -",
     "free",
 ]
 
@@ -66,6 +67,7 @@ FREE_CODES = {
     "CU",   # CU - Complimentary
     "HA",   # HA - Homeowner Arrival
     "HF",   # HF - Homeowner Family
+    "HO",   # HO - Homeowner
 }
 
 # End-of-string fragments that signal a truncated tentative name
@@ -81,7 +83,7 @@ def classify_source(name: str) -> str:
     Return "Free" or "Paid" for a business source name string.
 
     Free  — tentative (including truncated forms), complimentary,
-             arrival, HF / HA / CU short codes.
+             arrival, HF / HA / CU / HO short codes.
     Paid  — everything else.
     """
     if not name:

@@ -1,4 +1,6 @@
 // frontend/src/pages/finance/AmenityRevenueTable.jsx
+// Row click  → drill into folio records (opens drawer)
+// ▼/▲ button → expand/collapse season sub-rows (independent of drill)
 
 import { useState } from "react";
 
@@ -55,7 +57,8 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
       <div className="dashboard-eyebrow">Amenities</div>
       <h2 className="dashboard-card-title">Amenity revenue &amp; season breakdown</h2>
       <p style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif", marginBottom: 14, marginTop: -8 }}>
-        Expand any row to see revenue by season. Click a row to drill into folio records.
+        Click a row to drill into folio records.
+        Use the <strong>▼</strong> button to expand season sub-rows without opening the drawer.
       </p>
 
       <div style={{ overflowX: "auto", borderRadius: 10, border: `1px solid ${C.border}` }}>
@@ -66,7 +69,8 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
               <th style={{ ...th, textAlign: "right" }}>Revenue</th>
               <th style={{ ...th, textAlign: "right" }}>Transactions</th>
               <th style={{ ...th, textAlign: "right" }}>Seasons</th>
-              <th style={{ ...th, width: 32 }} />
+              {/* expand button column — no header text */}
+              <th style={{ ...th, width: 48, textAlign: "center" }} />
             </tr>
           </thead>
           <tbody>
@@ -78,25 +82,27 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
               </tr>
             ) : (
               (data ?? []).map((row, i) => {
-                const color = amenityColor(row.amenity);
-                const barW  = ((row.revenue ?? 0) / maxRevenue) * 100;
-                const isOpen = expanded === row.amenity;
+                const color     = amenityColor(row.amenity);
+                const barW      = ((row.revenue ?? 0) / maxRevenue) * 100;
+                const isOpen    = expanded === row.amenity;
                 const hasSeasons = row.seasons?.length > 0;
 
                 return (
                   <>
                     <tr
                       key={row.amenity}
-                      style={{ cursor: "pointer", background: i % 2 === 0 ? "transparent" : C.panel }}
+                      style={{
+                        cursor: "pointer",
+                        background: i % 2 === 0 ? "transparent" : C.panel,
+                      }}
                       onMouseEnter={(e) => (e.currentTarget.style.background = C.panelAlt)}
                       onMouseLeave={(e) =>
                         (e.currentTarget.style.background = i % 2 === 0 ? "transparent" : C.panel)
                       }
-                      onClick={() => {
-                        if (hasSeasons) setExpanded(isOpen ? null : row.amenity);
-                        onRowClick({ drillType: "amenity", drillValue: row.amenity });
-                      }}
+                      // Row click → drill only, never expand
+                      onClick={() => onRowClick({ drillType: "amenity", drillValue: row.amenity })}
                     >
+                      {/* Amenity name + bar */}
                       <td style={{ ...td, borderBottom: isOpen ? "none" : undefined }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <span
@@ -107,7 +113,6 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
                           />
                           <span style={{ fontWeight: 600 }}>{row.amenity}</span>
                         </div>
-                        {/* revenue bar */}
                         <div style={{ marginTop: 6, height: 3, background: C.border, borderRadius: 2 }}>
                           <div
                             style={{
@@ -117,27 +122,70 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
                           />
                         </div>
                       </td>
-                      <td style={{ ...td, textAlign: "right", fontWeight: 700, color: C.accent, borderBottom: isOpen ? "none" : undefined }}>
+
+                      {/* Revenue */}
+                      <td style={{
+                        ...td, textAlign: "right", fontWeight: 700,
+                        color: C.accent, borderBottom: isOpen ? "none" : undefined,
+                      }}>
                         {money(row.revenue)}
                       </td>
-                      <td style={{ ...td, textAlign: "right", color: C.soft, borderBottom: isOpen ? "none" : undefined }}>
+
+                      {/* Transactions */}
+                      <td style={{
+                        ...td, textAlign: "right", color: C.soft,
+                        borderBottom: isOpen ? "none" : undefined,
+                      }}>
                         {fmt(row.transactions)}
                       </td>
-                      <td style={{ ...td, textAlign: "right", color: C.muted, borderBottom: isOpen ? "none" : undefined }}>
+
+                      {/* Season count */}
+                      <td style={{
+                        ...td, textAlign: "right", color: C.muted,
+                        borderBottom: isOpen ? "none" : undefined,
+                      }}>
                         {row.seasonCount ?? (hasSeasons ? row.seasons.length : "—")}
                       </td>
-                      <td style={{ ...td, textAlign: "center", fontSize: 12, color: C.muted, borderBottom: isOpen ? "none" : undefined }}>
-                        {hasSeasons ? (isOpen ? "▲" : "▼") : null}
+
+                      {/* Expand/collapse button — stopPropagation so it doesn't also drill */}
+                      <td style={{
+                        ...td, textAlign: "center",
+                        borderBottom: isOpen ? "none" : undefined,
+                        padding: "11px 8px",
+                      }}>
+                        {hasSeasons && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation(); // prevent row drill-click
+                              setExpanded(isOpen ? null : row.amenity);
+                            }}
+                            title={isOpen ? "Collapse seasons" : "Expand seasons"}
+                            style={{
+                              background: isOpen ? C.panelAlt : "transparent",
+                              border: `1px solid ${C.border}`,
+                              borderRadius: 6,
+                              cursor: "pointer",
+                              padding: "3px 8px",
+                              fontSize: 11,
+                              color: C.muted,
+                              fontFamily: "sans-serif",
+                              fontWeight: 700,
+                              lineHeight: 1,
+                            }}
+                          >
+                            {isOpen ? "▲" : "▼"}
+                          </button>
+                        )}
                       </td>
                     </tr>
 
-                    {/* Season sub-rows */}
+                    {/* Season sub-rows — shown when expanded, independent of drill */}
                     {isOpen && hasSeasons && (
                       <tr key={`${row.amenity}-seasons`}>
                         <td
                           colSpan={5}
                           style={{
-                            padding: "0 14px 10px 48px",
+                            padding: "0 14px 12px 48px",
                             background: C.panelAlt,
                             borderBottom: `1px solid ${C.border}`,
                           }}
@@ -164,10 +212,18 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
                                   <td style={{ ...td, padding: "7px 10px", fontSize: 12, borderBottom: `1px solid ${C.border}` }}>
                                     {s.season}
                                   </td>
-                                  <td style={{ ...td, padding: "7px 10px", textAlign: "right", fontWeight: 600, color: C.accent, fontSize: 12, borderBottom: `1px solid ${C.border}` }}>
+                                  <td style={{
+                                    ...td, padding: "7px 10px", textAlign: "right",
+                                    fontWeight: 600, color: C.accent, fontSize: 12,
+                                    borderBottom: `1px solid ${C.border}`,
+                                  }}>
                                     {money(s.revenue)}
                                   </td>
-                                  <td style={{ ...td, padding: "7px 10px", textAlign: "right", color: C.muted, fontSize: 12, borderBottom: `1px solid ${C.border}` }}>
+                                  <td style={{
+                                    ...td, padding: "7px 10px", textAlign: "right",
+                                    color: C.muted, fontSize: 12,
+                                    borderBottom: `1px solid ${C.border}`,
+                                  }}>
                                     {fmt(s.transactions)}
                                   </td>
                                 </tr>
