@@ -31,6 +31,28 @@ def dashboard_summary(db: Session = Depends(get_db)):
                                     GROUP BY country
                                     ORDER BY total DESC"""),
 
+        "membersByState": rows("""
+            SELECT
+                UPPER(TRIM(state)) AS state,
+                COUNT(*)::int AS total
+            FROM member_addresses
+            WHERE UPPER(TRIM(state)) IN (
+                'AL', 'AK', 'AZ', 'AR', 'CA',
+                'CO', 'CT', 'DE', 'FL', 'GA',
+                'HI', 'ID', 'IL', 'IN', 'IA',
+                'KS', 'KY', 'LA', 'ME', 'MD',
+                'MA', 'MI', 'MN', 'MS', 'MO',
+                'MT', 'NE', 'NV', 'NH', 'NJ',
+                'NM', 'NY', 'NC', 'ND', 'OH',
+                'OK', 'OR', 'PA', 'RI', 'SC',
+                'SD', 'TN', 'TX', 'UT', 'VT',
+                'VA', 'WA', 'WV', 'WI', 'WY',
+                'DC'
+            )
+            GROUP BY UPPER(TRIM(state))
+            ORDER BY total DESC
+        """),
+
         "membersByState": rows("""SELECT state, COUNT(*) AS total
                                   FROM member_addresses
                                   WHERE state IS NOT NULL
@@ -217,6 +239,43 @@ def dashboard_summary(db: Session = Depends(get_db)):
         GROUP BY member_number
         ORDER BY total_dependents DESC
         LIMIT 20
+    """),
+
+    "dependentsPerHousehold": rows("""
+        WITH household_counts AS (
+            SELECT
+                m.member_number,
+                COUNT(d.dependent_number) AS dependent_count
+            FROM members m
+            LEFT JOIN dependents d
+                ON d.member_number = m.member_number
+            WHERE LOWER(TRIM(m.member_or_guest)) = 'member'
+            GROUP BY m.member_number
+        ),
+        grouped_households AS (
+            SELECT
+                CASE
+                    WHEN dependent_count = 0 THEN '0 Dependents'
+                    WHEN dependent_count = 1 THEN '1 Dependent'
+                    WHEN dependent_count = 2 THEN '2 Dependents'
+                    WHEN dependent_count = 3 THEN '3 Dependents'
+                    ELSE '4+ Dependents'
+                END AS household_group,
+                CASE
+                    WHEN dependent_count = 0 THEN 1
+                    WHEN dependent_count = 1 THEN 2
+                    WHEN dependent_count = 2 THEN 3
+                    WHEN dependent_count = 3 THEN 4
+                    ELSE 5
+                END AS sort_order
+            FROM household_counts
+        )
+        SELECT
+            household_group,
+            COUNT(*)::int AS total_households
+        FROM grouped_households
+        GROUP BY household_group, sort_order
+        ORDER BY sort_order
     """),
 
     "totalDependents": one("""

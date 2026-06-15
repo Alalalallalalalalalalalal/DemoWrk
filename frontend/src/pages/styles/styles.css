@@ -178,6 +178,11 @@
   grid-template-columns: 1fr 2fr;
 }
 
+.dashboard-grid-equal {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
 .dashboard-card,
 .dashboard-kpi-band {
   border: 1px solid var(--dashboard-border);
@@ -271,6 +276,10 @@
   .dashboard-grid-main,
   .dashboard-grid-side,
   .dashboard-grid-3 {
+    grid-template-columns: 1fr;
+  }
+  
+  .dashboard-grid-equal {
     grid-template-columns: 1fr;
   }
 

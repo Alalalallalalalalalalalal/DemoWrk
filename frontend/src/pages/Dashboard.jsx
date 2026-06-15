@@ -55,8 +55,7 @@ import AmenitySeasonPanel from "./mltab/AmenitySeasonPanel";
 import SegmentationPanel from "./mltab/Segmentationpanel";
 import "./styles/styles.css";
 import VisitsRoomsTab from "./visits/VisitsRoomsTab";
-
-// Add import at top of Dashboard.jsx:
+import AccountsUSMap from "./demographics/AccountsUSMap";
 import FinanceTab from "./finance/FinanceTab";
 
 /* ─── Sidebar nav config ─────────────────────────────────────── */
@@ -112,6 +111,7 @@ export default function Dashboard() {
   const [totalAmountDue, setTotalAmountDue] = useState(null);
   const [amountDueByPeriod, setAmountDueByPeriod] = useState([]);
   const [totalDependents, setTotalDependents] = useState(null);
+  const [dependentsPerHousehold, setDependentsPerHousehold,] = useState([]);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
   const [dependentsPerMember, setDependentsPerMember] = useState([]);
   const [availableTables, setAvailableTables] = useState([]);
@@ -158,6 +158,7 @@ export default function Dashboard() {
         setTotalDependents(data.totalDependents ?? null);
         setDependentsByAgeGroup(data.dependentsByAgeGroup ?? []);
         setDependentsPerMember(data.dependentsPerMember ?? []);
+        setDependentsPerHousehold(data.dependentsPerHousehold ?? [],);
       })
 
       .catch(console.error);
@@ -206,6 +207,14 @@ export default function Dashboard() {
   const visibleAccountTypes = accountsByType.filter(
     (item) => item.account_category?.trim() === accountTypeView,
   );
+
+  const getAccountTotal = (category) =>
+    accountsByType.filter(
+      (item) => item.account_category?.trim() === category)
+      .reduce((sum, item) => sum + Number(item.total || 0), 0);
+  
+  const totalMemberAccounts = getAccountTotal("Member");
+  const totalGuestAccounts = getAccountTotal("Guest");
 
   const getCV = (v) => {
     if (v == null || v === "") return "";
@@ -686,6 +695,100 @@ export default function Dashboard() {
         {/* ════ DEMOGRAPHICS ════ */}
         {activeTab === "demographics" && (
           <div className="dashboard-section">
+            <section
+              className="dashboard-kpi-band"
+              style={{ padding: "24px 28px" }}
+            >
+              {[
+                {
+                  label: "Total Members",
+                  value: totalMemberAccounts
+                    ? totalMemberAccounts.toLocaleString()
+                    : "—",
+                  detail: "Across all Member account types",
+                },
+                {
+                  label: "Total Guests",
+                  value: totalGuestAccounts
+                    ? totalGuestAccounts.toLocaleString()
+                    : "—",
+                  detail: "Across all Guest account types",
+                },
+                {
+                  label: "Countries Represented",
+                  value: membersByCountry.length
+                    ? membersByCountry.length.toLocaleString()
+                    : "—",
+                  detail: "Geographic Distribution",
+                },
+                {
+                  label: "Total Dependents",
+                  value:
+                    totalDependents?.total_dependents != null
+                      ? Number(
+                          totalDependents.total_dependents,
+                        ).toLocaleString()
+                      : totalDependents != null &&
+                          !Number.isNaN(Number(totalDependents))
+                        ? Number(totalDependents).toLocaleString()
+                        : "—",
+                  detail: "Linked family accounts",
+                },
+                {
+                  label: "Account Categories",
+                  value: accountsByType.length
+                    ? accountsByType.length.toLocaleString()
+                    : "—",
+                  detail: "Member and guest types",
+                },
+              ].map((item, index) => (
+                <div
+                  key={item.label}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                    padding: "0 24px",
+                    borderLeft:
+                      index > 0
+                        ? "1px solid #DDD6CA"
+                        : "none",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      letterSpacing: "0.18em",
+                      textTransform: "uppercase",
+                      color: "#9A8E84",
+                    }}
+                  >
+                    {item.label}
+                  </span>
+
+                  <span
+                    style={{
+                      fontFamily: "'Cormorant Garamond', serif",
+                      fontSize: 32,
+                      lineHeight: 1.1,
+                      color: "#1B2632",
+                    }}
+                  >
+                    {item.value}
+                  </span>
+
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "#A35139",
+                    }}
+                  >
+                    {item.detail}
+                  </span>
+                </div>
+              ))}
+            </section>
             <Card
               title="Account Types"
               sub="Distribution of member and guest account types"
@@ -693,11 +796,12 @@ export default function Dashboard() {
               <div
                 style={{
                   display: "flex",
-                  gap: 6,
+                  gap: 4,
                   padding: 4,
-                  marginBottom: 14,
+                  marginBottom: 18,
                   background: "#EEE9DF",
-                  borderRadius: 10,
+                  border: "1px solid #DDD6CA",
+                  borderRadius: 12,
                   width: "fit-content",
                 }}
               >
@@ -706,14 +810,16 @@ export default function Dashboard() {
                   onClick={() => setAccountTypeView("Member")}
                   style={{
                     border: "none",
-                    borderRadius: 7,
-                    padding: "7px 14px",
+                    borderRadius: 8,
+                    padding: "8px 16px",
                     cursor: "pointer",
+                    fontFamily: "Inter, system-ui, sans-serif",
                     fontSize: 11,
                     fontWeight: 600,
                     background:
                       accountTypeView === "Member" ? "#2C3B4D" : "transparent",
-                    color: accountTypeView === "Member" ? "#FFFFFF" : "#2C3B4D",
+                    color: accountTypeView === "Member" ? "#FFB162" : "#2C3B4D",
+                    boxShadow: accountTypeView === "Member" ? "0 3px 10px rgba(27, 38, 50, 0.14)" : "none",
                     transition: "all 0.2s ease",
                   }}
                 >
@@ -724,21 +830,33 @@ export default function Dashboard() {
                   onClick={() => setAccountTypeView("Guest")}
                   style={{
                     border: "none",
-                    borderRadius: 7,
-                    padding: "7px 14px",
+                    borderRadius: 8,
+                    padding: "8px 16px",
                     cursor: "pointer",
+                    fontFamily: "Inter, system-ui, sans-serif",
                     fontSize: 11,
                     fontWeight: 600,
                     background:
                       accountTypeView === "Guest" ? "#2C3B4D" : "transparent",
-                    color: accountTypeView === "Guest" ? "#FFFFFF" : "#2C3B4D",
+                    color:
+                      accountTypeView === "Guest" ? "#FFB162" : "#2C3B4D",
+                    boxShadow:
+                      accountTypeView === "Guest" ? "0 3px 10px rgba(27, 38, 50, 0.14)" : "none",
                     transition: "all 0.2s ease",
                   }}
                 >
                   Guests
                 </button>
               </div>
-              <div className="dashboard-chart dashboard-chart-200">
+              <div className="dashboard-chart"
+                style={{
+                  height: Math.max(
+                    220,
+                    visibleAccountTypes.length * 34,
+                  ),
+                  maxHeight: 460,
+                }}
+              >
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
                     data={visibleAccountTypes}
@@ -781,7 +899,7 @@ export default function Dashboard() {
                       dataKey="total"
                       name="Accounts"
                       fill={
-                        accountTypeView === "Member" ? "#FFB162" : "#5B8FA8"
+                        accountTypeView === "Member" ? "#FFB162" : "var(--dashboard-truffle)"
                       }
                       radius={[0, 6, 6, 0]}
                       maxBarSize={20}
@@ -803,7 +921,7 @@ export default function Dashboard() {
                       <Tooltip contentStyle={TIP} />
                       <Bar
                         dataKey="total"
-                        fill="#FFB162"
+                        fill="var(--dashboard-truffle)"
                         radius={[6, 6, 0, 0]}
                       />
                     </BarChart>
@@ -816,6 +934,10 @@ export default function Dashboard() {
                 data={membersByGender}
                 dataKey="total"
                 nameKey="gender"
+                colorMap={{
+                  M: "var(--dashboard-truffle)",
+                  F: "var(--dashboard-flame)",
+                }}
               />
               <PieLegendCard
                 title="Marital Status"
@@ -823,6 +945,10 @@ export default function Dashboard() {
                 data={membersByMaritalStatus}
                 dataKey="total"
                 nameKey="marital_status"
+                colorMap={{
+                  Single: "var(--dashboard-truffle)",
+                  Married: "var(--dashboard-deep-blue)",
+                }}
               />
             </div>
             <SectionLabel>Member Status &amp; Tenure</SectionLabel>
@@ -857,7 +983,7 @@ export default function Dashboard() {
                       <Bar
                         dataKey="guests"
                         name="Guests"
-                        fill="#5B8FA8"
+                        fill="var(--dashboard-truffle)"
                         radius={[6, 6, 0, 0]}
                       />
                     </BarChart>
@@ -902,7 +1028,7 @@ export default function Dashboard() {
                         type="monotone"
                         dataKey="guests"
                         name="Guests"
-                        stroke="#5B8FA8"
+                        stroke="var(--dashboard-truffle)"
                         strokeWidth={2.5}
                         dot={{ r: 3 }}
                         activeDot={{ r: 5 }}
@@ -912,59 +1038,57 @@ export default function Dashboard() {
                 </div>
               </Card>
             </div>
-            <SectionLabel>Location</SectionLabel>
-            <div className="dashboard-grid dashboard-grid-side">
-              <Card title="Accounts by Country" sub="Geographic distribution">
-                <div className="dashboard-chart dashboard-chart-200">
-                  <ResponsiveContainer>
-                    <BarChart data={membersByCountry}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis dataKey="country" stroke={AX} fontSize={11} />
-                      <YAxis stroke={AX} fontSize={11} />
-                      <Tooltip contentStyle={TIP} />
-                      <Bar
-                        dataKey="total"
-                        fill="#C4A24D"
-                        radius={[6, 6, 0, 0]}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+            <SectionLabel>Geographic Distribution</SectionLabel>
+            <div className="dashboard-grid dashboard-grid-equal">
+              <Card title="Accounts by State" sub="Account concentration across the United States">
+                <AccountsUSMap data={membersByState} />
               </Card>
-              <Card title="Accounts by State" sub="US state breakdown">
-                <div className="dashboard-chart dashboard-chart-200">
-                  <ResponsiveContainer>
-                    <BarChart
-                      data={membersByState}
-                      layout="vertical"
-                      margin={{ left: 8 }}
+              <Card title="Accounts by Country" sub="Account concentration across different countries">
+                <div className="dashboard-chart"
+                  style={{
+                    height: Math.max(260, membersByCountry.length * 30),
+                    maxHeight: 318,
+                  }}
+                >
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={membersByCountry} layout="vertical"
+                      margin={{left: 12}}
+                      barCategoryGap="22%"
                     >
                       <CartesianGrid
                         strokeDasharray="3 3"
                         stroke={GRID}
                         horizontal={false}
                       />
-                      <XAxis type="number" stroke={AX} fontSize={11} />
-                      <YAxis
-                        type="category"
-                        dataKey="state"
+                      <XAxis
+                        type="number"
                         stroke={AX}
                         fontSize={11}
-                        width={40}
                       />
-                      <Tooltip contentStyle={TIP} />
+                      <YAxis
+                        type="category"
+                        dataKey="country"
+                        stroke={AX}
+                        fontSize={10}
+                        width={115}
+                        interval={0}
+                        tickLine={false}
+                      />
+                      <Tooltip contentStyle={TIP}/>
                       <Bar
                         dataKey="total"
-                        fill="#2C3B4D"
+                        name="Accounts"
+                        fill="var(--dashboard-muted)"
                         radius={[0, 6, 6, 0]}
+                        maxBarSize={20}
                       />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </Card>
             </div>
-            <SectionLabel>Dependents</SectionLabel>
-            <div className="dashboard-grid dashboard-grid-side">
+            <SectionLabel>Household &amp; Dependents</SectionLabel>
+            <div className="dashboard-grid dashboard-grid-equal">
               <Card
                 title="Dependents by Age Group"
                 sub="Linked to member folios"
@@ -986,8 +1110,64 @@ export default function Dashboard() {
                 </div>
               </Card>
               <Card
-                title="Top Accounts by Dependents"
-                sub="Accounts with the most linked dependents"
+                title="Dependents per Household"
+                sub="Distribution of linked dependents across member households"
+              >
+                <div className="dashboard-chart dashboard-chart-200">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={dependentsPerHousehold}
+                      margin={{
+                        top: 6,
+                        right: 12,
+                        bottom: 8,
+                        left: 0,
+                      }}
+                    >
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke={GRID}
+                        vertical={false}
+                      />
+
+                      <XAxis
+                        dataKey="household_group"
+                        stroke={AX}
+                        fontSize={10}
+                        interval={0}
+                        tickLine={false}
+                      />
+
+                      <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                        allowDecimals={false}
+                      />
+
+                      <Tooltip
+                        contentStyle={TIP}
+                        formatter={(value) => [
+                          Number(value).toLocaleString(),
+                          "Households",
+                        ]}
+                      />
+
+                      <Bar
+                        dataKey="total_households"
+                        name="Households"
+                        fill="var(--dashboard-flame)"
+                        radius={[6, 6, 0, 0]}
+                        maxBarSize={42}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+              
+            </div>
+            <Card
+                title="Top Members by Dependents"
+                sub="Members with the most linked dependents"
               >
                 <div className="dashboard-chart dashboard-chart-200">
                   <ResponsiveContainer>
@@ -1008,14 +1188,13 @@ export default function Dashboard() {
                       <Tooltip contentStyle={TIP} />
                       <Bar
                         dataKey="total_dependents"
-                        fill="#5B8FA8"
+                        fill="var(--dashboard-truffle)"
                         radius={[6, 6, 0, 0]}
                       />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
               </Card>
-            </div>
           </div>
         )}
 
