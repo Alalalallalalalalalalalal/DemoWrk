@@ -15,485 +15,6 @@ def get_db():
     finally:
         db.close()
 
-
-# @router.get("/members-by-country")
-# def members_by_country(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT country, COUNT(*) AS total
-#         FROM member_addresses
-#         WHERE country IS NOT NULL
-#         GROUP BY country
-#         ORDER BY total DESC;
-#     """)).mappings().all()
-
-#     return [{"country": row["country"], "total": row["total"]} for row in result]
-
-
-# @router.get("/members-by-state")
-# def members_by_state(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT state, COUNT(*) AS total
-#         FROM member_addresses
-#         WHERE state IS NOT NULL
-#         GROUP BY state
-#         ORDER BY total DESC;
-#     """)).mappings().all()
-
-#     return [{"state": row["state"], "total": row["total"]} for row in result]
-
-
-# @router.get("/members-by-gender")
-# def members_by_gender(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT gender, COUNT(*) AS total
-#         FROM members
-#         WHERE gender IS NOT NULL
-#         GROUP BY gender
-#         ORDER BY total DESC;
-#     """)).mappings().all()
-
-#     return [{"gender": row["gender"], "total": row["total"]} for row in result]
-
-
-# @router.get("/members-by-age-group")
-# def members_by_age_group(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT
-#             CASE
-#                 WHEN age < 18 THEN 'Under 18'
-#                 WHEN age BETWEEN 18 AND 25 THEN '18-25'
-#                 WHEN age BETWEEN 26 AND 35 THEN '26-35'
-#                 WHEN age BETWEEN 36 AND 50 THEN '36-50'
-#                 WHEN age BETWEEN 51 AND 65 THEN '51-65'
-#                 ELSE '66+'
-#             END AS age_group,
-#             COUNT(*) AS total
-#         FROM members
-#         WHERE age IS NOT NULL
-#         GROUP BY age_group
-#         ORDER BY age_group;
-#     """)).mappings().all()
-
-#     return [{"age_group": row["age_group"], "total": row["total"]} for row in result]
-
-
-# @router.get("/members-by-type")
-# def members_by_type(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT member_type, COUNT(*) AS total
-#         FROM members
-#         WHERE member_type IS NOT NULL
-#         GROUP BY member_type
-#         ORDER BY total DESC;
-#     """)).mappings().all()
-
-#     return [{"member_type": row["member_type"], "total": row["total"]} for row in result]
-
-
-# @router.get("/members-by-status")
-# def members_by_status(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT status, COUNT(*) AS total
-#         FROM members
-#         WHERE status IS NOT NULL
-#         GROUP BY status
-#         ORDER BY total DESC;
-#     """)).mappings().all()
-
-#     return [{"status": row["status"], "total": row["total"]} for row in result]
-
-
-# @router.get("/bookings-by-room-type")
-# def bookings_by_room_type(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT room_type, COUNT(*) AS total
-#         FROM rooms
-#         WHERE room_type IS NOT NULL
-#         GROUP BY room_type
-#         ORDER BY total DESC;
-#     """)).mappings().all()
-
-#     return [{"room_type": row["room_type"], "total": row["total"]} for row in result]
-
-
-# @router.get("/bookings-by-month")
-# def bookings_by_month(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT 
-#             TO_CHAR(check_in_date, 'YYYY-MM') AS month,
-#             COUNT(*) AS total
-#         FROM rooms
-#         WHERE check_in_date IS NOT NULL
-#         GROUP BY month
-#         ORDER BY month;
-#     """)).mappings().all()
-
-#     return [{"month": row["month"], "total": row["total"]} for row in result]
-
-
-# @router.get("/average-length-of-stay")
-# def average_length_of_stay(db: Session = Depends(get_db)):
-#     row = db.execute(text("""
-#         SELECT ROUND(AVG(check_out_date - check_in_date), 2) AS average_nights
-#         FROM rooms
-#         WHERE check_in_date IS NOT NULL
-#         AND check_out_date IS NOT NULL;
-#     """)).mappings().first()
-
-#     return {"average_nights": float(row["average_nights"] or 0)}
-
-
-# @router.get("/total-recent-activity-spend")
-# def total_recent_activity_spend(db: Session = Depends(get_db)):
-#     row = db.execute(text("""
-#         SELECT SUM(amount) AS total
-#         FROM recent_activity
-#         WHERE amount IS NOT NULL;
-#     """)).mappings().first()
-
-#     return {"total": float(row["total"] or 0)}
-
-
-# @router.get("/spend-by-month")
-# def spend_by_month(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT
-#             TO_CHAR(activity_date, 'YYYY-MM') AS month,
-#             SUM(amount) AS total
-#         FROM recent_activity
-#         WHERE activity_date IS NOT NULL
-#         AND amount IS NOT NULL
-#         GROUP BY month
-#         ORDER BY month;
-#     """)).mappings().all()
-
-#     return [{"month": row["month"], "total": float(row["total"] or 0)} for row in result]
-
-
-# @router.get("/top-spend-descriptions")
-# def top_spend_descriptions(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT description, SUM(amount) AS total
-#         FROM recent_activity
-#         WHERE description IS NOT NULL
-#         AND amount IS NOT NULL
-#         GROUP BY description
-#         ORDER BY total DESC
-#         LIMIT 10;
-#     """)).mappings().all()
-
-#     return [{"description": row["description"], "total": float(row["total"] or 0)} for row in result]
-
-
-# @router.get("/total-amount-due")
-# def total_amount_due(db: Session = Depends(get_db)):
-#     row = db.execute(text("""
-#         SELECT COALESCE(SUM(amount_due), 0) AS total_amount_due
-#         FROM statements
-#         WHERE amount_due IS NOT NULL;
-#     """)).mappings().first()
-
-#     return {
-#         "total_amount_due": float(row["total_amount_due"] or 0)
-#     }
-
-
-# @router.get("/amount-due-by-period")
-# def amount_due_by_period(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT statement_period, SUM(amount_due) AS total
-#         FROM statements
-#         WHERE statement_period IS NOT NULL
-#         GROUP BY statement_period
-#         ORDER BY statement_period;
-#     """)).mappings().all()
-
-#     return [
-#         {
-#             "statement_period": row["statement_period"],
-#             "total": float(row["total"] or 0)
-#         }
-#         for row in result
-#     ]
-
-
-# @router.get("/dependents-by-age-group")
-# def dependents_by_age_group(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT
-#             CASE
-#                 WHEN age < 18 THEN 'Under 18'
-#                 WHEN age BETWEEN 18 AND 25 THEN '18-25'
-#                 WHEN age BETWEEN 26 AND 35 THEN '26-35'
-#                 WHEN age BETWEEN 36 AND 50 THEN '36-50'
-#                 ELSE '51+'
-#             END AS age_group,
-#             COUNT(*) AS total
-#         FROM dependents
-#         WHERE age IS NOT NULL
-#         GROUP BY age_group
-#         ORDER BY age_group;
-#     """)).mappings().all()
-
-#     return [{"age_group": row["age_group"], "total": row["total"]} for row in result]
-
-
-# @router.get("/dependents-per-member")
-# def dependents_per_member(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT
-#             member_number,
-#             COUNT(*) AS total_dependents
-#         FROM dependents
-#         GROUP BY member_number
-#         ORDER BY total_dependents DESC
-#         LIMIT 20;
-#     """)).mappings().all()
-
-#     return [
-#         {
-#             "member_number": row["member_number"],
-#             "total_dependents": row["total_dependents"]
-#         }
-#         for row in result
-#     ]
-
-# @router.get("/total-dependents")
-# def total_dependents(db: Session = Depends(get_db)):
-#     row = db.execute(text("""
-#         SELECT COUNT(*) AS total_dependents
-#         FROM dependents;
-#     """)).mappings().first()
-
-#     return {"total_dependents": row["total_dependents"]}
-
-# @router.get("/new-members-per-year")
-# def new_members_per_year(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT
-#             EXTRACT(YEAR FROM since_date)::INT AS year,
-#             COUNT(*) AS total
-#         FROM members
-#         WHERE since_date IS NOT NULL
-#         AND EXTRACT(YEAR FROM since_date) >= 2018
-#         GROUP BY year
-#         ORDER BY year;
-#     """)).mappings().all()
-
-#     return [{"year": row["year"], "total": row["total"]} for row in result]
-
-# @router.get("/most-used-room-types")
-# def most_used_room_types(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT room_type, COUNT(*) AS total
-#         FROM rooms
-#         WHERE room_type IS NOT NULL
-#         GROUP BY room_type
-#         ORDER BY total DESC
-#         LIMIT 10;
-#     """)).mappings().all()
-
-#     return [{"room_type": row["room_type"], "total": row["total"]} for row in result]
-
-# @router.get("/least-used-room-types")
-# def least_used_room_types(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT room_type, COUNT(*) AS total
-#         FROM rooms
-#         WHERE room_type IS NOT NULL
-#         GROUP BY room_type
-#         ORDER BY total ASC
-#         LIMIT 10;
-#     """)).mappings().all()
-
-#     return [{"room_type": row["room_type"], "total": row["total"]} for row in result]
-
-# @router.get("/average-tenure")
-# def average_tenure(db: Session = Depends(get_db)):
-#     row = db.execute(text("""
-#         SELECT
-#             ROUND(
-#                 AVG(EXTRACT(YEAR FROM AGE(CURRENT_DATE, since_date))),
-#                 2
-#             ) AS average_tenure_years
-#         FROM members
-#         WHERE since_date IS NOT NULL;
-#     """)).mappings().first()
-
-#     return {
-#         "average_tenure_years": float(row["average_tenure_years"] or 0)
-#     }
-
-# @router.get("/members-by-marital-status")
-# def members_by_marital_status(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT marital_status, COUNT(*) AS total
-#         FROM members
-#         WHERE marital_status IS NOT NULL
-#         GROUP BY marital_status
-#         ORDER BY total DESC;
-#     """)).mappings().all()
-
-#     return [
-#         {
-#             "marital_status": row["marital_status"],
-#             "total": row["total"]
-#         }
-#         for row in result
-#     ]
-
-# @router.get("/currently-checked-in-members")
-# def currently_checked_in_members(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT
-#             r.member_number,
-#             m.member_full_name,
-#             r.confirmation_code,
-#             r.room_type,
-#             r.room_number,
-#             r.check_in_date,
-#             r.check_out_date,
-#             r.status
-#         FROM rooms r
-#         JOIN members m
-#         ON r.member_number = m.member_number
-#         WHERE r.check_in_date <= CURRENT_DATE
-#         AND r.check_out_date > CURRENT_DATE
-#         AND (
-#             r.status IS NULL
-#             OR LOWER(r.status) NOT IN ('cancelled', 'canceled')
-#         )
-#         ORDER BY r.check_in_date DESC;
-#     """)).mappings().all()
-
-#     return [
-#         {
-#             "member_number": row["member_number"],
-#             "member_full_name": row["member_full_name"],
-#             "confirmation_code": row["confirmation_code"],
-#             "room_type": row["room_type"],
-#             "room_number": row["room_number"],
-#             "check_in_date": row["check_in_date"],
-#             "check_out_date": row["check_out_date"],
-#             "status": row["status"]
-#         }
-#         for row in result
-#     ]
-
-# @router.get("/live-in-house-count")
-# def live_in_house_count(db: Session = Depends(get_db)):
-#     row = db.execute(text("""
-#         SELECT COUNT(*) AS total_in_house
-#         FROM rooms
-#         WHERE check_in_date <= CURRENT_DATE
-#         AND check_out_date > CURRENT_DATE
-#         AND (
-#             status IS NULL
-#             OR LOWER(status) NOT IN ('cancelled', 'canceled')
-#         );
-#     """)).mappings().first()
-
-#     return {"total_in_house": row["total_in_house"]}
-
-# @router.get("/live-in-house-roster")
-# def live_in_house_roster(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT
-#             r.member_number,
-#             m.member_full_name,
-#             m.member_type,
-#             r.confirmation_code,
-#             r.room_type,
-#             r.room_number,
-#             r.check_in_date,
-#             r.check_out_date,
-#             r.status
-#         FROM rooms r
-#         JOIN members m
-#         ON r.member_number = m.member_number
-#         WHERE r.check_in_date <= CURRENT_DATE
-#         AND r.check_out_date > CURRENT_DATE
-#         AND (
-#             r.status IS NULL
-#             OR LOWER(r.status) NOT IN ('cancelled', 'canceled')
-#         )
-#         ORDER BY r.room_number;
-#     """)).mappings().all()
-
-#     return [
-#         {
-#             "member_number": row["member_number"],
-#             "member_full_name": row["member_full_name"],
-#             "member_type": row["member_type"],
-#             "confirmation_code": row["confirmation_code"],
-#             "room_type": row["room_type"],
-#             "room_number": row["room_number"],
-#             "check_in_date": row["check_in_date"],
-#             "check_out_date": row["check_out_date"],
-#             "status": row["status"]
-#         }
-#         for row in result
-#     ]
-
-# @router.get("/member-directory")
-# def member_directory(db: Session = Depends(get_db)):
-#     result = db.execute(text("""
-#         SELECT
-#             m.member_number,
-#             m.member_name,
-#             m.member_full_name,
-#             m.member_type,
-#             m.member_or_guest,
-#             m.status,
-#             m.age,
-#             m.gender,
-#             m.occupation,
-#             m.employer,
-#             m.email,
-#             m.membership_tenure,
-#             a.city,
-#             a.state,
-#             a.country,
-#             COALESCE(d.total_dependents, 0) AS dependents,
-#             COALESCE(s.amount_due, 0) AS amount_due,
-#             CASE
-#                 WHEN r.member_number IS NOT NULL THEN true
-#                 ELSE false
-#             END AS currently_checked_in
-#         FROM members m
-#         LEFT JOIN member_addresses a
-#         ON m.member_number = a.member_number
-#         LEFT JOIN (
-#             SELECT member_number, COUNT(*) AS total_dependents
-#             FROM dependents
-#             GROUP BY member_number
-#         ) d
-#         ON m.member_number = d.member_number
-#         LEFT JOIN (
-#             SELECT member_number, SUM(amount_due) AS amount_due
-#             FROM statements
-#             GROUP BY member_number
-#         ) s
-#         ON m.member_number = s.member_number
-#         LEFT JOIN (
-#             SELECT DISTINCT member_number
-#             FROM rooms
-#             WHERE check_in_date <= CURRENT_DATE
-#             AND check_out_date > CURRENT_DATE
-#             AND (
-#                 status IS NULL
-#                 OR LOWER(status) NOT IN ('cancelled', 'canceled')
-#             )
-#         ) r
-#         ON m.member_number = r.member_number
-#         ORDER BY m.member_name
-#         LIMIT 500;
-                             
-#     """)).mappings().all()
-
-#     return [dict(row) for row in result]
-
-
 @router.get("/dashboard-summary")
 def dashboard_summary(db: Session = Depends(get_db)):
     def rows(sql: str):
@@ -509,11 +30,27 @@ def dashboard_summary(db: Session = Depends(get_db)):
                                     GROUP BY country
                                     ORDER BY total DESC"""),
 
-        "membersByState": rows("""SELECT state, COUNT(*) AS total
-                                  FROM member_addresses
-                                  WHERE state IS NOT NULL
-                                  GROUP BY state
-                                  ORDER BY total DESC"""),
+        "membersByState": rows("""
+            SELECT
+                UPPER(TRIM(state)) AS state,
+                COUNT(*)::int AS total
+            FROM member_addresses
+            WHERE UPPER(TRIM(state)) IN (
+                'AL', 'AK', 'AZ', 'AR', 'CA',
+                'CO', 'CT', 'DE', 'FL', 'GA',
+                'HI', 'ID', 'IL', 'IN', 'IA',
+                'KS', 'KY', 'LA', 'ME', 'MD',
+                'MA', 'MI', 'MN', 'MS', 'MO',
+                'MT', 'NE', 'NV', 'NH', 'NJ',
+                'NM', 'NY', 'NC', 'ND', 'OH',
+                'OK', 'OR', 'PA', 'RI', 'SC',
+                'SD', 'TN', 'TX', 'UT', 'VT',
+                'VA', 'WA', 'WV', 'WI', 'WY',
+                'DC'
+            )
+            GROUP BY UPPER(TRIM(state))
+            ORDER BY total DESC
+        """),
 
         "membersByGender": rows("""SELECT gender, COUNT(*) AS total
                                    FROM members
@@ -546,8 +83,31 @@ def dashboard_summary(db: Session = Depends(get_db)):
             ORDER BY total DESC
         """),
 
+        "accountsByType": rows("""
+            SELECT
+                member_type AS member_type,
+                member_or_guest AS account_category,
+                COUNT(*) AS total
+            FROM members
+            WHERE member_type IS NOT NULL
+            AND member_type <> ''
+            AND member_or_guest IN ('Member', 'Guest')
+            GROUP BY
+                member_type,
+                member_or_guest
+            ORDER BY total DESC
+        """),
+
         "membersByStatus": rows("""
-            SELECT status, COUNT(*) AS total
+            SELECT
+                status,
+                COUNT(*) FILTER (
+                    WHERE member_or_guest = 'Member'
+                ) AS members,
+                COUNT(*) FILTER (
+                    WHERE member_or_guest = 'Guest'
+                ) AS guests,
+                COUNT(*) AS total
             FROM members
             WHERE status IS NOT NULL
             GROUP BY status
@@ -573,10 +133,17 @@ def dashboard_summary(db: Session = Depends(get_db)):
 
         "newMembersPerYear": rows("""
             SELECT EXTRACT(YEAR FROM since_date)::INT AS year,
-                   COUNT(*) AS total
+                COUNT(*) FILTER (
+                    WHERE member_or_guest = 'Member'
+                ) AS members,
+                COUNT(*) FILTER (
+                    WHERE member_or_guest = 'Guest'
+                ) AS guests,
+                COUNT(*) AS total
             FROM members
             WHERE since_date IS NOT NULL
-              AND EXTRACT(YEAR FROM since_date) >= 2018
+                AND EXTRACT(YEAR FROM since_date) >= 2018
+                AND member_or_guest IN ('Member', 'Guest')
             GROUP BY year
             ORDER BY year
         """),
@@ -667,6 +234,43 @@ def dashboard_summary(db: Session = Depends(get_db)):
         LIMIT 20
     """),
 
+    "dependentsPerHousehold": rows("""
+        WITH household_counts AS (
+            SELECT
+                m.member_number,
+                COUNT(d.dependent_number) AS dependent_count
+            FROM members m
+            LEFT JOIN dependents d
+                ON d.member_number = m.member_number
+            WHERE LOWER(TRIM(m.member_or_guest)) = 'member'
+            GROUP BY m.member_number
+        ),
+        grouped_households AS (
+            SELECT
+                CASE
+                    WHEN dependent_count = 0 THEN '0 Dependents'
+                    WHEN dependent_count = 1 THEN '1 Dependent'
+                    WHEN dependent_count = 2 THEN '2 Dependents'
+                    WHEN dependent_count = 3 THEN '3 Dependents'
+                    ELSE '4+ Dependents'
+                END AS household_group,
+                CASE
+                    WHEN dependent_count = 0 THEN 1
+                    WHEN dependent_count = 1 THEN 2
+                    WHEN dependent_count = 2 THEN 3
+                    WHEN dependent_count = 3 THEN 4
+                    ELSE 5
+                END AS sort_order
+            FROM household_counts
+        )
+        SELECT
+            household_group,
+            COUNT(*)::int AS total_households
+        FROM grouped_households
+        GROUP BY household_group, sort_order
+        ORDER BY sort_order
+    """),
+
     "totalDependents": one("""
         SELECT COUNT(*) AS total_dependents
         FROM dependents
@@ -696,39 +300,6 @@ def dashboard_summary(db: Session = Depends(get_db)):
         WHERE marital_status IS NOT NULL
         GROUP BY marital_status
         ORDER BY total DESC
-    """),
-
-    "liveInHouseCount": one("""
-        SELECT COUNT(*) AS total_in_house
-        FROM rooms
-        WHERE check_in_date <= CURRENT_DATE
-        AND check_out_date > CURRENT_DATE
-        AND (
-            status IS NULL
-            OR LOWER(status) NOT IN ('cancelled', 'canceled')
-        )
-    """),
-
-    "liveInHouseRoster": rows("""
-        SELECT
-            r.member_number,
-            m.member_full_name,
-            m.member_type,
-            r.confirmation_code,
-            r.room_type,
-            r.room_number,
-            r.check_in_date,
-            r.check_out_date,
-            r.status
-        FROM rooms r
-        JOIN members m ON r.member_number = m.member_number
-        WHERE r.check_in_date <= CURRENT_DATE
-        AND r.check_out_date > CURRENT_DATE
-        AND (
-            r.status IS NULL
-            OR LOWER(r.status) NOT IN ('cancelled', 'canceled')
-        )
-        ORDER BY r.room_number
     """),
 
     "directoryMembers": rows("""
@@ -781,496 +352,340 @@ def dashboard_summary(db: Session = Depends(get_db)):
     """),
     }
 
+#season stuff
 
-# ═══════════════════════════════════════════════════════════
-# ML INSIGHT ENDPOINTS
-# ═══════════════════════════════════════════════════════════
-# These read from tables that ml_insights.build_insights() writes.
-# The scheduler / pipeline should run build_insights() before these
-# endpoints are called.  All endpoints degrade gracefully (return [])
-# if the tables haven't been created yet.
- 
-# ───────────────────────────────────────────────────────────
-# Customer Segments
-# ───────────────────────────────────────────────────────────
- 
-@router.get("/ml/member-segments")
-def ml_member_segments(db: Session = Depends(get_db)):
-    """
-    Full per-member segment table.
-    Includes: segment_name, active/inactive flag, spend, visits,
-    avg stay, favourite amenity, and campaign assignment.
-    """
-    result = db.execute(text("""
-        SELECT
-            ms.member_number,
-            m.member_full_name,
-            ms.status,
-            ms.member_type,
-            ms.is_active,
-            ms.segment_name,
-            ms.total_spend,
-            ms.avg_spend,
-            ms.visit_count,
-            ms.avg_stay,
-            ms.days_since_last_visit,
-            ms.campaign
-        FROM member_segments ms
-        LEFT JOIN members m ON ms.member_number = m.member_number
-        ORDER BY ms.total_spend DESC NULLS LAST;
-    """)).mappings().all()
-    return [dict(row) for row in result]
- 
- 
-@router.get("/ml/segment-summary")
-def ml_segment_summary(db: Session = Depends(get_db)):
-    """
-    Aggregated count, average spend and average visits per segment.
-    Ideal for a summary chart or dashboard card.
-    """
-    result = db.execute(text("""
-        SELECT
-            segment_name,
-            COUNT(*)                             AS member_count,
-            ROUND(AVG(total_spend)::NUMERIC, 2) AS avg_total_spend,
-            ROUND(AVG(visit_count)::NUMERIC, 2) AS avg_visits,
-            ROUND(AVG(avg_stay)::NUMERIC, 2)    AS avg_stay_nights,
-            SUM(CASE WHEN is_active THEN 1 ELSE 0 END)      AS active_count,
-            SUM(CASE WHEN NOT is_active THEN 1 ELSE 0 END)  AS inactive_count
-        FROM member_segments
-        GROUP BY segment_name
-        ORDER BY member_count DESC;
-    """)).mappings().all()
-    return [dict(row) for row in result]
- 
- 
- 
-# ───────────────────────────────────────────────────────────
-# Amenity Usage / Adoption
-# ───────────────────────────────────────────────────────────
- 
-@router.get("/ml/amenity-adoption")
-def ml_amenity_adoption(db: Session = Depends(get_db)):
-    """
-    How many distinct members used each amenity at least once.
-    """
-    result = db.execute(text("""
-        SELECT amenity, members_using
-        FROM amenity_adoption
-        ORDER BY members_using DESC;
-    """)).mappings().all()
-    return [dict(row) for row in result]
- 
- 
-@router.get("/ml/member-amenity-usage")
-def ml_member_amenity_usage(db: Session = Depends(get_db)):
-    """
-    Per-member × per-amenity usage count and spend.
-    Optionally filter by member_number via query param.
-    """
-    result = db.execute(text("""
-        SELECT
-            mau.member_id   AS member_number,
-            m.member_full_name,
-            mau.amenity,
-            mau.usage_count,
-            mau.total_spend
-        FROM member_amenity_usage mau
-        LEFT JOIN members m ON mau.member_id = m.member_number
-        ORDER BY mau.total_spend DESC;
-    """)).mappings().all()
-    return [dict(row) for row in result]
- 
- 
-@router.get("/ml/member-amenity-segments")
-def member_amenity_segments(db: Session = Depends(get_db)):
-    result = db.execute(text("""
-        SELECT *
-        FROM member_amenity_segments
-        ORDER BY total_amenity_visits DESC
-    """)).mappings().all()
+@router.get("/season-summary")
+def season_summary(db: Session = Depends(get_db)):
+    def rows(sql: str):
+        return [dict(row) for row in db.execute(text(sql)).mappings().all()]
 
-    return [dict(row) for row in result]
-# ───────────────────────────────────────────────────────────
-# Seasonal Behaviour
-# ───────────────────────────────────────────────────────────
- 
-@router.get("/ml/seasonal-visits")
-def ml_seasonal_visits(db: Session = Depends(get_db)):
-    """
-    Aggregated check-in visits and average stay per calendar month
-    across all members.
-    """
-    result = db.execute(text("""
+    season_groups = rows("""
+        SELECT
+            sg.id,
+            sg.group_name,
+            sg.group_type,
+            COALESCE(
+                json_agg(
+                    json_build_object(
+                        'id', s.id,
+                        'season_name', s.season_name,
+                        'start_month', s.start_month,
+                        'start_day', s.start_day,
+                        'end_month', s.end_month,
+                        'end_day', s.end_day,
+                        'is_active', s.is_active
+                    )
+                    ORDER BY s.start_month, s.start_day
+                ) FILTER (WHERE s.id IS NOT NULL),
+                '[]'
+            ) AS seasons
+        FROM season_groups sg
+        LEFT JOIN seasons s ON s.group_id = sg.id
+        WHERE sg.group_type <> 'simple'
+        GROUP BY sg.id, sg.group_name, sg.group_type
+        ORDER BY sg.id
+    """)
+
+    seasonal_visits = rows("""
         SELECT month, visits, avg_stay
         FROM seasonal_visits
-        ORDER BY month;
-    """)).mappings().all()
-    return [dict(row) for row in result]
- 
- 
-# ───────────────────────────────────────────────────────────
-# Amenity Revenue
-# ───────────────────────────────────────────────────────────
- 
-@router.get("/ml/amenity-revenue")
-def ml_amenity_revenue(db: Session = Depends(get_db)):
-    """
-    Total revenue and transaction count per amenity, ranked by revenue.
-    Answers: which amenity makes the most money.
-    """
-    result = db.execute(text("""
-        SELECT amenity, revenue, transactions
-        FROM amenity_revenue
-        ORDER BY revenue DESC;
-    """)).mappings().all()
-    return [
-        {
-            "amenity":      row["amenity"],
-            "revenue":      float(row["revenue"] or 0),
-            "transactions": int(row["transactions"] or 0),
-        }
-        for row in result
-    ]
- 
- 
-# ───────────────────────────────────────────────────────────
-# Airport / Ground Transfer Users
-# ───────────────────────────────────────────────────────────
- 
-@router.get("/ml/airport-transfer-users")
-def ml_airport_transfer_users(db: Session = Depends(get_db), limit: int = 20):
-    """
-    Top members by ground-transportation booking count.
-    Default: top 20.  Pass ?limit=N to change.
-    """
-    result = db.execute(text("""
-        SELECT
-            atu.member_id  AS member_number,
-            m.member_full_name,
-            atu.transfers,
-            atu.total_spend
-        FROM airport_transfer_users atu
-        LEFT JOIN members m ON atu.member_id = m.member_number
-        ORDER BY atu.transfers DESC
-        LIMIT :limit;
-    """), {"limit": limit}).mappings().all()
-    return [
-        {
-            "member_number":    row["member_number"],
-            "member_full_name": row["member_full_name"],
-            "transfers":        int(row["transfers"] or 0),
-            "total_spend":      float(row["total_spend"] or 0),
-        }
-        for row in result
-    ]
- 
- 
-# ───────────────────────────────────────────────────────────
-# Targeted Marketing
-# ───────────────────────────────────────────────────────────
- 
-@router.get("/ml/marketing-targets")
-def ml_marketing_targets(db: Session = Depends(get_db)):
-    """
-    Full marketing target list: member, segment, and assigned campaign.
-    """
-    result = db.execute(text("""
-        SELECT
-            mt.member_number,
-            m.member_full_name,
-            m.email,
-            mt.segment_name,
-            mt.campaign
-        FROM marketing_targets mt
-        LEFT JOIN members m ON mt.member_number = m.member_number
-        ORDER BY mt.segment_name, m.member_full_name;
-    """)).mappings().all()
-    return [dict(row) for row in result]
- 
- 
-# @router.get("/ml/marketing-targets-by-campaign")
-# def ml_marketing_targets_by_campaign(db: Session = Depends(get_db)):
-#     """
-#     Member count per campaign — useful for planning send volumes.
-#     """
-#     result = db.execute(text("""
-#         SELECT campaign, COUNT(*) AS member_count
-#         FROM marketing_targets
-#         GROUP BY campaign
-#         ORDER BY member_count DESC;
-#     """)).mappings().all()
-#     return [{"campaign": row["campaign"], "member_count": row["member_count"]} for row in result]
+        ORDER BY month
+    """)
 
-@router.get("/ml/marketing-targets-by-individual-campaign")
-def ml_marketing_targets_by_individual_campaign(db: Session = Depends(get_db)):
-    result = db.execute(text("""
-        SELECT
-            TRIM(campaign_tag) AS campaign,
-            COUNT(*) AS member_count
-        FROM marketing_targets,
-        LATERAL unnest(string_to_array(campaign, ' | ')) AS campaign_tag
-        GROUP BY campaign_tag
-        ORDER BY member_count DESC;
-    """)).mappings().all()
-    return [{"campaign": row["campaign"], "member_count": row["member_count"]} for row in result]
-
-# insights and season
-
-@router.get("/ml/insights")
-def ml_insights(db: Session = Depends(get_db)):
-    def rows(sql, params=None):
-        return [dict(r) for r in db.execute(text(sql), params or {}).mappings().all()]
+    season_visitors = rows("""
+        SELECT season_id, season_name, COUNT(*) AS repeat_visitor_count
+        FROM season_visitors
+        GROUP BY season_id, season_name
+        ORDER BY repeat_visitor_count DESC
+    """)
 
     return {
-        "memberSegments": rows("""
-            SELECT
-                ms.member_number,
-                m.member_full_name,
-                ms.status,
-                ms.member_type,
-                ms.is_active,
-                ms.segment_name,
-                ms.total_spend,
-                ms.avg_spend,
-                ms.visit_count,
-                ms.avg_stay,
-                ms.days_since_last_visit,
-                ms.campaign
-            FROM member_segments ms
-            LEFT JOIN members m ON ms.member_number = m.member_number
-            ORDER BY ms.total_spend DESC NULLS LAST
-            LIMIT 500;
-        """),
-
-        "segmentSummary": rows("""
-            SELECT
-                segment_name,
-                COUNT(*) AS member_count,
-                ROUND(AVG(total_spend)::NUMERIC, 2) AS avg_total_spend,
-                ROUND(AVG(visit_count)::NUMERIC, 2) AS avg_visits,
-                ROUND(AVG(avg_stay)::NUMERIC, 2) AS avg_stay_nights,
-                SUM(CASE WHEN is_active THEN 1 ELSE 0 END) AS active_count,
-                SUM(CASE WHEN NOT is_active THEN 1 ELSE 0 END) AS inactive_count
-            FROM member_segments
-            GROUP BY segment_name
-            ORDER BY member_count DESC;
-        """),
-
-        "amenityAdoption": rows("""
-            SELECT amenity, members_using
-            FROM amenity_adoption
-            ORDER BY members_using DESC;
-        """),
-
-        "amenitySegments": rows("""
-            SELECT *
-            FROM member_amenity_segments
-            ORDER BY total_amenity_visits DESC
-            LIMIT 500;
-        """),
-
-        "seasonalVisits": rows("""
-            SELECT month, visits, avg_stay
-            FROM seasonal_visits
-            ORDER BY month;
-        """),
-
-        "amenityRevenue": rows("""
-            SELECT amenity, revenue, transactions
-            FROM amenity_revenue
-            ORDER BY revenue DESC;
-        """),
-
-      
-
-        "marketingTargetsByCampaign": rows("""
-            SELECT campaign, COUNT(*) AS member_count
-            FROM marketing_targets
-            GROUP BY campaign
-            ORDER BY member_count DESC;
-        """),
-
-        "memberAmenityUsage": rows("""
-            SELECT
-                mau.member_id AS member_number,
-                m.member_full_name,
-                mau.amenity,
-                mau.usage_count,
-                mau.total_spend
-            FROM member_amenity_usage mau
-            LEFT JOIN members m ON mau.member_id = m.member_number
-            ORDER BY mau.total_spend DESC
-            LIMIT 2000;
-        """),
+        "seasonGroups": season_groups,
+        "seasonalVisits": seasonal_visits,
+        "seasonVisitors": season_visitors,
     }
 
+@router.post("/season-groups")
+def create_season_group(payload: dict, db: Session = Depends(get_db)):
+    row = db.execute(
+        text("""
+            INSERT INTO season_groups (group_name, group_type)
+            VALUES (:group_name, 'custom')
+            RETURNING id, group_name, group_type, created_at
+        """),
+        {"group_name": payload["group_name"]},
+    ).mappings().first()
+    db.commit()
+    return {**dict(row), "seasons": []}
 
-@router.get("/ml/seasonal-visit-details")
-def ml_seasonal_visit_details(season: str, db: Session = Depends(get_db)):
-    season_months = {
-        "Spring":      "(1,2,3)",
-        "Summer":      "(4,5,6,7)",
-        "Late Summer": "(8)",
-        "Autumn":      "(9,10)",
-        "Winter":      "(11,12)",
+
+@router.delete("/seasons/{season_id}")
+def delete_season(season_id: int, db: Session = Depends(get_db)):
+    row = db.execute(
+        text("""
+            DELETE FROM seasons
+            WHERE id = :season_id
+            RETURNING id
+        """),
+        {"season_id": season_id},
+    ).mappings().first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Season not found")
+
+    db.commit()
+    return {"ok": True, "deleted_id": season_id}
+
+
+@router.delete("/season-groups/{group_id}")
+def delete_season_group(group_id: int, db: Session = Depends(get_db)):
+    group = db.execute(
+        text("""
+            SELECT id, group_type
+            FROM season_groups
+            WHERE id = :group_id
+        """),
+        {"group_id": group_id},
+    ).mappings().first()
+
+    if not group:
+        raise HTTPException(status_code=404, detail="Season group not found")
+
+    if group["group_type"] != "custom":
+        raise HTTPException(
+            status_code=400,
+            detail="Only custom season groups can be deleted"
+        )
+
+    db.execute(
+        text("DELETE FROM seasons WHERE group_id = :group_id"),
+        {"group_id": group_id},
+    )
+
+    db.execute(
+        text("DELETE FROM season_groups WHERE id = :group_id"),
+        {"group_id": group_id},
+    )
+
+    db.commit()
+    return {"ok": True, "deleted_id": group_id}
+
+
+@router.post("/seasons")
+def create_season(payload: dict, db: Session = Depends(get_db)):
+    row = db.execute(
+        text("""
+            INSERT INTO seasons
+                (group_id, season_name, start_month, start_day, end_month, end_day, is_active)
+            VALUES
+                (:group_id, :season_name, :start_month, :start_day, :end_month, :end_day, true)
+            RETURNING id, group_id, season_name, start_month, start_day, end_month, end_day, is_active
+        """),
+        payload,
+    ).mappings().first()
+    db.commit()
+    return dict(row)
+
+
+@router.patch("/seasons/{season_id}")
+def update_season(season_id: int, payload: dict, db: Session = Depends(get_db)):
+    allowed = {
+        "season_name",
+        "start_month",
+        "start_day",
+        "end_month",
+        "end_day",
+        "is_active",
     }
-    months = season_months.get(season, "(1)")
-    result = db.execute(text(f"""
-        SELECT
-            r.member_number,
-            m.member_full_name,
-            m.member_type,
-            m.age,
-            a.country,
-            r.check_in_date,
-            r.check_out_date,
-            (r.check_out_date - r.check_in_date) AS length_of_stay,
-            r.room_type
-        FROM rooms r
-        JOIN members m ON r.member_number = m.member_number
-        LEFT JOIN member_addresses a ON m.member_number = a.member_number
-        WHERE EXTRACT(MONTH FROM r.check_in_date) IN {months}
-          AND r.check_in_date IS NOT NULL
-        ORDER BY r.check_in_date DESC;
-    """)).mappings().all()
+
+    updates = {k: v for k, v in payload.items() if k in allowed}
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    set_sql = ", ".join([f"{k} = :{k}" for k in updates])
+
+    row = db.execute(
+        text(f"""
+            UPDATE seasons
+            SET {set_sql}, updated_at = NOW()
+            WHERE id = :season_id
+            RETURNING id, group_id, season_name, start_month, start_day, end_month, end_day, is_active
+        """),
+        {**updates, "season_id": season_id},
+    ).mappings().first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Season not found")
+
+    db.commit()
+    return dict(row)
+
+@router.get("/seasons/{season_id}/members")
+def season_members(season_id: int, db: Session = Depends(get_db)):
+    season = db.execute(
+        text("""
+            SELECT id, season_name, start_month, start_day, end_month, end_day
+            FROM seasons
+            WHERE id = :season_id
+        """),
+        {"season_id": season_id},
+    ).mappings().first()
+
+    if not season:
+        raise HTTPException(status_code=404, detail="Season not found")
+
+    result = db.execute(
+        text("""
+            SELECT DISTINCT
+                f.member_number,
+                f.conf_code,
+                COALESCE(m.member_full_name, f.guest_name, f.folio_name) AS member_full_name,
+                f.guest_name,
+                f.folio_name,
+                m.member_type,
+                m.age,
+                a.country,
+                f.check_in_date,
+                f.check_out_date,
+                CASE
+                    WHEN f.check_in_date IS NOT NULL AND f.check_out_date IS NOT NULL
+                    THEN GREATEST(f.check_out_date - f.check_in_date, 0)
+                    ELSE NULL
+                END AS length_of_stay,
+                f.room_number,
+                f.villa_name,
+                f.bedroom_count,
+                f.reservation_status,
+                f.transaction_date
+            FROM folios f
+            LEFT JOIN members m
+                ON f.member_number = m.member_number
+            LEFT JOIN member_addresses a
+                ON f.member_number = a.member_number
+            WHERE f.member_number IS NOT NULL
+              AND COALESCE(f.check_in_date, f.transaction_date) IS NOT NULL
+              AND (
+                (
+                  (:start_month < :end_month)
+                  OR (:start_month = :end_month AND :start_day <= :end_day)
+                )
+                AND (
+                  EXTRACT(MONTH FROM COALESCE(f.check_in_date, f.transaction_date)) > :start_month
+                  OR (
+                    EXTRACT(MONTH FROM COALESCE(f.check_in_date, f.transaction_date)) = :start_month
+                    AND EXTRACT(DAY FROM COALESCE(f.check_in_date, f.transaction_date)) >= :start_day
+                  )
+                )
+                AND (
+                  EXTRACT(MONTH FROM COALESCE(f.check_in_date, f.transaction_date)) < :end_month
+                  OR (
+                    EXTRACT(MONTH FROM COALESCE(f.check_in_date, f.transaction_date)) = :end_month
+                    AND EXTRACT(DAY FROM COALESCE(f.check_in_date, f.transaction_date)) <= :end_day
+                  )
+                )
+                OR
+                (
+                  (:start_month > :end_month)
+                  OR (:start_month = :end_month AND :start_day > :end_day)
+                )
+                AND (
+                  (
+                    EXTRACT(MONTH FROM COALESCE(f.check_in_date, f.transaction_date)) > :start_month
+                    OR (
+                      EXTRACT(MONTH FROM COALESCE(f.check_in_date, f.transaction_date)) = :start_month
+                      AND EXTRACT(DAY FROM COALESCE(f.check_in_date, f.transaction_date)) >= :start_day
+                    )
+                  )
+                  OR
+                  (
+                    EXTRACT(MONTH FROM COALESCE(f.check_in_date, f.transaction_date)) < :end_month
+                    OR (
+                      EXTRACT(MONTH FROM COALESCE(f.check_in_date, f.transaction_date)) = :end_month
+                      AND EXTRACT(DAY FROM COALESCE(f.check_in_date, f.transaction_date)) <= :end_day
+                    )
+                  )
+                )
+              )
+            ORDER BY f.check_in_date DESC NULLS LAST, member_full_name
+            LIMIT 1000
+        """),
+        {
+            "start_month": season["start_month"],
+            "start_day": season["start_day"],
+            "end_month": season["end_month"],
+            "end_day": season["end_day"],
+        },
+    ).mappings().all()
+
     return [dict(row) for row in result]
-
-
-@router.get("/ml/season-groups")
-def get_season_groups(db: Session = Depends(get_db)):
-    """Returns all season filter groups with their seasons."""
-    result = db.execute(text("""
-        SELECT sg.id, sg.group_name, sg.group_type,
-               s.id AS season_id, s.season_name, s.start_month,
-               s.start_day, s.end_month, s.end_day, s.is_active
-        FROM season_groups sg
-        JOIN seasons s ON s.group_id = sg.id
-        ORDER BY sg.group_type, sg.id, s.start_month, s.start_day;
-    """)).mappings().all()
-    groups = {}
-    for row in result:
-        gid = row["id"]
-        if gid not in groups:
-            groups[gid] = {"id": gid, "group_name": row["group_name"],
-                           "group_type": row["group_type"], "seasons": []}
-        groups[gid]["seasons"].append({
-            "id": row["season_id"], "season_name": row["season_name"],
-            "start_month": row["start_month"], "start_day": row["start_day"],
-            "end_month": row["end_month"], "end_day": row["end_day"],
-            "is_active": row["is_active"],
-        })
-    return list(groups.values())
-
-
-@router.post("/ml/season-groups")
-def create_season_group(body: dict, db: Session = Depends(get_db)):
-    row = db.execute(text("""
-        INSERT INTO season_groups (group_name, group_type)
-        VALUES (:name, 'custom') RETURNING id;
-    """), {"name": body["group_name"]}).mappings().first()
-    db.commit()
-    return {"id": row["id"], "group_name": body["group_name"], "group_type": "custom", "seasons": []}
-
-
-@router.patch("/ml/seasons/{season_id}")
-def update_season(season_id: int, body: dict, db: Session = Depends(get_db)):
-    db.execute(text("""
-        UPDATE seasons SET
-            season_name = COALESCE(:name, season_name),
-            start_month = COALESCE(:start_month, start_month),
-            start_day   = COALESCE(:start_day, start_day),
-            end_month   = COALESCE(:end_month, end_month),
-            end_day     = COALESCE(:end_day, end_day),
-            is_active   = COALESCE(:is_active, is_active)
-        WHERE id = :id;
-    """), {
-        "id": season_id,
-        "name":        body.get("season_name"),
-        "start_month": body.get("start_month"),
-        "start_day":   body.get("start_day"),
-        "end_month":   body.get("end_month"),
-        "end_day":     body.get("end_day"),
-        "is_active":   body.get("is_active"),
-    })
-    db.commit()
-    return {"ok": True}
-
-
-@router.post("/ml/seasons")
-def add_season_to_group(body: dict, db: Session = Depends(get_db)):
-    row = db.execute(text("""
-        INSERT INTO seasons
-            (season_name, start_month, start_day, end_month, end_day, is_active, group_id)
-        VALUES (:season_name, :start_month, :start_day, :end_month, :end_day, TRUE, :group_id)
-        RETURNING id;
-    """), body).mappings().first()
-
-    db.commit()
-
-    return {
-        "id": row["id"],
-        "season_name": body["season_name"],
-        "start_month": body["start_month"],
-        "start_day": body["start_day"],
-        "end_month": body["end_month"],
-        "end_day": body["end_day"],
-        "group_id": body["group_id"],
-        "is_active": True,
-    }
 
 @router.get("/tables")
 def get_tables(db: Session = Depends(get_db)):
-    result = db.execute(text("""
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-        ORDER BY table_name;
-    """)).fetchall()
-
-    return [row[0] for row in result]
-
-@router.get("/table/{table_name}")
-def get_table_data(table_name: str, limit: int = 100,
-                    offset: int = 0, db: Session = Depends(get_db)):
-    allowed_tables = {
-        "airport_transfer_users",
-        "amenity_adoption",
-        "amenity_revenue",
-        "amenity_spend",
+    allowed_tables = [
+        "amenity_season_spend",
         "dependent_addresses",
         "dependent_phones",
         "dependents",
         "folios",
         "interests",
-        "marketing_targets",
         "member_addresses",
-        "member_amenity_segments",
-        "member_amenity_usage",
+        "member_amenity_profile",
+        "member_amenity_season_visits",
         "member_phones",
         "member_seasons",
-        "member_segments",
         "members",
         "recent_activity",
         "reservation_guests",
         "rooms",
+        "season_groups",
+        "season_villa_bedroom_summary",
+        "seasonal_visitors",
         "seasonal_visits",
         "seasons",
+        "segment_amenities",
+        "segment_spenders",
+        "segment_visitors",
         "services",
-        "statements"
+        "statements",
+    ]
+    return allowed_tables
+
+@router.get("/table/{table_name}")
+def get_table_data(table_name: str, db: Session = Depends(get_db)):
+    allowed_tables = {
+        "amenity_season_spend",
+        "dependent_addresses",
+        "dependent_phones",
+        "dependents",
+        "folios",
+        "interests",
+        "member_addresses",
+        "member_amenity_profile",
+        "member_amenity_season_visits",
+        "member_phones",
+        "member_seasons",
+        "members",
+        "recent_activity",
+        "reservation_guests",
+        "rooms",
+        "season_groups",
+        "season_villa_bedroom_summary",
+        "seasonal_visitors",
+        "seasonal_visits",
+        "seasons",
+        "segment_amenities",
+        "segment_spenders",
+        "segment_visitors",
+        "services",
+        "statements",
     }
 
     if table_name not in allowed_tables:
         raise HTTPException(status_code=400, detail="Invalid table")
 
     result = db.execute(
-        text(f"""
-            SELECT *
-            FROM {table_name}
-            LIMIT :limit
-            OFFSET :offset
-        """),
-        {"limit": limit, "offset": offset}
+        text(f"SELECT * FROM {table_name}")
     ).mappings().all()
 
     return [dict(row) for row in result]
@@ -1283,30 +698,31 @@ def search_table(
     db: Session = Depends(get_db)
 ):
     allowed_tables = {
-        "airport_transfer_users",
-        "amenity_adoption",
-        "amenity_revenue",
-        "amenity_spend",
+        "amenity_season_spend",
         "dependent_addresses",
         "dependent_phones",
         "dependents",
         "folios",
         "interests",
-        "marketing_targets",
         "member_addresses",
-        "member_amenity_segments",
-        "member_amenity_usage",
+        "member_amenity_profile",
+        "member_amenity_season_visits",
         "member_phones",
         "member_seasons",
-        "member_segments",
         "members",
         "recent_activity",
         "reservation_guests",
         "rooms",
+        "season_groups",
+        "season_villa_bedroom_summary",
+        "seasonal_visitors",
         "seasonal_visits",
         "seasons",
+        "segment_amenities",
+        "segment_spenders",
+        "segment_visitors",
         "services",
-        "statements"
+        "statements",
     }
 
     if table_name not in allowed_tables:
@@ -1323,6 +739,439 @@ def search_table(
     ).mappings().all()
 
     return [dict(row) for row in result]
+
+
+AMENITY_CASE_SQL = """
+    CASE
+        WHEN description ~* '\\m(spa|massage|facial)\\M' THEN 'Spa'
+        WHEN description ~* '\\m(golf|pro shop|cart)\\M' THEN 'Golf'
+        WHEN description ~* '\\mgrill\\M' THEN 'Grill'
+        WHEN description ~* '\\mbar\\M' THEN 'Bar'
+        WHEN description ~* '\\m(restaurant|dinner|lunch|breakfast)\\M' THEN 'Restaurant'
+        WHEN description ~* '\\mtennis\\M' THEN 'Tennis'
+        WHEN description ~* '\\mboutique\\M' THEN 'Boutique'
+        WHEN description ~* '\\mshop\\M' THEN 'Shop'
+        WHEN description ~* '\\mcommissary\\M' THEN 'Commissary'
+        ELSE NULL
+    END
+"""
+
+AMENITY_EXCLUDED_SQL = """
+    description !~* '\\m(villa|rental|airport|transfer|shuttle|transport|transportation|membership|dues|fee)\\M'
+"""
+
+SEASON_JOIN_SQL = """
+    JOIN active_seasons s
+      ON (
+        (
+          s.start_month < s.end_month
+          OR (s.start_month = s.end_month AND s.start_day <= s.end_day)
+        )
+        AND (
+          EXTRACT(MONTH FROM ref_date)::INT > s.start_month
+          OR (
+            EXTRACT(MONTH FROM ref_date)::INT = s.start_month
+            AND EXTRACT(DAY FROM ref_date)::INT >= s.start_day
+          )
+        )
+        AND (
+          EXTRACT(MONTH FROM ref_date)::INT < s.end_month
+          OR (
+            EXTRACT(MONTH FROM ref_date)::INT = s.end_month
+            AND EXTRACT(DAY FROM ref_date)::INT <= s.end_day
+          )
+        )
+      )
+      OR (
+        (
+          s.start_month > s.end_month
+          OR (s.start_month = s.end_month AND s.start_day > s.end_day)
+        )
+        AND (
+          EXTRACT(MONTH FROM ref_date)::INT > s.start_month
+          OR (
+            EXTRACT(MONTH FROM ref_date)::INT = s.start_month
+            AND EXTRACT(DAY FROM ref_date)::INT >= s.start_day
+          )
+          OR EXTRACT(MONTH FROM ref_date)::INT < s.end_month
+          OR (
+            EXTRACT(MONTH FROM ref_date)::INT = s.end_month
+            AND EXTRACT(DAY FROM ref_date)::INT <= s.end_day
+          )
+        )
+      )
+"""
+
+
+def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
+    active_season_count = db.execute(
+        text("""
+            SELECT COUNT(*)
+            FROM seasons
+            WHERE group_id = :group_id
+              AND is_active = TRUE
+        """),
+        {"group_id": group_id},
+    ).scalar() or 0
+
+    if active_season_count == 0:
+        return {
+            "amenitySeasonSpend": [],
+            "memberAmenityProfile": [],
+            "memberAmenitySeasonVisits": [],
+            "seasonVillaBedroom": [],
+        }
+
+    def rows(sql: str):
+        return [
+            dict(row)
+            for row in db.execute(text(sql), {"group_id": group_id}).mappings().all()
+        ]
+
+    base_ctes = f"""
+        WITH active_seasons AS (
+            SELECT id, season_name, start_month, start_day, end_month, end_day
+            FROM seasons
+            WHERE group_id = :group_id
+              AND is_active = TRUE
+        ),
+        amenity_rows AS (
+            SELECT
+                f.member_number AS member_id,
+                COALESCE(
+                    NULLIF(TRIM(f.guest_name), ''),
+                    NULLIF(TRIM(m.member_full_name), ''),
+                    NULLIF(TRIM(m.member_name), '')
+                ) AS member_full_name,
+
+                m.email,
+                mp.phone_number AS telephone,
+                TRIM(
+                    CONCAT_WS(
+                        ', ',
+                        NULLIF(a.address_line1, ''),
+                        NULLIF(a.address_line2, ''),
+                        NULLIF(a.city, ''),
+                        NULLIF(a.state, ''),
+                        NULLIF(a.postal_code, ''),
+                        NULLIF(a.country, '')
+                    )
+                ) AS address,
+                a.country,
+                a.state,
+                m.prefix AS title,
+                m.date_of_birth AS dob,
+
+                f.description,
+                COALESCE(f.amount, 0) AS amount,
+                COALESCE(f.check_in_date, f.transaction_date)::DATE AS ref_date,
+                f.check_in_date,
+                f.check_out_date,
+                {AMENITY_CASE_SQL} AS amenity
+            FROM folios f
+            LEFT JOIN members m
+                ON f.member_number = m.member_number
+            LEFT JOIN member_addresses a
+                ON f.member_number = a.member_number
+            LEFT JOIN (
+                SELECT DISTINCT ON (member_number)
+                    member_number,
+                    phone_number
+                FROM member_phones
+                WHERE phone_number IS NOT NULL
+                ORDER BY
+                    member_number,
+                    CASE phone_type
+                        WHEN 'cell' THEN 1
+                        WHEN 'home' THEN 2
+                        WHEN 'business' THEN 3
+                        ELSE 4
+                    END
+            ) mp
+                ON f.member_number = mp.member_number
+            WHERE f.member_number IS NOT NULL
+              AND f.description IS NOT NULL
+              AND COALESCE(f.check_in_date, f.transaction_date) IS NOT NULL
+              AND {AMENITY_EXCLUDED_SQL}
+        ),
+        season_amenity_rows AS (
+            SELECT
+                ar.member_id,
+                ar.member_full_name,
+                ar.email,
+                ar.telephone,
+                ar.address,
+                ar.country,
+                ar.state,
+                ar.title,
+                ar.dob,
+                ar.description,
+                ar.amount,
+                ar.ref_date,
+                ar.check_in_date,
+                ar.check_out_date,
+                ar.amenity,
+                EXTRACT(YEAR FROM ar.ref_date)::INT AS year,
+                s.season_name AS season
+            FROM amenity_rows ar
+            {SEASON_JOIN_SQL}
+            WHERE ar.amenity IS NOT NULL
+        )
+    """
+
+    spend_raw = rows(f"""
+        {base_ctes}
+        SELECT year,
+               amenity,
+               season,
+               ROUND(SUM(amount)::NUMERIC, 2) AS total_spend,
+               COUNT(*)::INT AS transaction_count,
+               ROUND((SUM(amount) / NULLIF(COUNT(*), 0))::NUMERIC, 2) AS avg_spend_per_visit,
+               COUNT(DISTINCT member_id)::INT AS member_count
+        FROM season_amenity_rows
+        GROUP BY year, amenity, season
+        ORDER BY year DESC, season, total_spend DESC
+    """)
+
+    profile_raw = rows(f"""
+        {base_ctes},
+        per_member_amenity AS (
+            SELECT year,
+                   member_id,
+                   MAX(member_full_name) AS member_full_name,
+                   amenity,
+                   COUNT(*) AS usage_count,
+                   SUM(amount) AS amenity_spend
+            FROM season_amenity_rows
+            GROUP BY year, member_id, amenity
+        ),
+        ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY year, member_id
+                       ORDER BY amenity_spend DESC NULLS LAST
+                   ) AS rn,
+                   SUM(amenity_spend) OVER (PARTITION BY year, member_id) AS total_amenity_spend
+            FROM per_member_amenity
+        )
+        SELECT year,
+               member_id,
+               member_full_name,
+               amenity AS top_amenity,
+               ROUND(amenity_spend::NUMERIC, 2) AS top_amenity_spend,
+               ROUND(total_amenity_spend::NUMERIC, 2) AS total_amenity_spend
+        FROM ranked
+        WHERE rn = 1
+        ORDER BY year DESC, total_amenity_spend DESC NULLS LAST
+        LIMIT 1000
+    """)
+
+    visits_raw = rows(f"""
+        {base_ctes}
+        SELECT year,
+               member_id,
+               member_full_name,
+               email,
+               telephone,
+               address,
+               country,
+               state,
+               title,
+               TO_CHAR(dob, 'Mon DD, YYYY') AS dob,
+               season,
+               amenity,
+               COUNT(*)::INT AS usage_count,
+               ROUND(SUM(amount)::NUMERIC, 2) AS total_spend,
+               TO_CHAR(check_in_date, 'Mon DD, YYYY') AS check_in_fmt,
+               TO_CHAR(check_out_date, 'Mon DD, YYYY') AS check_out_fmt
+        FROM season_amenity_rows
+        GROUP BY year,
+                 member_id,
+                 member_full_name,
+                 email,
+                 telephone,
+                 address,
+                 country,
+                 state,
+                 title,
+                 dob,
+                 season,
+                 check_in_date,
+                 check_out_date,
+                 amenity
+        ORDER BY check_in_date DESC NULLS LAST
+        LIMIT 2000
+    """)
+
+    villa_raw = rows(f"""
+        WITH active_seasons AS (
+            SELECT id, season_name, start_month, start_day, end_month, end_day
+            FROM seasons
+            WHERE group_id = :group_id
+              AND is_active = TRUE
+        ),
+        stay_rows AS (
+            SELECT
+                f.member_number,
+                f.check_in_date::DATE AS ref_date,
+                EXTRACT(YEAR FROM f.check_in_date)::INT AS year,
+                f.check_in_date,
+                f.check_out_date,
+                f.villa_name,
+                f.bedroom_count,
+                GREATEST((f.check_out_date - f.check_in_date), 0) AS nights
+            FROM folios f
+            WHERE f.member_number IS NOT NULL
+              AND f.check_in_date IS NOT NULL
+        ),
+        season_stay_rows AS (
+            SELECT sr.*, s.season_name AS season
+            FROM stay_rows sr
+            {SEASON_JOIN_SQL}
+        ),
+        season_totals AS (
+            SELECT year,
+                   season,
+                   COUNT(*)::INT AS total_bookings,
+                   COALESCE(SUM(nights), 0)::INT AS total_nights,
+                   ROUND(AVG(nights)::NUMERIC, 2) AS avg_nights,
+                   COUNT(DISTINCT member_number)::INT AS unique_members
+            FROM season_stay_rows
+            GROUP BY year, season
+        ),
+        villa_rank AS (
+            SELECT year,
+                   season,
+                   villa_name,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY year, season
+                       ORDER BY COUNT(*) DESC, villa_name
+                   ) AS rn
+            FROM season_stay_rows
+            WHERE villa_name IS NOT NULL
+            GROUP BY year, season, villa_name
+        ),
+        bedroom_rank AS (
+            SELECT year,
+                   season,
+                   bedroom_count,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY year, season
+                       ORDER BY COUNT(*) DESC, bedroom_count
+                   ) AS rn
+            FROM season_stay_rows
+            WHERE bedroom_count IS NOT NULL
+            GROUP BY year, season, bedroom_count
+        ),
+        bedroom_dist AS (
+            SELECT year,
+                   season,
+                   jsonb_object_agg(bedroom_count::INT::TEXT, count)::TEXT AS bedroom_distribution
+            FROM (
+                SELECT year, season, bedroom_count, COUNT(*)::INT AS count
+                FROM season_stay_rows
+                WHERE bedroom_count IS NOT NULL
+                GROUP BY year, season, bedroom_count
+            ) counts
+            GROUP BY year, season
+        )
+        SELECT st.year,
+               st.season,
+               st.total_bookings,
+               st.total_nights,
+               st.avg_nights,
+               st.unique_members,
+               vr.villa_name AS top_villa,
+               br.bedroom_count::INT AS top_bedroom_count,
+               bd.bedroom_distribution
+        FROM season_totals st
+        LEFT JOIN villa_rank vr ON vr.year = st.year AND vr.season = st.season AND vr.rn = 1
+        LEFT JOIN bedroom_rank br ON br.year = st.year AND br.season = st.season AND br.rn = 1
+        LEFT JOIN bedroom_dist bd ON bd.year = st.year AND bd.season = st.season
+        ORDER BY st.year DESC, st.total_bookings DESC
+    """)
+
+    return {
+        "amenitySeasonSpend": spend_raw,
+        "memberAmenityProfile": profile_raw,
+        "memberAmenitySeasonVisits": visits_raw,
+        "seasonVillaBedroom": villa_raw,
+    }
+
+
+@router.get("/ml/amenity-season-insights")
+def ml_amenity_season_insights(
+    group_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    if group_id is not None:
+        return _ml_amenity_season_insights_for_group(group_id, db)
+
+    def rows(sql: str):
+        return [dict(row) for row in db.execute(text(sql)).mappings().all()]
+
+    spend_raw = rows("""
+        SELECT amenity,
+               season,
+               total_spend,
+               transaction_count,
+               avg_spend_per_visit,
+               member_count
+        FROM amenity_season_spend
+        ORDER BY season, total_spend DESC
+    """)
+
+    profile_raw = rows("""
+        SELECT member_id,
+               member_full_name,
+               top_amenity,
+               top_amenity_spend,
+               total_amenity_spend
+        FROM member_amenity_profile
+        ORDER BY total_amenity_spend DESC NULLS LAST
+        LIMIT 1000
+    """)
+
+    visits_raw = rows("""
+        SELECT member_id,
+               member_full_name,
+               email,
+               telephone,
+               address,
+               country,
+               state,
+               title,
+               dob,
+               season,
+               amenity,
+               usage_count,
+               total_spend,
+               check_in_fmt,
+               check_out_fmt
+        FROM member_amenity_season_visits
+        ORDER BY check_in_fmt DESC NULLS LAST
+        LIMIT 2000
+    """)
+
+    villa_raw = rows("""
+        SELECT season,
+               total_bookings,
+               total_nights,
+               avg_nights,
+               unique_members,
+               top_villa,
+               top_bedroom_count,
+               bedroom_distribution
+        FROM season_villa_bedroom_summary
+        ORDER BY total_bookings DESC
+    """)
+
+    return {
+        "amenitySeasonSpend": spend_raw,
+        "memberAmenityProfile": profile_raw,
+        "memberAmenitySeasonVisits": visits_raw,
+        "seasonVillaBedroom": villa_raw,
+    }
 
 #-----------------------------#
 # Endpoints for Segmentation
@@ -1350,3 +1199,824 @@ def member_segments(db: Session = Depends(get_db)):
         "visitors": [dict(r) for r in visitors],
         "amenities": [dict(r) for r in amenities]
     }
+
+@router.get("/ml/segment-config")
+def get_segment_config(db: Session = Depends(get_db)):
+    rows = db.execute(
+        text("SELECT key, value FROM segment_config WHERE key IN ('high_spend_threshold', 'low_spend_threshold')")
+    ).mappings().all()
+    return {row["key"]: float(row["value"]) for row in rows}
+
+
+@router.patch("/ml/segment-config")
+def update_segment_config(payload: dict, db: Session = Depends(get_db)):
+    allowed_keys = {"high_spend_threshold", "low_spend_threshold"}
+    updates = {k: v for k, v in payload.items() if k in allowed_keys}
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid keys provided")
+
+    for key, value in updates.items():
+        db.execute(
+            text("""
+                INSERT INTO segment_config (key, value) VALUES (:key, :value)
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+            """),
+            {"key": key, "value": value},
+        )
+
+    db.commit()
+    return {"ok": True, "updated": updates}
+
+# villa
+
+
+def rows(db: Session, sql: str, params: dict | None = None):
+    return [dict(row) for row in db.execute(text(sql), params or {}).mappings().all()]
+
+
+def one(db: Session, sql: str, params: dict | None = None):
+    return dict(db.execute(text(sql), params or {}).mappings().first() or {})
+
+
+def date_filter_sql(alias="f"):
+    return f"""
+      AND (
+        :year IS NULL
+        OR (
+          {alias}.check_in_date <= MAKE_DATE(:year, 12, 31)
+          AND {alias}.check_out_date >= MAKE_DATE(:year, 1, 1)
+        )
+      )
+      AND (
+        :month IS NULL
+        OR (
+          :year IS NOT NULL
+          AND {alias}.check_in_date <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::DATE
+          AND {alias}.check_out_date >= MAKE_DATE(:year, :month, 1)
+        )
+        OR (
+          :year IS NULL
+          AND (
+            EXTRACT(MONTH FROM {alias}.check_in_date)::INT = :month
+            OR EXTRACT(MONTH FROM {alias}.check_out_date)::INT = :month
+          )
+        )
+      )
+    """
+
+
+def filter_params(year: int | None, month: int | None):
+    return {"year": year, "month": month}
+
+
+def valid_booking_sql(alias="f"):
+    return f"""
+      {alias}.conf_code IS NOT NULL
+      AND {alias}.check_in_date IS NOT NULL
+      AND {alias}.check_out_date IS NOT NULL
+      AND COALESCE(LOWER({alias}.reservation_status), '') NOT IN (
+        'cancelled', 'canceled', 'no-show'
+      )
+    """
+
+
+
+
+@router.get("/villa-stats")
+def villa_stats(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    # One row per villa + bedroom count.
+    # This prevents villas with multiple bedroom configurations from being collapsed
+    # into a single comma-separated bedroom_counts value.
+    return rows(db, f"""
+        WITH booking_rows AS (
+            SELECT
+                f.conf_code,
+                MAX(f.villa_name) AS villa_name,
+                MAX(f.bedroom_count) AS bedroom_count,
+                MAX(f.member_number) AS member_number,
+                MAX(f.persons) AS persons,
+                MAX(f.check_out_date - f.check_in_date) AS nights,
+                SUM(
+                    CASE
+                        WHEN f.description ILIKE '%villa%'
+                          OR f.description ILIKE '%room%'
+                          OR f.description ILIKE '%rental%'
+                          OR f.description ILIKE '%accommodation%'
+                        THEN COALESCE(f.amount, 0)
+                        ELSE 0
+                    END
+                ) AS revenue
+            FROM folios f
+            WHERE f.conf_code IS NOT NULL
+              AND f.villa_name IS NOT NULL
+              AND f.check_in_date IS NOT NULL
+              AND f.check_out_date IS NOT NULL
+              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+                'cancelled', 'canceled', 'no-show'
+              )
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code
+        )
+        SELECT
+            villa_name,
+            bedroom_count,
+            bedroom_count::text AS bedroom_counts,
+            bedroom_count AS min_bedrooms,
+            bedroom_count AS max_bedrooms,
+            COUNT(*) AS bookings,
+            SUM(nights) AS total_nights,
+            ROUND(AVG(nights)::numeric, 1) AS avg_stay,
+            COUNT(DISTINCT member_number) AS unique_members,
+            SUM(persons) AS total_guests,
+            ROUND(AVG(persons)::numeric, 1) AS avg_party_size,
+            SUM(revenue) AS revenue
+        FROM booking_rows
+        GROUP BY villa_name, bedroom_count
+        ORDER BY bookings DESC, villa_name, bedroom_count NULLS LAST
+    """, filter_params(year, month))
+
+@router.get("/villa-monthly")
+def villa_monthly(
+    villa: str = Query(...),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
+        WITH booking_rows AS (
+            SELECT
+                f.conf_code,
+                MIN(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                MAX(f.check_out_date - f.check_in_date) AS nights,
+                SUM(
+                    CASE
+                        WHEN f.description ILIKE '%villa%'
+                          OR f.description ILIKE '%room%'
+                          OR f.description ILIKE '%rental%'
+                          OR f.description ILIKE '%accommodation%'
+                        THEN COALESCE(f.amount, 0)
+                        ELSE 0
+                    END
+                ) AS revenue
+            FROM folios f
+            WHERE f.conf_code IS NOT NULL
+              AND f.villa_name = :villa
+              AND f.check_in_date IS NOT NULL
+              AND f.check_out_date IS NOT NULL
+              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+                'cancelled', 'canceled', 'no-show'
+              )
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code
+        )
+        SELECT
+          TO_CHAR(check_in_date, 'Mon') AS month,
+          EXTRACT(MONTH FROM check_in_date)::int AS month_num,
+          COUNT(*) AS bookings,
+          COALESCE(SUM(revenue), 0) AS revenue
+        FROM booking_rows
+        GROUP BY month, month_num
+        ORDER BY month_num
+    """, {"villa": villa, **filter_params(year, month)})
+
+@router.get("/bookings-by-bedroom")
+def bookings_by_bedroom(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
+        SELECT
+          f.bedroom_count AS beds,
+          COUNT(DISTINCT f.conf_code) AS bookings,
+          SUM(f.check_out_date - f.check_in_date) AS total_nights,
+          ROUND(AVG(f.check_out_date - f.check_in_date), 1) AS avg_stay
+        FROM folios f
+        WHERE f.bedroom_count IS NOT NULL
+          AND f.check_in_date IS NOT NULL
+          AND f.check_out_date IS NOT NULL
+          AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+            'cancelled', 'canceled', 'no-show'
+          )
+          {date_filter_sql("f")}
+        GROUP BY f.bedroom_count
+        ORDER BY f.bedroom_count
+    """, filter_params(year, month))
+
+
+@router.get("/bedroom-bookings")
+def bedroom_bookings(
+    beds: int = Query(...),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
+        WITH booking_rows AS (
+            SELECT
+                f.conf_code,
+                MAX(f.villa_name) AS villa_name,
+                MAX(f.member_number) AS member_number,
+                MAX(m.member_full_name) AS member_full_name,
+                MAX(m.member_name) AS member_name,
+                MAX(m.email) AS email,
+                MAX(m.prefix) AS title,
+                MAX(mp.phone_number) AS phone,
+                MAX(TRIM(
+                    CONCAT_WS(
+                        ', ',
+                        NULLIF(a.address_line1, ''),
+                        NULLIF(a.address_line2, ''),
+                        NULLIF(a.city, ''),
+                        NULLIF(a.state, ''),
+                        NULLIF(a.postal_code, ''),
+                        NULLIF(a.country, '')
+                    )
+                )) AS address,
+                MAX(a.country) AS country,
+                MAX(a.state) AS state,
+                MAX(f.guest_name) AS guest_name,
+                MAX(f.persons) AS persons,
+                MAX(f.bedroom_count) AS bedroom_count,
+                MIN(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                MAX(f.check_out_date - f.check_in_date) AS nights
+            FROM folios f
+            LEFT JOIN members m
+              ON m.member_number = f.member_number
+            LEFT JOIN member_addresses a
+              ON a.member_number = f.member_number
+            LEFT JOIN (
+                SELECT DISTINCT ON (member_number)
+                    member_number,
+                    phone_number
+                FROM member_phones
+                WHERE phone_number IS NOT NULL
+                ORDER BY
+                    member_number,
+                    CASE phone_type
+                        WHEN 'cell' THEN 1
+                        WHEN 'home' THEN 2
+                        WHEN 'business' THEN 3
+                        ELSE 4
+                    END
+            ) mp
+              ON mp.member_number = f.member_number
+            WHERE f.conf_code IS NOT NULL
+              AND f.bedroom_count = :beds
+              AND f.check_in_date IS NOT NULL
+              AND f.check_out_date IS NOT NULL
+              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+                'cancelled', 'canceled', 'no-show'
+              )
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code
+        )
+        SELECT *
+        FROM booking_rows
+        ORDER BY check_in_date DESC
+    """, {"beds": beds, **filter_params(year, month)})
+
+@router.get("/monthly-revenue")
+def monthly_revenue(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
+        WITH booking_rows AS (
+            SELECT
+                f.conf_code,
+                MIN(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                SUM(
+                    CASE
+                        WHEN f.description ILIKE '%villa%'
+                          OR f.description ILIKE '%room%'
+                          OR f.description ILIKE '%rental%'
+                          OR f.description ILIKE '%accommodation%'
+                        THEN COALESCE(f.amount, 0)
+                        ELSE 0
+                    END
+                ) AS revenue
+            FROM folios f
+            WHERE f.conf_code IS NOT NULL
+              AND f.check_in_date IS NOT NULL
+              AND f.check_out_date IS NOT NULL
+              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+                'cancelled', 'canceled', 'no-show'
+              )
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code
+        )
+        SELECT
+          TO_CHAR(check_in_date, 'Mon') AS month,
+          EXTRACT(MONTH FROM check_in_date)::int AS month_num,
+          COUNT(*) AS bookings,
+          COALESCE(SUM(revenue), 0) AS revenue
+        FROM booking_rows
+        GROUP BY month, month_num
+        ORDER BY month_num
+    """, filter_params(year, month))
+
+@router.get("/visits-tab-summary")
+def visits_tab_summary(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return one(db, f"""
+        WITH bookings AS (
+            SELECT
+                f.conf_code,
+                MAX(f.member_number) AS member_number,
+                MAX(m.member_or_guest) AS member_or_guest,
+                MAX(f.persons) AS persons,
+                MAX(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                MAX(f.check_out_date - f.check_in_date) AS nights,
+                SUM(
+                    CASE
+                        WHEN f.description ILIKE '%villa%'
+                          OR f.description ILIKE '%room%'
+                          OR f.description ILIKE '%rental%'
+                          OR f.description ILIKE '%accommodation%'
+                        THEN COALESCE(f.amount, 0)
+                        ELSE 0
+                    END
+                ) AS villa_revenue
+            FROM folios f
+            LEFT JOIN members m
+              ON m.member_number = f.member_number
+            LEFT JOIN member_addresses a
+              ON a.member_number = f.member_number
+            LEFT JOIN (
+                SELECT DISTINCT ON (member_number)
+                    member_number,
+                    phone_number
+                FROM member_phones
+                WHERE phone_number IS NOT NULL
+                ORDER BY
+                    member_number,
+                    CASE phone_type
+                        WHEN 'cell' THEN 1
+                        WHEN 'home' THEN 2
+                        WHEN 'business' THEN 3
+                        ELSE 4
+                    END
+            ) mp
+              ON mp.member_number = f.member_number
+            WHERE {valid_booking_sql("f")}
+              AND f.villa_name IS NOT NULL
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code
+        )
+        SELECT
+            COUNT(DISTINCT member_number) FILTER (
+                WHERE member_or_guest = 'Member'
+                   OR member_or_guest IS NULL
+            ) AS total_members_booked,
+
+            COUNT(DISTINCT member_number) FILTER (
+                WHERE member_or_guest = 'Guest'
+            ) AS total_guests_booked,
+
+            ROUND(AVG(nights)::numeric, 1) AS avg_length_of_stay,
+            ROUND(AVG(persons)::numeric, 1) AS avg_party_size,
+            COALESCE(SUM(nights), 0) AS total_room_nights,
+            COALESCE(SUM(villa_revenue), 0) AS villa_rental_revenue
+        FROM bookings
+    """, filter_params(year, month))
+
+@router.get("/villa-bookings")
+def villa_bookings(
+    villa: str = Query(...),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return rows(db, f"""
+        WITH booking_rows AS (
+            SELECT
+                f.conf_code,
+                MAX(f.villa_name) AS villa_name,
+                MAX(f.member_number) AS member_number,
+                MAX(m.member_full_name) AS member_full_name,
+                MAX(m.member_name) AS member_name,
+                MAX(m.email) AS email,
+                MAX(m.prefix) AS title,
+                MAX(mp.phone_number) AS phone,
+                MAX(TRIM(
+                    CONCAT_WS(
+                        ', ',
+                        NULLIF(a.address_line1, ''),
+                        NULLIF(a.address_line2, ''),
+                        NULLIF(a.city, ''),
+                        NULLIF(a.state, ''),
+                        NULLIF(a.postal_code, ''),
+                        NULLIF(a.country, '')
+                    )
+                )) AS address,
+                MAX(a.country) AS country,
+                MAX(a.state) AS state,
+                MAX(f.guest_name) AS guest_name,
+                MAX(f.persons) AS persons,
+                MAX(f.bedroom_count) AS bedroom_count,
+                MIN(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                MAX(f.check_out_date - f.check_in_date) AS nights,
+                SUM(
+                    CASE
+                        WHEN f.description ILIKE '%villa%'
+                          OR f.description ILIKE '%room%'
+                          OR f.description ILIKE '%rental%'
+                          OR f.description ILIKE '%accommodation%'
+                        THEN COALESCE(f.amount, 0)
+                        ELSE 0
+                    END
+                ) AS revenue
+            FROM folios f
+            LEFT JOIN members m
+              ON m.member_number = f.member_number
+            LEFT JOIN member_addresses a
+              ON a.member_number = f.member_number
+            LEFT JOIN (
+                SELECT DISTINCT ON (member_number)
+                    member_number,
+                    phone_number
+                FROM member_phones
+                WHERE phone_number IS NOT NULL
+                ORDER BY
+                    member_number,
+                    CASE phone_type
+                        WHEN 'cell' THEN 1
+                        WHEN 'home' THEN 2
+                        WHEN 'business' THEN 3
+                        ELSE 4
+                    END
+            ) mp
+              ON mp.member_number = f.member_number
+            WHERE f.conf_code IS NOT NULL
+              AND f.villa_name = :villa
+              AND f.check_in_date IS NOT NULL
+              AND f.check_out_date IS NOT NULL
+              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+                'cancelled', 'canceled', 'no-show'
+              )
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code
+        )
+        SELECT
+            br.*,
+            COALESCE(
+                json_agg(
+                    DISTINCT jsonb_build_object(
+                        'guest_name', rg.guest_name,
+                        'member_number', rg.member_number,
+                        'is_owner', rg.is_owner,
+                        'room_number', rg.room_number,
+                        'check_in_date', rg.check_in_date,
+                        'check_out_date', rg.check_out_date
+                    )
+                ) FILTER (WHERE rg.guest_name IS NOT NULL),
+                '[]'
+            ) AS guests
+        FROM booking_rows br
+        LEFT JOIN reservation_guests rg
+          ON rg.conf_code = br.conf_code
+        GROUP BY
+            br.conf_code,
+            br.villa_name,
+            br.member_number,
+            br.member_full_name,
+            br.member_name,
+            br.email,
+            br.title,
+            br.phone,
+            br.address,
+            br.country,
+            br.state,
+            br.guest_name,
+            br.persons,
+            br.bedroom_count,
+            br.check_in_date,
+            br.check_out_date,
+            br.nights,
+            br.revenue
+        ORDER BY br.check_in_date DESC
+    """, {"villa": villa, **filter_params(year, month)})
+
+
+@router.get("/booked-people")
+def booked_people(
+    kind: str = Query(pattern="^(members|guests)$"),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    member_filter = """
+      AND (
+        m.member_or_guest = 'Member'
+        OR m.member_or_guest IS NULL
+      )
+    """ if kind == "members" else """
+      AND m.member_or_guest = 'Guest'
+    """
+
+    return rows(db, f"""
+        WITH booked_accounts AS (
+            SELECT
+                f.conf_code,
+                f.member_number,
+                MAX(m.member_full_name) AS member_full_name,
+                MAX(m.member_name) AS member_name,
+                MAX(m.member_type) AS member_type,
+                MAX(m.member_or_guest) AS member_or_guest,
+                MAX(m.email) AS email,
+                MAX(m.prefix) AS title,
+                MAX(mp.phone_number) AS phone,
+                MAX(TRIM(
+                    CONCAT_WS(
+                        ', ',
+                        NULLIF(a.address_line1, ''),
+                        NULLIF(a.address_line2, ''),
+                        NULLIF(a.city, ''),
+                        NULLIF(a.state, ''),
+                        NULLIF(a.postal_code, ''),
+                        NULLIF(a.country, '')
+                    )
+                )) AS address,
+                MAX(a.country) AS country,
+                MAX(a.state) AS state,
+                MAX(f.guest_name) AS folio_guest_name,
+                MAX(f.persons) AS persons,
+                MIN(f.check_in_date) AS check_in_date,
+                MAX(f.check_out_date) AS check_out_date,
+                GREATEST(MAX(f.check_out_date) - MIN(f.check_in_date), 0) AS nights
+            FROM folios f
+            LEFT JOIN members m
+              ON m.member_number = f.member_number
+            LEFT JOIN member_addresses a
+              ON a.member_number = f.member_number
+            LEFT JOIN (
+                SELECT DISTINCT ON (member_number)
+                    member_number,
+                    phone_number
+                FROM member_phones
+                WHERE phone_number IS NOT NULL
+                ORDER BY
+                    member_number,
+                    CASE phone_type
+                        WHEN 'cell' THEN 1
+                        WHEN 'home' THEN 2
+                        WHEN 'business' THEN 3
+                        ELSE 4
+                    END
+            ) mp
+              ON mp.member_number = f.member_number
+            WHERE {valid_booking_sql("f")}
+              {member_filter}
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code, f.member_number
+        ),
+        reservation_guest_rows AS (
+            SELECT
+                ba.conf_code,
+                rg.member_number AS reservation_member_number,
+                rg.guest_name,
+                rg.room_number,
+                rg.is_owner,
+                rg.check_in_date AS guest_check_in_date,
+                rg.check_out_date AS guest_check_out_date
+            FROM booked_accounts ba
+            LEFT JOIN reservation_guests rg
+              ON rg.conf_code = ba.conf_code
+        )
+        SELECT
+            ba.member_number,
+            ba.member_full_name,
+            ba.member_name,
+            ba.member_type,
+            ba.member_or_guest,
+            ba.email,
+            ba.title,
+            ba.phone,
+            ba.address,
+            ba.country,
+            ba.state,
+            MAX(ba.folio_guest_name) AS folio_guest_name,
+            COUNT(DISTINCT ba.conf_code) AS bookings,
+            MIN(ba.check_in_date) AS first_check_in,
+            MAX(ba.check_out_date) AS last_check_out,
+           SUM(DISTINCT ba.nights) AS nights,
+            SUM(COALESCE(ba.persons, 0)) AS total_party_size,
+            COALESCE(
+                json_agg(
+                    DISTINCT jsonb_build_object(
+                        'guest_name', rgr.guest_name,
+                        'member_number', rgr.reservation_member_number,
+                        'room_number', rgr.room_number,
+                        'is_owner', rgr.is_owner,
+                        'check_in_date', rgr.guest_check_in_date,
+                        'check_out_date', rgr.guest_check_out_date
+                    )
+                ) FILTER (WHERE rgr.guest_name IS NOT NULL),
+                '[]'
+            ) AS reservation_guests
+        FROM booked_accounts ba
+        LEFT JOIN reservation_guest_rows rgr
+          ON rgr.conf_code = ba.conf_code
+        GROUP BY
+            ba.member_number,
+            ba.member_full_name,
+            ba.member_name,
+            ba.member_type,
+            ba.member_or_guest,
+            ba.email,
+            ba.title,
+            ba.phone,
+            ba.address,
+            ba.country,
+            ba.state
+        ORDER BY bookings DESC, member_full_name, member_name
+        LIMIT 1000
+    """, filter_params(year, month))
+
+@router.get("/visits-rooms-dashboard")
+def visits_rooms_dashboard(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    villa: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    summary = visits_tab_summary(year=year, month=month, db=db)
+    villa_stats_data = villa_stats(year=year, month=month, db=db)
+    bedroom_stats = bookings_by_bedroom(year=year, month=month, db=db)
+    monthly_revenue_data = monthly_revenue(year=year, month=month, db=db)
+
+    selected_villa = villa
+    if not selected_villa and villa_stats_data:
+        selected_villa = villa_stats_data[0].get("villa_name")
+
+    villa_monthly_data = (
+        villa_monthly(
+            villa=selected_villa,
+            year=year,
+            month=month,
+            db=db,
+        )
+        if selected_villa
+        else []
+    )
+
+    return {
+        "summary": summary,
+        "villa_stats": villa_stats_data,
+        "bookings_by_bedroom": bedroom_stats,
+        "monthly_revenue": monthly_revenue_data,
+        "villa_monthly": villa_monthly_data,
+        "selected_villa": selected_villa,
+    }
+
+#Demographics tables
+US_STATE_CODES = {
+    "AL", "AK", "AZ", "AR", "CA",
+    "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA",
+    "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO",
+    "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH",
+    "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT",
+    "VA", "WA", "WV", "WI", "WY",
+    "DC",
+}
+
+@router.get("/state-accounts/{state_code}")
+def state_accounts(
+    state_code: str,
+    db: Session = Depends(get_db),
+):
+    normalized_state = state_code.strip().upper()
+
+    if normalized_state not in US_STATE_CODES:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid US state abbreviation",
+        )
+
+    result = db.execute(
+        text("""
+            SELECT DISTINCT ON (m.member_number)
+                m.member_number,
+                m.member_full_name,
+                m.member_name,
+                m.member_or_guest,
+                m.member_type,
+                m.status,
+                m.age,
+                m.gender,
+                m.email,
+                m.occupation,
+                m.employer,
+                m.since_date,
+                ma.address_line1,
+                ma.address_line2,
+                ma.city,
+                UPPER(TRIM(ma.state)) AS state,
+                ma.postal_code,
+                ma.country
+            FROM members m
+            INNER JOIN member_addresses ma
+                ON ma.member_number = m.member_number
+            WHERE UPPER(TRIM(ma.state)) = :state_code
+            ORDER BY
+                m.member_number,
+                ma.city NULLS LAST,
+                ma.address_line1 NULLS LAST
+        """),
+        {"state_code": normalized_state},
+    ).mappings().all()
+
+    return [dict(row) for row in result]
+
+@router.get("/account-category/{category}")
+def account_category_details(
+    category: str,
+    db: Session = Depends(get_db),
+):
+    normalized_category = category.strip().lower()
+
+    allowed_categories = {
+        "member": "Member",
+        "guest": "Guest",
+    }
+
+    if normalized_category not in allowed_categories:
+        raise HTTPException(
+            status_code=400,
+            detail="Category must be Member or Guest",
+        )
+
+    category_value = allowed_categories[normalized_category]
+
+    result = db.execute(
+        text("""
+            SELECT
+                m.member_number,
+                m.member_full_name,
+                m.member_name,
+                m.member_or_guest,
+                m.member_type,
+                m.status,
+                m.age,
+                m.gender,
+                m.email,
+                m.occupation,
+                m.employer,
+                m.since_date,
+                ma.address_line1,
+                ma.address_line2,
+                ma.city,
+                UPPER(TRIM(ma.state)) AS state,
+                ma.postal_code,
+                ma.country
+            FROM members m
+
+            LEFT JOIN LATERAL (
+                SELECT
+                    address_line1,
+                    address_line2,
+                    city,
+                    state,
+                    postal_code,
+                    country
+                FROM member_addresses
+                WHERE member_number = m.member_number
+                ORDER BY
+                    city NULLS LAST,
+                    address_line1 NULLS LAST
+                LIMIT 1
+            ) ma ON TRUE
+
+            WHERE LOWER(TRIM(m.member_or_guest)) =
+                LOWER(:category)
+
+            ORDER BY
+                m.member_full_name NULLS LAST,
+                m.member_name NULLS LAST,
+                m.member_number
+        """),
+        {
+            "category": category_value,
+        },
+    ).mappings().all()
+
+    return [dict(row) for row in result]

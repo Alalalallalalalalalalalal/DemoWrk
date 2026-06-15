@@ -1,0 +1,898 @@
+import { useMemo, useState } from "react";
+import {
+    BarChart,
+    Bar,
+    LineChart,
+    Line,
+    XAxis,
+    YAxis,
+    Tooltip,
+    Legend,
+    ResponsiveContainer,
+    CartesianGrid,
+} from "recharts";
+
+import { analyticsApi } from "../../api/analytics";
+import { TOOLTIP_STYLE } from "../styles/Dashboardstyles";
+import {
+    SectionLabel,
+    PieLegendCard,
+} from "../styles/Dashboardcomponents";
+
+import AccountsUSMap from "./AccountsUSMap";
+import StateAccountsModal from "./StateAccountsModal";
+
+/* ─── Shared chart values ───────────────────────────────────── */
+
+const AX = "#9A8E84";
+const GRID = "#DDD6CA";
+const TIP = TOOLTIP_STYLE;
+
+/* ─── Local card wrapper ────────────────────────────────────── */
+
+function Card({ title, sub, children }) {
+    return (
+        <div className="dashboard-card">
+        <div className="dashboard-eyebrow">{sub}</div>
+        <h2 className="dashboard-card-title">{title}</h2>
+        {children}
+        </div>
+    );
+}
+
+/* ─── Demographics tab ──────────────────────────────────────── */
+
+export default function DemographicsTab({
+    membersByCountry = [],
+    membersByState = [],
+    membersByGender = [],
+    membersByAgeGroup = [],
+    accountsByType = [],
+    membersByStatus = [],
+    membersByMaritalStatus = [],
+    newMembersPerYear = [],
+    totalDependents = null,
+    dependentsByAgeGroup = [],
+    dependentsPerHousehold = [],
+    dependentsPerMember = [],
+}) {
+    /* Account-type toggle */
+    const [accountTypeView, setAccountTypeView] = useState("Member");
+
+    /* State-account drawer */
+    const [accountDrawer, setAccountDrawer] = useState(null);
+    const [accountDetails, setAccountDetails] = useState([]);
+    const [accountDetailsLoading, setAccountDetailsLoading,] = useState(false);
+
+    const [
+    accountDetailsError,
+    setAccountDetailsError,
+    ] = useState("");
+
+    /* ─── Derived account data ────────────────────────────────── */
+
+    const visibleAccountTypes = useMemo(
+        () =>
+        accountsByType.filter(
+            (item) =>
+            item.account_category?.trim() ===
+            accountTypeView,
+        ),
+        [accountsByType, accountTypeView],
+    );
+    const getAccountTotal = (category) =>
+        accountsByType
+        .filter(
+            (item) =>
+            item.account_category?.trim() === category,
+        )
+        .reduce(
+            (sum, item) =>
+            sum + Number(item.total || 0),
+            0,
+        );
+    const totalMemberAccounts = getAccountTotal("Member");
+    const totalGuestAccounts = getAccountTotal("Guest");
+    const totalDependentCount = (() => {
+        if (
+        totalDependents?.total_dependents !==
+            undefined &&
+        totalDependents?.total_dependents !== null
+        ) {
+        return Number(
+            totalDependents.total_dependents,
+        ).toLocaleString();
+        }
+
+        if (
+        totalDependents !== null &&
+        totalDependents !== undefined &&
+        !Number.isNaN(Number(totalDependents))
+        ) {
+        return Number(totalDependents).toLocaleString();
+        }
+        return "—";
+    })();
+
+    /* ─── State drawer interaction ────────────────────────────── */
+
+    const handleStateClick = async (state) => {
+        setAccountDrawer({
+            state,
+            title: `Accounts in ${state.name} (${state.code})`,
+            eyebrow: "State account details",
+            emptyMessage:
+            `No accounts were found in ${state.name}.`,
+            exportKey: `accounts-${state.code}`,
+        });
+
+        setAccountDetails([]);
+        setAccountDetailsError("");
+        setAccountDetailsLoading(true);
+
+        try {
+            const data =
+            await analyticsApi.stateAccounts(
+                state.code,
+            );
+
+            setAccountDetails(
+            Array.isArray(data) ? data : [],
+            );
+        } catch (error) {
+            console.error(
+            "Unable to load state accounts:",
+            error,
+            );
+
+            setAccountDetailsError(
+            `Account information for ${state.name} could not be loaded.`,
+            );
+        } finally {
+            setAccountDetailsLoading(false);
+        }
+        };
+        const handleAccountCategoryClick = async (
+            category,
+            ) => {
+            const pluralLabel =
+                category === "Member"
+                ? "Members"
+                : "Guests";
+
+            setAccountDrawer({
+                state: null,
+                title: `All ${pluralLabel}`,
+                eyebrow: "Account category details",
+                emptyMessage:
+                `No ${pluralLabel.toLowerCase()} were found.`,
+                exportKey: `all-${pluralLabel.toLowerCase()}`,
+            });
+
+            setAccountDetails([]);
+            setAccountDetailsError("");
+            setAccountDetailsLoading(true);
+
+            try {
+                const data =
+                await analyticsApi.accountCategoryDetails(
+                    category,
+                );
+
+                setAccountDetails(
+                Array.isArray(data) ? data : [],
+                );
+            } catch (error) {
+                console.error(
+                `Unable to load ${pluralLabel}:`,
+                error,
+                );
+
+                setAccountDetailsError(
+                `${pluralLabel} could not be loaded.`,
+                );
+            } finally {
+                setAccountDetailsLoading(false);
+            }
+            };
+
+    const closeAccountDrawer = () => {
+        setAccountDrawer(null);
+        setAccountDetails([]);
+        setAccountDetailsError("");
+        setAccountDetailsLoading(false);
+    };
+    return (
+        <>
+        <div className="dashboard-section">
+            {/* ─── KPI band ──────────────────────────────────────── */}
+            <section
+            className="dashboard-kpi-band"
+            style={{ padding: "24px 28px" }}
+            >
+            {[
+                {
+                label: "Total Members",
+                value: totalMemberAccounts
+                    ? totalMemberAccounts.toLocaleString()
+                    : "—",
+                detail:
+                    "Across all Member account types",
+                    onClick: () => handleAccountCategoryClick("Member"),
+                },
+                {
+                label: "Total Guests",
+                value: totalGuestAccounts
+                    ? totalGuestAccounts.toLocaleString()
+                    : "—",
+                detail:
+                    "Across all Guest account types",
+                    onClick: () => handleAccountCategoryClick("Guest"),
+                },
+                {
+                label: "Countries Represented",
+                value: membersByCountry.length
+                    ? membersByCountry.length.toLocaleString()
+                    : "—",
+                detail: "Geographic Distribution",
+                },
+                {
+                label: "Total Dependents",
+                value: totalDependentCount,
+                detail: "Linked family accounts",
+                },
+                {
+                label: "Account Categories",
+                value: accountsByType.length
+                    ? accountsByType.length.toLocaleString()
+                    : "—",
+                detail: "Member and guest types",
+                },
+            ].map((item, index) => {
+                const clickable = Boolean(item.onClick);
+                const KpiElement = clickable
+                    ? "button"
+                    : "div";
+
+                return (
+                    <KpiElement
+                    key={item.label}
+                    type={clickable ? "button" : undefined}
+                    onClick={item.onClick}
+                    style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-start",
+                        gap: 4,
+                        padding: "0 24px",
+                        border: "none",
+                        borderLeft:
+                        index > 0
+                            ? "1px solid #DDD6CA"
+                            : "none",
+                        background: "transparent",
+                        textAlign: "left",
+                        fontFamily: "inherit",
+                        cursor: clickable
+                        ? "pointer"
+                        : "default",
+                        borderRadius: clickable ? 10 : 0,
+                        transition:
+                        "background 0.16s ease, transform 0.16s ease",
+                    }}
+                    onMouseEnter={
+                        clickable
+                        ? (event) => {
+                            event.currentTarget.style.background =
+                                "var(--dashboard-panel-alt)";
+                            event.currentTarget.style.transform =
+                                "translateY(-1px)";
+                            }
+                        : undefined
+                    }
+                    onMouseLeave={
+                        clickable
+                        ? (event) => {
+                            event.currentTarget.style.background =
+                                "transparent";
+                            event.currentTarget.style.transform =
+                                "translateY(0)";
+                            }
+                        : undefined
+                    }
+                    >
+                    <span
+                        style={{
+                        fontSize: 10,
+                        fontWeight: 600,
+                        letterSpacing: "0.18em",
+                        textTransform: "uppercase",
+                        color: "#9A8E84",
+                        }}
+                    >
+                        {item.label}
+                    </span>
+
+                    <span
+                        style={{
+                        fontFamily:
+                            "'Cormorant Garamond', serif",
+                        fontSize: 32,
+                        lineHeight: 1.1,
+                        color: "#1B2632",
+                        }}
+                    >
+                        {item.value}
+                    </span>
+
+                    <span
+                        style={{
+                        fontSize: 11,
+                        color: "#A35139",
+                        }}
+                    >
+                        {item.detail}
+                    </span>
+                    </KpiElement>
+                );
+                })}
+            </section>
+
+            {/* ─── Account types ─────────────────────────────────── */}
+            <Card
+            title="Account Types"
+            sub="Distribution of member and guest account types"
+            >
+            <div
+                style={{
+                display: "flex",
+                gap: 4,
+                padding: 4,
+                marginBottom: 18,
+                background: "#EEE9DF",
+                border: "1px solid #DDD6CA",
+                borderRadius: 12,
+                width: "fit-content",
+                }}
+            >
+                <button
+                type="button"
+                onClick={() =>
+                    setAccountTypeView("Member")
+                }
+                style={{
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "8px 16px",
+                    cursor: "pointer",
+                    fontFamily:
+                    "Inter, system-ui, sans-serif",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    background:
+                    accountTypeView === "Member"
+                        ? "#2C3B4D"
+                        : "transparent",
+                    color:
+                    accountTypeView === "Member"
+                        ? "#FFB162"
+                        : "#2C3B4D",
+                    boxShadow:
+                    accountTypeView === "Member"
+                        ? "0 3px 10px rgba(27, 38, 50, 0.14)"
+                        : "none",
+                    transition: "all 0.2s ease",
+                }}
+                >
+                Members
+                </button>
+                <button
+                type="button"
+                onClick={() =>
+                    setAccountTypeView("Guest")
+                }
+                style={{
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "8px 16px",
+                    cursor: "pointer",
+                    fontFamily:
+                    "Inter, system-ui, sans-serif",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    background:
+                    accountTypeView === "Guest"
+                        ? "#2C3B4D"
+                        : "transparent",
+                    color:
+                    accountTypeView === "Guest"
+                        ? "#FFB162"
+                        : "#2C3B4D",
+                    boxShadow:
+                    accountTypeView === "Guest"
+                        ? "0 3px 10px rgba(27, 38, 50, 0.14)"
+                        : "none",
+                    transition: "all 0.2s ease",
+                }}
+                >
+                Guests
+                </button>
+            </div>
+            <div
+                className="dashboard-chart"
+                style={{
+                height: Math.max(
+                    220,
+                    visibleAccountTypes.length * 34,
+                ),
+                maxHeight: 460,
+                }}
+            >
+                <ResponsiveContainer
+                width="100%"
+                height="100%"
+                >
+                <BarChart
+                    data={visibleAccountTypes}
+                    layout="vertical"
+                    margin={{
+                    top: 2,
+                    right: 20,
+                    bottom: 2,
+                    }}
+                    barCategoryGap="20%"
+                >
+                    <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke={GRID}
+                    horizontal={false}
+                    />
+                    <XAxis
+                    type="number"
+                    stroke={AX}
+                    fontSize={11}
+                    allowDecimals={false}
+                    />
+                    <YAxis
+                    type="category"
+                    dataKey="member_type"
+                    stroke={AX}
+                    fontSize={10}
+                    width={210}
+                    interval={0}
+                    tickLine={false}
+                    />
+                    <Tooltip
+                    contentStyle={TIP}
+                    formatter={(value) => [
+                        Number(value).toLocaleString(),
+                        accountTypeView === "Member"
+                        ? "Members"
+                        : "Guests",
+                    ]}
+                    />
+                    <Bar
+                    dataKey="total"
+                    name="Accounts"
+                    fill={
+                        accountTypeView === "Member"
+                        ? "#FFB162"
+                        : "var(--dashboard-truffle)"
+                    }
+                    radius={[0, 6, 6, 0]}
+                    maxBarSize={20}
+                    />
+                </BarChart>
+                </ResponsiveContainer>
+            </div>
+            </Card>
+
+            {/* ─── Age, gender and marital status ────────────────── */}
+            <SectionLabel>
+            Age / Gender / Status
+            </SectionLabel>
+            <div className="dashboard-grid dashboard-grid-3">
+            <Card
+                title="Age Groups"
+                sub="Accounts by age segment"
+            >
+                <div className="dashboard-chart dashboard-chart-200">
+                <ResponsiveContainer>
+                    <BarChart data={membersByAgeGroup}>
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke={GRID}
+                    />
+                    <XAxis
+                        dataKey="age_group"
+                        stroke={AX}
+                        fontSize={11}
+                    />
+                    <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                    />
+                    <Tooltip contentStyle={TIP} />
+                    <Bar
+                        dataKey="total"
+                        fill="var(--dashboard-truffle)"
+                        radius={[6, 6, 0, 0]}
+                    />
+                    </BarChart>
+                </ResponsiveContainer>
+                </div>
+            </Card>
+            <PieLegendCard
+                title="Gender Split"
+                description="Male vs Female"
+                data={membersByGender}
+                dataKey="total"
+                nameKey="gender"
+                colorMap={{
+                M: "var(--dashboard-truffle)",
+                F: "var(--dashboard-flame)",
+                }}
+            />
+            <PieLegendCard
+                title="Marital Status"
+                description="Household composition"
+                data={membersByMaritalStatus}
+                dataKey="total"
+                nameKey="marital_status"
+                colorMap={{
+                Single: "var(--dashboard-truffle)",
+                Married:
+                    "var(--dashboard-deep-blue)",
+                }}
+            />
+            </div>
+
+            {/* ─── Member status and growth ──────────────────────── */}
+            <SectionLabel>
+            Member Status &amp Growth
+            </SectionLabel>
+            <div className="dashboard-grid dashboard-grid-side">
+            <Card
+                title="Member & Guest Status"
+                sub="Status comparison between members and guests"
+            >
+                <div className="dashboard-chart dashboard-chart-200">
+                <ResponsiveContainer>
+                    <BarChart
+                    data={membersByStatus}
+                    margin={{
+                        top: 5,
+                        right: 12,
+                        bottom: 0,
+                        left: 0,
+                    }}
+                    barGap={4}
+                    >
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke={GRID}
+                    />
+                    <XAxis
+                        dataKey="status"
+                        stroke={AX}
+                        fontSize={11}
+                    />
+                    <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                        allowDecimals={false}
+                    />
+                    <Tooltip contentStyle={TIP} />
+                    <Legend
+                        wrapperStyle={{
+                        fontSize: 11,
+                        paddingTop: 6,
+                        }}
+                    />
+                    <Bar
+                        dataKey="members"
+                        name="Members"
+                        fill="#FFB162"
+                        radius={[6, 6, 0, 0]}
+                    />
+                    <Bar
+                        dataKey="guests"
+                        name="Guests"
+                        fill="var(--dashboard-truffle)"
+                        radius={[6, 6, 0, 0]}
+                    />
+                    </BarChart>
+                </ResponsiveContainer>
+                </div>
+            </Card>
+            <Card
+                title="New Members & Guests per Year"
+                sub="Member and guest acquisition over time"
+            >
+                <div className="dashboard-chart dashboard-chart-200">
+                <ResponsiveContainer>
+                    <LineChart
+                    data={newMembersPerYear}
+                    margin={{
+                        top: 5,
+                        right: 12,
+                        bottom: 5,
+                        left: 0,
+                    }}
+                    >
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke={GRID}
+                    />
+                    <XAxis
+                        dataKey="year"
+                        stroke={AX}
+                        fontSize={11}
+                        allowDecimals={false}
+                    />
+                    <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                        allowDecimals={false}
+                    />
+                    <Tooltip contentStyle={TIP} />
+                    <Legend
+                        wrapperStyle={{
+                        fontSize: 11,
+                        paddingTop: 6,
+                        }}
+                    />
+                    <Line
+                        type="monotone"
+                        dataKey="members"
+                        name="Members"
+                        stroke="#FFB162"
+                        strokeWidth={2.5}
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                    />
+                    <Line
+                        type="monotone"
+                        dataKey="guests"
+                        name="Guests"
+                        stroke="var(--dashboard-truffle)"
+                        strokeWidth={2.5}
+                        dot={{ r: 3 }}
+                        activeDot={{ r: 5 }}
+                    />
+                    </LineChart>
+                </ResponsiveContainer>
+                </div>
+            </Card>
+            </div>
+
+            {/* ─── Geographic distribution ───────────────────────── */}
+            <SectionLabel>
+            Geographic Distribution
+            </SectionLabel>
+            <div className="dashboard-grid dashboard-grid-equal">
+            <Card
+                title="Accounts by State"
+                sub="Account concentration across the United States"
+            >
+                <AccountsUSMap
+                data={membersByState}
+                onStateClick={handleStateClick}
+                />
+            </Card>
+
+            <Card
+                title="Accounts by Country"
+                sub="Account concentration across different countries"
+            >
+                <div
+                className="dashboard-chart"
+                style={{
+                    height: Math.max(
+                    260,
+                    membersByCountry.length * 30,
+                    ),
+                    maxHeight: 318,
+                }}
+                >
+                <ResponsiveContainer
+                    width="100%"
+                    height="100%"
+                >
+                    <BarChart
+                    data={membersByCountry}
+                    layout="vertical"
+                    margin={{ left: 12 }}
+                    barCategoryGap="22%"
+                    >
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke={GRID}
+                        horizontal={false}
+                    />
+                    <XAxis
+                        type="number"
+                        stroke={AX}
+                        fontSize={11}
+                    />
+                    <YAxis
+                        type="category"
+                        dataKey="country"
+                        stroke={AX}
+                        fontSize={10}
+                        width={115}
+                        interval={0}
+                        tickLine={false}
+                    />
+                    <Tooltip contentStyle={TIP} />
+                    <Bar
+                        dataKey="total"
+                        name="Accounts"
+                        fill="var(--dashboard-muted)"
+                        radius={[0, 6, 6, 0]}
+                        maxBarSize={20}
+                    />
+                    </BarChart>
+                </ResponsiveContainer>
+                </div>
+            </Card>
+            </div>
+
+            {/* ─── Household and dependents ──────────────────────── */}
+            <SectionLabel>
+            Household &amp; Dependents
+            </SectionLabel>
+            <div className="dashboard-grid dashboard-grid-equal">
+            <Card
+                title="Dependents by Age Group"
+                sub="Linked to member folios"
+            >
+                <div className="dashboard-chart dashboard-chart-200">
+                <ResponsiveContainer>
+                    <BarChart
+                    data={dependentsByAgeGroup}
+                    >
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke={GRID}
+                    />
+                    <XAxis
+                        dataKey="age_group"
+                        stroke={AX}
+                        fontSize={11}
+                    />
+                    <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                    />
+                    <Tooltip contentStyle={TIP} />
+                    <Bar
+                        dataKey="total"
+                        fill="#A35139"
+                        radius={[6, 6, 0, 0]}
+                    />
+                    </BarChart>
+                </ResponsiveContainer>
+                </div>
+            </Card>
+            <Card
+                title="Dependents per Household"
+                sub="Distribution of linked dependents across member households"
+            >
+                <div className="dashboard-chart dashboard-chart-200">
+                <ResponsiveContainer
+                    width="100%"
+                    height="100%"
+                >
+                    <BarChart
+                    data={dependentsPerHousehold}
+                    margin={{
+                        top: 6,
+                        right: 12,
+                        bottom: 8,
+                        left: 0,
+                    }}
+                    >
+                    <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke={GRID}
+                        vertical={false}
+                    />
+                    <XAxis
+                        dataKey="household_group"
+                        stroke={AX}
+                        fontSize={10}
+                        interval={0}
+                        tickLine={false}
+                    />
+                    <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                        allowDecimals={false}
+                    />
+                    <Tooltip
+                        contentStyle={TIP}
+                        formatter={(value) => [
+                        Number(value).toLocaleString(),
+                        "Households",
+                        ]}
+                    />
+                    <Bar
+                        dataKey="total_households"
+                        name="Households"
+                        fill="var(--dashboard-flame)"
+                        radius={[6, 6, 0, 0]}
+                        maxBarSize={42}
+                    />
+                    </BarChart>
+                </ResponsiveContainer>
+                </div>
+            </Card>
+            </div>
+            <Card
+            title="Top Members by Dependents"
+            sub="Members with the most linked dependents"
+            >
+            <div className="dashboard-chart dashboard-chart-200">
+                <ResponsiveContainer>
+                <BarChart
+                    data={dependentsPerMember}
+                    margin={{
+                    top: 5,
+                    right: 12,
+                    bottom: 0,
+                    left: 0,
+                    }}
+                >
+                    <CartesianGrid
+                    strokeDasharray="3 3"
+                    stroke={GRID}
+                    />
+                    <XAxis
+                    dataKey="member_number"
+                    stroke={AX}
+                    fontSize={11}
+                    angle={-15}
+                    textAnchor="end"
+                    height={55}
+                    />
+                    <YAxis
+                    stroke={AX}
+                    fontSize={11}
+                    allowDecimals={false}
+                    />
+                    <Tooltip contentStyle={TIP} />
+                    <Bar
+                    dataKey="total_dependents"
+                    fill="var(--dashboard-truffle)"
+                    radius={[6, 6, 0, 0]}
+                    />
+                </BarChart>
+                </ResponsiveContainer>
+            </div>
+            </Card>
+        </div>
+
+        {/* State-account drawer */}
+        <StateAccountsModal
+            state={accountDrawer?.state ?? null}
+            title={accountDrawer?.title ?? ""}
+            eyebrow={
+                accountDrawer?.eyebrow ??
+                "Account details"
+            }
+            emptyMessage={
+                accountDrawer?.emptyMessage ?? ""
+            }
+            exportKey={
+                accountDrawer?.exportKey ??
+                "accounts"
+            }
+            accounts={accountDetails}
+            loading={accountDetailsLoading}
+            error={accountDetailsError}
+            onClose={closeAccountDrawer}
+            />
+        </>
+    );
+}

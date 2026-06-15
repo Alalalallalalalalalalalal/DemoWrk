@@ -12,15 +12,17 @@
 
 3.  python backend/playwright/folio_report.py
 
-4.  python backend/playwright/folio_scraper.py  
+4.  python backend/playwright/room_inquiry_scraper.py
+
+5.  python backend/playwright/folio_scraper.py  
 
 
-5.  python backend/playwright/build_member_map.py --limit 1000        (for testing)
+6.  python backend/playwright/build_member_map.py --limit 1000        (for testing)
 
     python backend/playwright/build_member_map.py                     (for full run)
 
 
-6.  python backend/playwright/journal_scraper.py                    # First 10 members      (for testing)
+7.  python backend/playwright/journal_scraper.py                    # First 10 members      (for testing)
 
     python backend/playwright/journal_scraper.py --all              # All members           (for full run)
 
@@ -29,6 +31,11 @@
     python backend/playwright/journal_scraper.py --member 1C        # Single member by number
 
     python backend/playwright/journal_scraper.py --id 32845         # Single member by portal ID
+
+8. cleaner.py
+
+9. python backend/playwright/member_enricher.py --apply
+
 
 
 ## Notes: (These files do not affect playwright's function)

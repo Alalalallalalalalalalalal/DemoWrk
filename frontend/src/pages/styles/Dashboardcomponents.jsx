@@ -149,7 +149,17 @@ export function SectionLabel({ children }) {
 }
 
 /* ─── PieLegendCard ──────────────────────────────────────────── */
-export function PieLegendCard({ title, description, data, dataKey, nameKey }) {
+export function PieLegendCard({ title, description, data, dataKey, nameKey, colorMap = {} }) {
+  const getColor = (item, index) => {
+    const rawValue = String(item?.[nameKey] ?? "").trim();
+    const normalizedValue = rawValue.toLowerCase();
+
+    return (
+      colorMap[rawValue] ||
+      colorMap[normalizedValue] ||
+      COLORS[index % COLORS.length]
+    );
+  };
   return (
     <div style={styles.card}>
       <div
@@ -177,8 +187,13 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey }) {
                 innerRadius={40}
                 paddingAngle={2}
               >
-                {data.map((_, i) => (
-                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                {data.map((item, i) => (
+                  <Cell
+                    key={`${item[nameKey]}-${i}`}
+                    fill={getColor(item, i)}
+                    stroke="var(--dashboard-palladian)"
+                    strokeWidth={2}
+                  />
                 ))}
               </Pie>
               <Tooltip contentStyle={TOOLTIP_STYLE} />
@@ -209,7 +224,7 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey }) {
                   width: 10,
                   height: 10,
                   borderRadius: 3,
-                  background: COLORS[i % COLORS.length],
+                  background: getColor(item, i),
                   display: "inline-block",
                 }}
               />

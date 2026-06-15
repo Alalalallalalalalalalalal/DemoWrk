@@ -20,40 +20,56 @@ const jsonRequest = (method, body) => ({
   body: JSON.stringify(body),
 });
 
+const withQuery = (endpoint, params = {}) => {
+  const query = new URLSearchParams();
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, value);
+    }
+  });
+
+  const queryString = query.toString();
+  return queryString ? `${endpoint}?${queryString}` : endpoint;
+};
+
 export const analyticsApi = {
   // Combined dashboard endpoint
   dashboardSummary: () => fetchData("/analytics/dashboard-summary"),
 
-  // Combined ML endpoint
-  mlInsights: () => fetchData("/analytics/ml/insights"),
+  // Demographics detail endpoints
+  stateAccounts: (stateCode) =>
+    fetchData(`/analytics/state-accounts/${encodeURIComponent(stateCode)}`),
 
-  // Detail drill-downs
-  seasonalVisitDetails: (season, limit = 50) =>
-    fetchData(
-      `/analytics/ml/seasonal-visit-details?season=${encodeURIComponent(
-        season,
-      )}&limit=${limit}`,
-    ),
+  accountCategoryDetails: (category) =>
+    fetchData(`/analytics/account-category/${encodeURIComponent(category)}`),
 
-  // Season groups CRUD
-  seasonGroups: () => fetchData("/analytics/ml/season-groups"),
+  // Season endpoints
+  seasonSummary: () => fetchData("/analytics/season-summary"),
 
-  createSeasonGroup: (body) =>
-    fetchData("/analytics/ml/season-groups", jsonRequest("POST", body)),
+  seasonMembers: (seasonId) =>
+    fetchData(`/analytics/seasons/${seasonId}/members`),
 
-  updateSeason: (seasonId, body) =>
-    fetchData(`/analytics/ml/seasons/${seasonId}`, jsonRequest("PATCH", body)),
+  createSeasonGroup: (payload) =>
+    fetchData("/analytics/season-groups", jsonRequest("POST", payload)),
 
-  addSeason: (body) =>
-    fetchData("/analytics/ml/seasons", jsonRequest("POST", body)),
+  addSeason: (payload) =>
+    fetchData("/analytics/seasons", jsonRequest("POST", payload)),
+
+  updateSeason: (id, payload) =>
+    fetchData(`/analytics/seasons/${id}`, jsonRequest("PATCH", payload)),
+
+  deleteSeason: (id) =>
+    fetchData(`/analytics/seasons/${id}`, jsonRequest("DELETE", {})),
+
+  deleteSeasonGroup: (id) =>
+    fetchData(`/analytics/season-groups/${id}`, jsonRequest("DELETE", {})),
 
   // Reports
   getTables: () => fetchData("/analytics/tables"),
 
-  getTableData: (table, limit = 100, offset = 0) =>
-    fetchData(
-      `/analytics/table/${encodeURIComponent(table)}?limit=${limit}&offset=${offset}`,
-    ),
+  getTableData: (table) =>
+    fetchData(`/analytics/table/${encodeURIComponent(table)}`),
 
   searchTable: (table, column, value) =>
     fetchData(
@@ -64,6 +80,27 @@ export const analyticsApi = {
       )}&value=${encodeURIComponent(value)}`,
     ),
 
+  amenitySeasonInsights: (params = {}) =>
+    fetchData(withQuery("/analytics/ml/amenity-season-insights", params)),
+
   // Member segments
   memberSegments: () => fetchData("/analytics/ml/member-segments"),
+  // Inside the analyticsApi object, add alongside memberSegments:
+  getSegmentConfig: () => fetchData("/analytics/ml/segment-config"),
+  updateSegmentConfig: (payload) =>
+    fetchData("/analytics/ml/segment-config", jsonRequest("PATCH", payload)),
+
+  visitsRoomsDashboard: (params = {}) =>
+    fetchData(withQuery("/analytics/visits-rooms-dashboard", params)),
+
+  villaBookings: (villaName, params = {}) =>
+    fetchData(
+      withQuery("/analytics/villa-bookings", { villa: villaName, ...params }),
+    ),
+
+  bedroomBookings: (beds, params = {}) =>
+    fetchData(withQuery("/analytics/bedroom-bookings", { beds, ...params })),
+
+  bookedPeople: (kind, params = {}) =>
+    fetchData(withQuery("/analytics/booked-people", { kind, ...params })),
 };
