@@ -52,6 +52,25 @@ export const analyticsApi = {
       )}`,
     ),
 
+  demographicAccountDetails: ({
+    dimension,
+    value,
+    category,
+  }) => {
+    const params = new URLSearchParams({
+      dimension,
+      value,
+    });
+
+    if (category) {
+      params.set("category", category);
+    }
+
+    return fetchData(
+      `/analytics/demographics/account-details?${params.toString()}`,
+    );
+  },
+
   // Season endpoints
   seasonSummary: () => fetchData("/analytics/season-summary"),
 

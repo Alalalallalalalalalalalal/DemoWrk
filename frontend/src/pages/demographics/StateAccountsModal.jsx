@@ -30,6 +30,7 @@
         { key: "member_or_guest", label: "Category" },
         { key: "member_type", label: "Account Type" },
         { key: "status", label: "Status" },
+        { key: "dependent_count", label: "Dependents", },
         { key: "since_date", label: "Since Date" },
         { key: "age", label: "Age" },
         { key: "gender", label: "Gender" },

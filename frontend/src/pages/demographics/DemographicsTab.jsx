@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
     BarChart,
     Bar,
@@ -69,6 +69,8 @@ export default function DemographicsTab({
     setAccountDetailsError,
     ] = useState("");
 
+    const countryChartRef = useRef(null);
+
     /* ─── Derived account data ────────────────────────────────── */
 
     const visibleAccountTypes = useMemo(
@@ -114,7 +116,120 @@ export default function DemographicsTab({
         return "—";
     })();
 
+    const openAccountDrawer = async ({
+        title,
+        eyebrow,
+        emptyMessage,
+        exportKey,
+        state = null,
+        request,
+        }) => {
+        setAccountDrawer({
+            state,
+            title,
+            eyebrow,
+            emptyMessage,
+            exportKey,
+        });
+
+        setAccountDetails([]);
+        setAccountDetailsError("");
+        setAccountDetailsLoading(true);
+
+        try {
+            const data = await request();
+
+            setAccountDetails(
+            Array.isArray(data) ? data : [],
+            );
+        } catch (error) {
+            console.error(
+            `Unable to load ${title}:`,
+            error,
+            );
+
+            setAccountDetailsError(
+            `${title} could not be loaded.`,
+            );
+        } finally {
+            setAccountDetailsLoading(false);
+        }
+        };
+
     /* ─── State drawer interaction ────────────────────────────── */
+
+    const handleHouseholdClick = (entry) => {
+        const row = entry?.payload ?? entry;
+        const householdGroup =
+            row?.household_group;
+
+        if (!householdGroup) return;
+
+        openAccountDrawer({
+            title: `Households — ${householdGroup}`,
+            eyebrow: "Dependent household details",
+            emptyMessage:
+            `No member households were found in ${householdGroup}.`,
+            exportKey:
+            `households-${householdGroup}`,
+            request: () =>
+            analyticsApi.demographicAccountDetails({
+                dimension: "household",
+                value: householdGroup,
+            }),
+        });
+        };
+
+    const handleStatusClick = (
+        entry,
+        category,
+        ) => {
+        const row = entry?.payload ?? entry;
+        const status = row?.status;
+
+        if (!status) return;
+
+        openAccountDrawer({
+            title: `${category} Accounts — ${status}`,
+            eyebrow: "Account status details",
+            emptyMessage:
+            `No ${category.toLowerCase()} accounts were found with the status ${status}.`,
+            exportKey:
+            `${category}-${status}`,
+            request: () =>
+            analyticsApi.demographicAccountDetails({
+                dimension: "status",
+                value: status,
+                category,
+            }),
+        });
+    };
+
+    const handleAccountTypeClick = (entry) => {
+        const row = entry?.payload ?? entry;
+        const memberType = row?.member_type;
+
+        if (!memberType) return;
+
+        const category =
+            row?.account_category ??
+            accountTypeView;
+
+        openAccountDrawer({
+            title: `${category} Accounts — ${memberType}`,
+            eyebrow: "Account type details",
+            emptyMessage:
+            `No ${category.toLowerCase()} accounts were found for ${memberType}.`,
+            exportKey:
+            `${category}-${memberType}`,
+            request: () =>
+            analyticsApi.demographicAccountDetails({
+                dimension: "account_type",
+                value: memberType,
+                category,
+            }),
+        });
+        };
 
     const handleStateClick = async (state) => {
         setAccountDrawer({
@@ -152,13 +267,10 @@ export default function DemographicsTab({
             setAccountDetailsLoading(false);
         }
         };
-        const handleAccountCategoryClick = async (
-            category,
-            ) => {
-            const pluralLabel =
-                category === "Member"
-                ? "Members"
-                : "Guests";
+    const handleAccountCategoryClick = async (category,) => {
+        const pluralLabel =
+            category === "Member"
+            ? "Members" : "Guests";
 
             setAccountDrawer({
                 state: null,
@@ -196,11 +308,38 @@ export default function DemographicsTab({
             }
             };
 
+    const handleCountryClick = (entry) => {
+        const row = entry?.payload ?? entry;
+        const country = row?.country;
+
+        if (!country) return;
+
+        openAccountDrawer({
+            title: `Accounts in ${country}`,
+            eyebrow: "Country account details",
+            emptyMessage:
+            `No accounts were found in ${country}.`,
+            exportKey: `accounts-${country}`,
+            request: () =>
+            analyticsApi.demographicAccountDetails({
+                dimension: "country",
+                value: country,
+            }),
+        });
+    };
+
     const closeAccountDrawer = () => {
         setAccountDrawer(null);
         setAccountDetails([]);
         setAccountDetailsError("");
         setAccountDetailsLoading(false);
+    };
+
+    const scrollToCountryChart = () => {
+        countryChartRef.current?.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+        });
     };
     return (
         <>
@@ -234,7 +373,8 @@ export default function DemographicsTab({
                 value: membersByCountry.length
                     ? membersByCountry.length.toLocaleString()
                     : "—",
-                detail: "Geographic Distribution",
+                detail: "Click to view country distribution",
+                onClick: scrollToCountryChart,
                 },
                 {
                 label: "Total Dependents",
@@ -472,15 +612,17 @@ export default function DemographicsTab({
                     ]}
                     />
                     <Bar
-                    dataKey="total"
-                    name="Accounts"
-                    fill={
-                        accountTypeView === "Member"
-                        ? "#FFB162"
-                        : "var(--dashboard-truffle)"
-                    }
-                    radius={[0, 6, 6, 0]}
-                    maxBarSize={20}
+                        dataKey="total"
+                        name="Accounts"
+                        fill={
+                            accountTypeView === "Member"
+                            ? "#FFB162"
+                            : "var(--dashboard-truffle)"
+                        }
+                        radius={[0, 6, 6, 0]}
+                        maxBarSize={20}
+                        cursor="pointer"
+                        onClick={handleAccountTypeClick}
                     />
                 </BarChart>
                 </ResponsiveContainer>
@@ -549,7 +691,7 @@ export default function DemographicsTab({
 
             {/* ─── Member status and growth ──────────────────────── */}
             <SectionLabel>
-            Member Status &amp Growth
+            Member Status &amp; Growth
             </SectionLabel>
             <div className="dashboard-grid dashboard-grid-side">
             <Card
@@ -594,12 +736,20 @@ export default function DemographicsTab({
                         name="Members"
                         fill="#FFB162"
                         radius={[6, 6, 0, 0]}
+                        cursor="pointer"
+                        onClick={(entry) =>
+                            handleStatusClick(entry, "Member")
+                        }
                     />
                     <Bar
                         dataKey="guests"
                         name="Guests"
                         fill="var(--dashboard-truffle)"
                         radius={[6, 6, 0, 0]}
+                        cursor="pointer"
+                        onClick={(entry) =>
+                            handleStatusClick(entry, "Guest")
+                        }
                     />
                     </BarChart>
                 </ResponsiveContainer>
@@ -670,6 +820,7 @@ export default function DemographicsTab({
             <SectionLabel>
             Geographic Distribution
             </SectionLabel>
+
             <div className="dashboard-grid dashboard-grid-equal">
             <Card
                 title="Accounts by State"
@@ -681,41 +832,44 @@ export default function DemographicsTab({
                 />
             </Card>
 
-            <Card
+            <div ref={countryChartRef}>
+                <Card
                 title="Accounts by Country"
-                sub="Account concentration across different countries"
-            >
+                sub="Click a country to view its accounts"
+                >
                 <div
-                className="dashboard-chart"
-                style={{
+                    className="dashboard-chart"
+                    style={{
                     height: Math.max(
-                    260,
-                    membersByCountry.length * 30,
+                        260,
+                        membersByCountry.length * 30,
                     ),
                     maxHeight: 318,
-                }}
+                    }}
                 >
-                <ResponsiveContainer
+                    <ResponsiveContainer
                     width="100%"
                     height="100%"
-                >
-                    <BarChart
-                    data={membersByCountry}
-                    layout="vertical"
-                    margin={{ left: 12 }}
-                    barCategoryGap="22%"
                     >
-                    <CartesianGrid
+                    <BarChart
+                        data={membersByCountry}
+                        layout="vertical"
+                        margin={{ left: 12 }}
+                        barCategoryGap="22%"
+                    >
+                        <CartesianGrid
                         strokeDasharray="3 3"
                         stroke={GRID}
                         horizontal={false}
-                    />
-                    <XAxis
+                        />
+
+                        <XAxis
                         type="number"
                         stroke={AX}
                         fontSize={11}
-                    />
-                    <YAxis
+                        />
+
+                        <YAxis
                         type="category"
                         dataKey="country"
                         stroke={AX}
@@ -723,19 +877,24 @@ export default function DemographicsTab({
                         width={115}
                         interval={0}
                         tickLine={false}
-                    />
-                    <Tooltip contentStyle={TIP} />
-                    <Bar
+                        />
+
+                        <Tooltip contentStyle={TIP} />
+
+                        <Bar
                         dataKey="total"
                         name="Accounts"
                         fill="var(--dashboard-muted)"
                         radius={[0, 6, 6, 0]}
                         maxBarSize={20}
-                    />
+                        cursor="pointer"
+                        onClick={handleCountryClick}
+                        />
                     </BarChart>
-                </ResponsiveContainer>
+                    </ResponsiveContainer>
                 </div>
-            </Card>
+                </Card>
+            </div>
             </div>
 
             {/* ─── Household and dependents ──────────────────────── */}
@@ -823,6 +982,8 @@ export default function DemographicsTab({
                         fill="var(--dashboard-flame)"
                         radius={[6, 6, 0, 0]}
                         maxBarSize={42}
+                        cursor="pointer"
+                        onClick={handleHouseholdClick}
                     />
                     </BarChart>
                 </ResponsiveContainer>
