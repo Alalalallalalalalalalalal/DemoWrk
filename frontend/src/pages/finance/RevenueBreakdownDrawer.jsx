@@ -10,7 +10,19 @@
 // • Records ordered highest amount first (done in backend)
 
 import { useEffect, useRef, useState, useMemo } from "react";
-import { X, ChevronRight, Info, Mail, Phone, MapPin } from "lucide-react";
+import {
+  X,
+  ChevronRight,
+  Info,
+  Mail,
+  Phone,
+  MapPin,
+  Download,
+  ChevronDown,
+} from "lucide-react";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import { financeApi } from "../../api/financeApi";
 
 const C = {
@@ -33,6 +45,145 @@ const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
 
 const MONTHS = ["All","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
+
+// ---Exported component only below this line---
+function downloadFile(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  link.click();
+
+  URL.revokeObjectURL(url);
+}
+
+function exportRows(rows, filenameBase, format) {
+  if (!rows.length) return;
+
+  if (format === "csv") {
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const csv = XLSX.utils.sheet_to_csv(worksheet);
+
+    downloadFile(
+      new Blob([csv], { type: "text/csv;charset=utf-8;" }),
+      `${filenameBase}.csv`,
+    );
+  }
+
+  if (format === "excel") {
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Export");
+    XLSX.writeFile(workbook, `${filenameBase}.xlsx`);
+  }
+
+  if (format === "pdf") {
+    const doc = new jsPDF({ orientation: "landscape" });
+    const columns = Object.keys(rows[0] ?? {});
+
+    doc.text(filenameBase.replaceAll("_", " "), 14, 14);
+
+    autoTable(doc, {
+      startY: 20,
+      head: [columns],
+      body: rows.map((row) => columns.map((col) => row[col] ?? "")),
+      styles: { fontSize: 7 },
+      headStyles: { fillColor: [30, 48, 70] },
+    });
+
+    doc.save(`${filenameBase}.pdf`);
+  }
+}
+
+const safeFilePart = (value) =>
+  String(value || "all")
+    .trim()
+    .replace(/[^a-z0-9]+/gi, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+
+const exportButtonStyle = (disabled) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "7px 12px",
+  borderRadius: 10,
+  border: `1px solid ${C.accent2}`,
+  background: C.panelAlt,
+  color: C.accent,
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: disabled ? "not-allowed" : "pointer",
+  opacity: disabled ? 0.55 : 1,
+});
+
+function ExportMenu({ rows, filenameBase, disabled }) {
+  const [open, setOpen] = useState(false);
+
+  const doExport = (format) => {
+    exportRows(rows, filenameBase, format);
+    setOpen(false);
+  };
+
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        style={exportButtonStyle(disabled)}
+      >
+        <Download size={13} />
+        Export
+        <ChevronDown size={12} />
+      </button>
+
+      {open && !disabled && (
+        <div
+          style={{
+            position: "absolute",
+            right: 0,
+            top: "calc(100% + 6px)",
+            zIndex: 20,
+            minWidth: 130,
+            background: C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 10,
+            boxShadow: "0 10px 26px rgba(0,0,0,0.14)",
+            overflow: "hidden",
+          }}
+        >
+          {[
+            ["csv", "CSV"],
+            ["excel", "Excel"],
+            ["pdf", "PDF"],
+          ].map(([format, label]) => (
+            <button
+              key={format}
+              type="button"
+              onClick={() => doExport(format)}
+              style={{
+                display: "block",
+                width: "100%",
+                padding: "9px 12px",
+                border: "none",
+                background: "transparent",
+                color: C.text,
+                textAlign: "left",
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Small info tooltip ──────────────────────────────────────────
 function InfoTip({ title, description, tips = [] }) {
@@ -560,13 +711,18 @@ export default function RevenueBreakdownDrawer({
               </h2>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               {/* Record count — no total sum to avoid confusing negatives */}
               {showFolios && (
                 <span style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}>
                   {folioRows.length} records
                 </span>
               )}
+              <ExportMenu
+                rows={showFolios ? folioRows : currentMidItems}
+                filenameBase={`revenue_breakdown_${safeFilePart(trail[trail.length - 1]?.label ?? drillValue ?? "all")}`}
+                disabled={!(showFolios ? folioRows.length : currentMidItems.length)}
+              />
               <button
                 onClick={onClose}
                 style={{
