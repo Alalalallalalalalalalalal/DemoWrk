@@ -39,7 +39,7 @@ function InfoTip({ title, description, tips = [] }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <div style={{ position: "relative", display: "inline-flex" }}>
+    <div style={{ position: "relative", display: "inline-flex"}}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -58,7 +58,7 @@ function InfoTip({ title, description, tips = [] }) {
           <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 49 }} />
           <div
             style={{
-              position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 50,
+              position: "fixed", top: 170, right: 350, zIndex: 2000,
               width: 280, background: C.bg, border: `1px solid ${C.border}`,
               borderRadius: 14, boxShadow: "0 8px 32px rgba(0,0,0,0.14)",
               padding: "14px 16px", fontSize: 12, color: C.muted,

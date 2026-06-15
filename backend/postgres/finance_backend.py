@@ -42,7 +42,7 @@ def _amenity_case_sql() -> str:
 # ══════════════════════════════════════════════════════════════════
 # 1. OVERVIEW
 # payment_type in business_source is either 'Free' or 'Paid'
-# member_type in folios is either 'Guest' or NULL — NULL = Member
+# member_type in folios is either 'Guests' or NULL — NULL = Member
 # ══════════════════════════════════════════════════════════════════
 @router.get("/overview")
 def finance_overview():
@@ -53,9 +53,9 @@ def finance_overview():
                      THEN f.amount ELSE 0 END)                             AS paid_revenue,
             SUM(CASE WHEN bs.payment_type = 'Free'
                      THEN f.amount ELSE 0 END)                             AS free_value,
-            SUM(CASE WHEN (f.member_type IS NULL OR f.member_type != 'Guest')
+            SUM(CASE WHEN (f.member_type IS NULL OR f.member_type != 'Guests')
                      THEN f.amount ELSE 0 END)                             AS member_revenue,
-            SUM(CASE WHEN f.member_type = 'Guest'
+            SUM(CASE WHEN f.member_type = 'Guests'
                      THEN f.amount ELSE 0 END)                             AS guest_revenue,
             COUNT(*)                                                        AS total_transactions
         FROM folios f
@@ -358,9 +358,9 @@ def finance_drilldown(
 
     elif type == "customer":
         if value == "Member":
-            where_clauses.append("AND (f.member_type IS NULL OR f.member_type != 'Guest')")
+            where_clauses.append("AND (f.member_type IS NULL OR f.member_type != 'Guests')")
         else:
-            where_clauses.append("AND f.member_type = 'Guest'")
+            where_clauses.append("AND f.member_type = 'Guests'")
 
     elif type == "paid":
         where_clauses.append("AND bs.payment_type = 'Paid'")
