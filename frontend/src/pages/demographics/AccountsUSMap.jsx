@@ -92,7 +92,7 @@
     return "var(--dashboard-flame)";
     }
 
-    export default function AccountsUSMap({ data = [] }) {
+    export default function AccountsUSMap({ data = [], onStateClick }) {
     const [hoveredState, setHoveredState] = useState(null);
 
     const stateTotals = useMemo(() => {
@@ -178,6 +178,13 @@
                         total,
                         });
                     }}
+                    onClick={() => {
+                        onStateClick?.({
+                            code: state.code,
+                            name: state.name,
+                            total,
+                        });
+                        }}
                     onMouseLeave={() => {
                         setHoveredState(null);
                     }}

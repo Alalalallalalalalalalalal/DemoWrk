@@ -15,7 +15,6 @@ def get_db():
     finally:
         db.close()
 
-
 @router.get("/dashboard-summary")
 def dashboard_summary(db: Session = Depends(get_db)):
     def rows(sql: str):
@@ -52,12 +51,6 @@ def dashboard_summary(db: Session = Depends(get_db)):
             GROUP BY UPPER(TRIM(state))
             ORDER BY total DESC
         """),
-
-        "membersByState": rows("""SELECT state, COUNT(*) AS total
-                                  FROM member_addresses
-                                  WHERE state IS NOT NULL
-                                  GROUP BY state
-                                  ORDER BY total DESC"""),
 
         "membersByGender": rows("""SELECT gender, COUNT(*) AS total
                                    FROM members
@@ -1897,3 +1890,140 @@ def visits_rooms_dashboard(
         "villa_monthly": villa_monthly_data,
         "selected_villa": selected_villa,
     }
+
+#Demographics tables
+US_STATE_CODES = {
+    "AL", "AK", "AZ", "AR", "CA",
+    "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA",
+    "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO",
+    "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH",
+    "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT",
+    "VA", "WA", "WV", "WI", "WY",
+    "DC",
+}
+
+@router.get("/state-accounts/{state_code}")
+def state_accounts(
+    state_code: str,
+    db: Session = Depends(get_db),
+):
+    normalized_state = state_code.strip().upper()
+
+    if normalized_state not in US_STATE_CODES:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid US state abbreviation",
+        )
+
+    result = db.execute(
+        text("""
+            SELECT DISTINCT ON (m.member_number)
+                m.member_number,
+                m.member_full_name,
+                m.member_name,
+                m.member_or_guest,
+                m.member_type,
+                m.status,
+                m.age,
+                m.gender,
+                m.email,
+                m.occupation,
+                m.employer,
+                m.since_date,
+                ma.address_line1,
+                ma.address_line2,
+                ma.city,
+                UPPER(TRIM(ma.state)) AS state,
+                ma.postal_code,
+                ma.country
+            FROM members m
+            INNER JOIN member_addresses ma
+                ON ma.member_number = m.member_number
+            WHERE UPPER(TRIM(ma.state)) = :state_code
+            ORDER BY
+                m.member_number,
+                ma.city NULLS LAST,
+                ma.address_line1 NULLS LAST
+        """),
+        {"state_code": normalized_state},
+    ).mappings().all()
+
+    return [dict(row) for row in result]
+
+@router.get("/account-category/{category}")
+def account_category_details(
+    category: str,
+    db: Session = Depends(get_db),
+):
+    normalized_category = category.strip().lower()
+
+    allowed_categories = {
+        "member": "Member",
+        "guest": "Guest",
+    }
+
+    if normalized_category not in allowed_categories:
+        raise HTTPException(
+            status_code=400,
+            detail="Category must be Member or Guest",
+        )
+
+    category_value = allowed_categories[normalized_category]
+
+    result = db.execute(
+        text("""
+            SELECT
+                m.member_number,
+                m.member_full_name,
+                m.member_name,
+                m.member_or_guest,
+                m.member_type,
+                m.status,
+                m.age,
+                m.gender,
+                m.email,
+                m.occupation,
+                m.employer,
+                m.since_date,
+                ma.address_line1,
+                ma.address_line2,
+                ma.city,
+                UPPER(TRIM(ma.state)) AS state,
+                ma.postal_code,
+                ma.country
+            FROM members m
+
+            LEFT JOIN LATERAL (
+                SELECT
+                    address_line1,
+                    address_line2,
+                    city,
+                    state,
+                    postal_code,
+                    country
+                FROM member_addresses
+                WHERE member_number = m.member_number
+                ORDER BY
+                    city NULLS LAST,
+                    address_line1 NULLS LAST
+                LIMIT 1
+            ) ma ON TRUE
+
+            WHERE LOWER(TRIM(m.member_or_guest)) =
+                LOWER(:category)
+
+            ORDER BY
+                m.member_full_name NULLS LAST,
+                m.member_name NULLS LAST,
+                m.member_number
+        """),
+        {
+            "category": category_value,
+        },
+    ).mappings().all()
+
+    return [dict(row) for row in result]

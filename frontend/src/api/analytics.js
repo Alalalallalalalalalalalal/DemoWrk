@@ -37,6 +37,21 @@ export const analyticsApi = {
   // Combined dashboard endpoint
   dashboardSummary: () => fetchData("/analytics/dashboard-summary"),
 
+  // Demographics detail endpoints
+  stateAccounts: (stateCode) =>
+    fetchData(
+      `/analytics/state-accounts/${encodeURIComponent(
+        stateCode,
+      )}`,
+    ),
+
+  accountCategoryDetails: (category) =>
+    fetchData(
+      `/analytics/account-category/${encodeURIComponent(
+        category,
+      )}`,
+    ),
+
   // Season endpoints
   seasonSummary: () => fetchData("/analytics/season-summary"),
 
