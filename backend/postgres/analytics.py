@@ -1244,6 +1244,9 @@ def villa_stats(
     month: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
+    # One row per villa + bedroom count.
+    # This prevents villas with multiple bedroom configurations from being collapsed
+    # into a single comma-separated bedroom_counts value.
     return rows(db, f"""
         WITH booking_rows AS (
             SELECT
@@ -1276,13 +1279,10 @@ def villa_stats(
         )
         SELECT
             villa_name,
-            STRING_AGG(
-              DISTINCT bedroom_count::text,
-              ', '
-              ORDER BY bedroom_count::text
-            ) AS bedroom_counts,
-            MIN(bedroom_count) AS min_bedrooms,
-            MAX(bedroom_count) AS max_bedrooms,
+            bedroom_count,
+            bedroom_count::text AS bedroom_counts,
+            bedroom_count AS min_bedrooms,
+            bedroom_count AS max_bedrooms,
             COUNT(*) AS bookings,
             SUM(nights) AS total_nights,
             ROUND(AVG(nights)::numeric, 1) AS avg_stay,
@@ -1291,8 +1291,8 @@ def villa_stats(
             ROUND(AVG(persons)::numeric, 1) AS avg_party_size,
             SUM(revenue) AS revenue
         FROM booking_rows
-        GROUP BY villa_name
-        ORDER BY bookings DESC
+        GROUP BY villa_name, bedroom_count
+        ORDER BY bookings DESC, villa_name, bedroom_count NULLS LAST
     """, filter_params(year, month))
 
 @router.get("/villa-monthly")
@@ -1381,6 +1381,21 @@ def bedroom_bookings(
                 MAX(m.member_full_name) AS member_full_name,
                 MAX(m.member_name) AS member_name,
                 MAX(m.email) AS email,
+                MAX(m.prefix) AS title,
+                MAX(mp.phone_number) AS phone,
+                MAX(TRIM(
+                    CONCAT_WS(
+                        ', ',
+                        NULLIF(a.address_line1, ''),
+                        NULLIF(a.address_line2, ''),
+                        NULLIF(a.city, ''),
+                        NULLIF(a.state, ''),
+                        NULLIF(a.postal_code, ''),
+                        NULLIF(a.country, '')
+                    )
+                )) AS address,
+                MAX(a.country) AS country,
+                MAX(a.state) AS state,
                 MAX(f.guest_name) AS guest_name,
                 MAX(f.persons) AS persons,
                 MAX(f.bedroom_count) AS bedroom_count,
@@ -1390,6 +1405,24 @@ def bedroom_bookings(
             FROM folios f
             LEFT JOIN members m
               ON m.member_number = f.member_number
+            LEFT JOIN member_addresses a
+              ON a.member_number = f.member_number
+            LEFT JOIN (
+                SELECT DISTINCT ON (member_number)
+                    member_number,
+                    phone_number
+                FROM member_phones
+                WHERE phone_number IS NOT NULL
+                ORDER BY
+                    member_number,
+                    CASE phone_type
+                        WHEN 'cell' THEN 1
+                        WHEN 'home' THEN 2
+                        WHEN 'business' THEN 3
+                        ELSE 4
+                    END
+            ) mp
+              ON mp.member_number = f.member_number
             WHERE f.conf_code IS NOT NULL
               AND f.bedroom_count = :beds
               AND f.check_in_date IS NOT NULL
@@ -1476,6 +1509,24 @@ def visits_tab_summary(
             FROM folios f
             LEFT JOIN members m
               ON m.member_number = f.member_number
+            LEFT JOIN member_addresses a
+              ON a.member_number = f.member_number
+            LEFT JOIN (
+                SELECT DISTINCT ON (member_number)
+                    member_number,
+                    phone_number
+                FROM member_phones
+                WHERE phone_number IS NOT NULL
+                ORDER BY
+                    member_number,
+                    CASE phone_type
+                        WHEN 'cell' THEN 1
+                        WHEN 'home' THEN 2
+                        WHEN 'business' THEN 3
+                        ELSE 4
+                    END
+            ) mp
+              ON mp.member_number = f.member_number
             WHERE {valid_booking_sql("f")}
               AND f.villa_name IS NOT NULL
               {date_filter_sql("f")}
@@ -1514,7 +1565,21 @@ def villa_bookings(
                 MAX(m.member_full_name) AS member_full_name,
                 MAX(m.member_name) AS member_name,
                 MAX(m.email) AS email,
+                MAX(m.prefix) AS title,
                 MAX(mp.phone_number) AS phone,
+                MAX(TRIM(
+                    CONCAT_WS(
+                        ', ',
+                        NULLIF(a.address_line1, ''),
+                        NULLIF(a.address_line2, ''),
+                        NULLIF(a.city, ''),
+                        NULLIF(a.state, ''),
+                        NULLIF(a.postal_code, ''),
+                        NULLIF(a.country, '')
+                    )
+                )) AS address,
+                MAX(a.country) AS country,
+                MAX(a.state) AS state,
                 MAX(f.guest_name) AS guest_name,
                 MAX(f.persons) AS persons,
                 MAX(f.bedroom_count) AS bedroom_count,
@@ -1534,9 +1599,24 @@ def villa_bookings(
             FROM folios f
             LEFT JOIN members m
               ON m.member_number = f.member_number
-            LEFT JOIN member_phones mp
+            LEFT JOIN member_addresses a
+              ON a.member_number = f.member_number
+            LEFT JOIN (
+                SELECT DISTINCT ON (member_number)
+                    member_number,
+                    phone_number
+                FROM member_phones
+                WHERE phone_number IS NOT NULL
+                ORDER BY
+                    member_number,
+                    CASE phone_type
+                        WHEN 'cell' THEN 1
+                        WHEN 'home' THEN 2
+                        WHEN 'business' THEN 3
+                        ELSE 4
+                    END
+            ) mp
               ON mp.member_number = f.member_number
-             AND mp.phone_type IN ('cell', 'home', 'business')
             WHERE f.conf_code IS NOT NULL
               AND f.villa_name = :villa
               AND f.check_in_date IS NOT NULL
@@ -1572,7 +1652,11 @@ def villa_bookings(
             br.member_full_name,
             br.member_name,
             br.email,
+            br.title,
             br.phone,
+            br.address,
+            br.country,
+            br.state,
             br.guest_name,
             br.persons,
             br.bedroom_count,
@@ -1582,6 +1666,8 @@ def villa_bookings(
             br.revenue
         ORDER BY br.check_in_date DESC
     """, {"villa": villa, **filter_params(year, month)})
+
+
 @router.get("/booked-people")
 def booked_people(
     kind: str = Query(pattern="^(members|guests)$"),
@@ -1608,14 +1694,47 @@ def booked_people(
                 MAX(m.member_type) AS member_type,
                 MAX(m.member_or_guest) AS member_or_guest,
                 MAX(m.email) AS email,
+                MAX(m.prefix) AS title,
+                MAX(mp.phone_number) AS phone,
+                MAX(TRIM(
+                    CONCAT_WS(
+                        ', ',
+                        NULLIF(a.address_line1, ''),
+                        NULLIF(a.address_line2, ''),
+                        NULLIF(a.city, ''),
+                        NULLIF(a.state, ''),
+                        NULLIF(a.postal_code, ''),
+                        NULLIF(a.country, '')
+                    )
+                )) AS address,
+                MAX(a.country) AS country,
+                MAX(a.state) AS state,
                 MAX(f.guest_name) AS folio_guest_name,
                 MAX(f.persons) AS persons,
                 MIN(f.check_in_date) AS check_in_date,
                 MAX(f.check_out_date) AS check_out_date,
-                MAX(f.check_out_date - f.check_in_date) AS nights
+                GREATEST(MAX(f.check_out_date) - MIN(f.check_in_date), 0) AS nights
             FROM folios f
             LEFT JOIN members m
               ON m.member_number = f.member_number
+            LEFT JOIN member_addresses a
+              ON a.member_number = f.member_number
+            LEFT JOIN (
+                SELECT DISTINCT ON (member_number)
+                    member_number,
+                    phone_number
+                FROM member_phones
+                WHERE phone_number IS NOT NULL
+                ORDER BY
+                    member_number,
+                    CASE phone_type
+                        WHEN 'cell' THEN 1
+                        WHEN 'home' THEN 2
+                        WHEN 'business' THEN 3
+                        ELSE 4
+                    END
+            ) mp
+              ON mp.member_number = f.member_number
             WHERE {valid_booking_sql("f")}
               {member_filter}
               {date_filter_sql("f")}
@@ -1641,11 +1760,16 @@ def booked_people(
             ba.member_type,
             ba.member_or_guest,
             ba.email,
+            ba.title,
+            ba.phone,
+            ba.address,
+            ba.country,
+            ba.state,
             MAX(ba.folio_guest_name) AS folio_guest_name,
             COUNT(DISTINCT ba.conf_code) AS bookings,
             MIN(ba.check_in_date) AS first_check_in,
             MAX(ba.check_out_date) AS last_check_out,
-            SUM(ba.nights) AS nights,
+           SUM(DISTINCT ba.nights) AS nights,
             SUM(COALESCE(ba.persons, 0)) AS total_party_size,
             COALESCE(
                 json_agg(
@@ -1669,7 +1793,12 @@ def booked_people(
             ba.member_name,
             ba.member_type,
             ba.member_or_guest,
-            ba.email
+            ba.email,
+            ba.title,
+            ba.phone,
+            ba.address,
+            ba.country,
+            ba.state
         ORDER BY bookings DESC, member_full_name, member_name
         LIMIT 1000
     """, filter_params(year, month))

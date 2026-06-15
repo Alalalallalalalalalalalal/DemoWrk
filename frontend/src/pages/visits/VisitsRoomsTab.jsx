@@ -18,7 +18,12 @@ import {
   ArrowUpRight,
   X,
   Info,
+  Download,
+  ChevronDown,
 } from "lucide-react";
+import * as XLSX from "xlsx";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 import { analyticsApi } from "../../api/analytics";
 
 const C = {
@@ -268,7 +273,188 @@ function ChartInfo({ id }) {
   );
 }
 
+// -----
+function downloadFile(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  link.click();
+
+  URL.revokeObjectURL(url);
+}
+
+function exportRows(rows, filenameBase, format) {
+  if (!rows.length) return;
+
+  if (format === "csv") {
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const csv = XLSX.utils.sheet_to_csv(worksheet);
+
+    downloadFile(
+      new Blob([csv], { type: "text/csv;charset=utf-8;" }),
+      `${filenameBase}.csv`,
+    );
+  }
+
+  if (format === "excel") {
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Export");
+    XLSX.writeFile(workbook, `${filenameBase}.xlsx`);
+  }
+
+  if (format === "pdf") {
+    const doc = new jsPDF({ orientation: "landscape" });
+    const columns = Object.keys(rows[0] ?? {});
+
+    doc.text(filenameBase.replaceAll("_", " "), 14, 14);
+
+    autoTable(doc, {
+      startY: 20,
+      head: [columns],
+      body: rows.map((row) => columns.map((col) => row[col] ?? "")),
+      styles: { fontSize: 7 },
+      headStyles: { fillColor: [30, 48, 70] },
+    });
+
+    doc.save(`${filenameBase}.pdf`);
+  }
+}
+
+const safeFilePart = (value) =>
+  String(value || "all")
+    .trim()
+    .replace(/[^a-z0-9]+/gi, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase();
+
+const exportButtonStyle = (disabled) => ({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "7px 12px",
+  borderRadius: 10,
+  border: `1px solid ${C.accent2}`,
+  background: C.panelAlt,
+  color: C.accent,
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: disabled ? "not-allowed" : "pointer",
+  opacity: disabled ? 0.55 : 1,
+});
+
+function ExportMenu({ rows, filenameBase, disabled }) {
+  const [open, setOpen] = useState(false);
+
+  const doExport = (format) => {
+    exportRows(rows, filenameBase, format);
+    setOpen(false);
+  };
+
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        style={exportButtonStyle(disabled)}
+      >
+        <Download size={13} />
+        Export
+        <ChevronDown size={12} />
+      </button>
+
+      {open && !disabled && (
+        <div
+          style={{
+            position: "absolute",
+            right: 0,
+            top: "calc(100% + 6px)",
+            zIndex: 20,
+            minWidth: 130,
+            background: C.bg,
+            border: `1px solid ${C.border}`,
+            borderRadius: 10,
+            boxShadow: "0 10px 26px rgba(0,0,0,0.14)",
+            overflow: "hidden",
+          }}
+        >
+          {[
+            ["csv", "CSV"],
+            ["excel", "Excel"],
+            ["pdf", "PDF"],
+          ].map(([format, label]) => (
+            <button
+              key={format}
+              type="button"
+              onClick={() => doExport(format)}
+              style={{
+                display: "block",
+                width: "100%",
+                padding: "9px 12px",
+                border: "none",
+                background: "transparent",
+                color: C.text,
+                textAlign: "left",
+                cursor: "pointer",
+                fontSize: 12,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ────────────────────────────────────────────────────────────────────────────
+
+const searchRows = (rows, q) => {
+  const term = q.trim().toLowerCase();
+  if (!term) return rows;
+
+  return rows.filter((row) =>
+    Object.values(row).some((v) =>
+      String(v ?? "")
+        .toLowerCase()
+        .includes(term),
+    ),
+  );
+};
+
+const sortRows = (rows, key, dir = "asc") => {
+  const mult = dir === "asc" ? 1 : -1;
+
+  return [...rows].sort((a, b) => {
+    const av = a?.[key];
+    const bv = b?.[key];
+
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+
+    const an = Number(av);
+    const bn = Number(bv);
+
+    if (!Number.isNaN(an) && !Number.isNaN(bn)) {
+      return (an - bn) * mult;
+    }
+
+    return (
+      String(av).localeCompare(String(bv), undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }) * mult
+    );
+  });
+};
+
+//---
 
 const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
 const money = (v) =>
@@ -347,6 +533,16 @@ function Card({ title, sub, children, action }) {
   );
 }
 
+const optionLabel = (option, label) => {
+  if (option === "All") return `All ${label}s`;
+  if (option === "asc") return "Ascending";
+  if (option === "desc") return "Descending";
+
+  return String(option)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
 function Select({ label, value, onChange, options }) {
   return (
     <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -365,7 +561,7 @@ function Select({ label, value, onChange, options }) {
       >
         {options.map((o) => (
           <option key={o} value={o}>
-            {o === "All" ? `All ${label}s` : o}
+            {optionLabel(o, label)}
           </option>
         ))}
       </select>
@@ -373,21 +569,96 @@ function Select({ label, value, onChange, options }) {
   );
 }
 
+// ─── Reusable modal filter bar ───────────────────────────────────────────────
+
+function ModalFilterBar({
+  year,
+  month,
+  onYearChange,
+  onMonthChange,
+  years,
+  months,
+}) {
+  return (
+    <div
+      style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}
+    >
+      <Select
+        label="Year"
+        value={year}
+        onChange={onYearChange}
+        options={years}
+      />
+      <Select
+        label="Month"
+        value={month}
+        onChange={onMonthChange}
+        options={months}
+      />
+    </div>
+  );
+}
+
+function TableControls({
+  search,
+  onSearchChange,
+  sortKey,
+  onSortKeyChange,
+  sortDir,
+  onSortDirChange,
+  sortOptions,
+  placeholder = "Search table...",
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 10,
+        alignItems: "center",
+        flexWrap: "wrap",
+        marginBottom: 12,
+      }}
+    >
+      <input
+        value={search}
+        onChange={(e) => onSearchChange(e.target.value)}
+        placeholder={placeholder}
+        style={{
+          flex: "1 1 220px",
+          minWidth: 0,
+          padding: "8px 10px",
+          borderRadius: 10,
+          border: `1px solid ${C.border}`,
+          background: C.bg,
+          color: C.text,
+          fontSize: 12,
+          outline: "none",
+        }}
+      />
+      <Select
+        label="Sort"
+        value={sortKey}
+        onChange={onSortKeyChange}
+        options={sortOptions}
+      />
+      <Select
+        label="Order"
+        value={sortDir}
+        onChange={onSortDirChange}
+        options={["asc", "desc"]}
+      />
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+
 export default function VisitsRoomsTab({
   selectedVillaName,
   onVillaSelect,
   onGoToML,
 }) {
-  const [year, setYear] = useState("All");
-  const [month, setMonth] = useState("All");
-
-  const [summaryData, setSummaryData] = useState({});
-  const [villaStatsData, setVillaStatsData] = useState([]);
-  const [villaMonthlyData, setVillaMonthlyData] = useState([]);
-  const [bookingsByBedroomData, setBookingsByBedroomData] = useState([]);
-  const [monthlyRevenueData, setMonthlyRevenueData] = useState([]);
-  const [visitsDataLoading, setVisitsDataLoading] = useState(false);
-
+  // ── Shared constants ──────────────────────────────────────────────────────
   const months = [
     "All",
     "Jan",
@@ -404,14 +675,6 @@ export default function VisitsRoomsTab({
     "Dec",
   ];
 
-  const activeFilters = useMemo(
-    () => ({
-      year: year === "All" ? null : Number(year),
-      month: month === "All" ? null : months.indexOf(month),
-    }),
-    [year, month],
-  );
-
   const years = useMemo(() => {
     const currentYear = new Date().getFullYear();
     return [
@@ -423,35 +686,87 @@ export default function VisitsRoomsTab({
     ];
   }, []);
 
+  // helper: convert UI year/month strings → API filter object
+  const toFilters = (y, m) => ({
+    year: y === "All" ? null : Number(y),
+    month: m === "All" ? null : months.indexOf(m),
+  });
+
+  // ── Tab-level filters ─────────────────────────────────────────────────────
+  const [year, setYear] = useState("All");
+  const [month, setMonth] = useState("All");
+
+  const activeFilters = useMemo(() => toFilters(year, month), [year, month]);
+
+  // ── Tab-level data ────────────────────────────────────────────────────────
+  const [summaryData, setSummaryData] = useState({});
+  const [villaChartData, setVillaChartData] = useState([]);
+  const [villaTableData, setVillaTableData] = useState([]);
+  const [villaMonthlyData, setVillaMonthlyData] = useState([]);
+  const [bookingsByBedroomData, setBookingsByBedroomData] = useState([]);
+  const [monthlyRevenueData, setMonthlyRevenueData] = useState([]);
+  const [visitsDataLoading, setVisitsDataLoading] = useState(false);
+
+  const [villaChartYear, setVillaChartYear] = useState("All");
+  const [villaChartMonth, setVillaChartMonth] = useState("All");
+  const [villaTableYear, setVillaTableYear] = useState("All");
+  const [villaTableMonth, setVillaTableMonth] = useState("All");
+  const [selectedVillaChartYear, setSelectedVillaChartYear] = useState("All");
+  const [selectedVillaChartMonth, setSelectedVillaChartMonth] = useState("All");
+  const [bedroomChartYear, setBedroomChartYear] = useState("All");
+  const [bedroomChartMonth, setBedroomChartMonth] = useState("All");
+  const [monthlyChartYear, setMonthlyChartYear] = useState("All");
+  const [monthlyChartMonth, setMonthlyChartMonth] = useState("All");
+
+  const [villaTableSearch, setVillaTableSearch] = useState("");
+  const [villaTableSortKey, setVillaTableSortKey] = useState("bookings");
+  const [villaTableSortDir, setVillaTableSortDir] = useState("desc");
+
+  const [peopleSearch, setPeopleSearch] = useState("");
+  const [peopleSortKey, setPeopleSortKey] = useState("bookings");
+  const [peopleSortDir, setPeopleSortDir] = useState("desc");
+
+  const [bedroomSearch, setBedroomSearch] = useState("");
+  const [bedroomSortKey, setBedroomSortKey] = useState("check_in_date");
+  const [bedroomSortDir, setBedroomSortDir] = useState("desc");
+
+  const [villaBookingSearch, setVillaBookingSearch] = useState("");
+  const [villaBookingSortKey, setVillaBookingSortKey] =
+    useState("check_in_date");
+  const [villaBookingSortDir, setVillaBookingSortDir] = useState("desc");
+
+  const villaChartFilters = useMemo(
+    () => toFilters(villaChartYear, villaChartMonth),
+    [villaChartYear, villaChartMonth],
+  );
+  const villaTableFilters = useMemo(
+    () => toFilters(villaTableYear, villaTableMonth),
+    [villaTableYear, villaTableMonth],
+  );
+  const selectedVillaChartFilters = useMemo(
+    () => toFilters(selectedVillaChartYear, selectedVillaChartMonth),
+    [selectedVillaChartYear, selectedVillaChartMonth],
+  );
+  const bedroomChartFilters = useMemo(
+    () => toFilters(bedroomChartYear, bedroomChartMonth),
+    [bedroomChartYear, bedroomChartMonth],
+  );
+  const monthlyChartFilters = useMemo(
+    () => toFilters(monthlyChartYear, monthlyChartMonth),
+    [monthlyChartYear, monthlyChartMonth],
+  );
+
   useEffect(() => {
     let cancelled = false;
 
-    async function loadFilteredData() {
+    async function loadSummary() {
       setVisitsDataLoading(true);
-
       try {
-        const data = await analyticsApi.visitsRoomsDashboard({
-          ...activeFilters,
-          villa: selectedVillaName,
-        });
+        const data = await analyticsApi.visitsRoomsDashboard(activeFilters);
 
         if (cancelled) return;
 
         setSummaryData(data?.summary ?? {});
-        setVillaStatsData(
-          Array.isArray(data?.villa_stats) ? data.villa_stats : [],
-        );
-        setBookingsByBedroomData(
-          Array.isArray(data?.bookings_by_bedroom)
-            ? data.bookings_by_bedroom
-            : [],
-        );
-        setMonthlyRevenueData(
-          Array.isArray(data?.monthly_revenue) ? data.monthly_revenue : [],
-        );
-        setVillaMonthlyData(
-          Array.isArray(data?.villa_monthly) ? data.villa_monthly : [],
-        );
       } catch (err) {
         console.error(err);
       } finally {
@@ -459,30 +774,161 @@ export default function VisitsRoomsTab({
       }
     }
 
-    loadFilteredData();
-
+    loadSummary();
     return () => {
       cancelled = true;
     };
-  }, [activeFilters, selectedVillaName]);
+  }, [activeFilters]);
 
-  const filteredVillas = villaStatsData;
+  useEffect(() => {
+    let cancelled = false;
 
-  const mostVilla = filteredVillas[0];
-  const leastVilla = filteredVillas.length
-    ? [...filteredVillas].sort(
+    async function loadVillaChart() {
+      try {
+        const data = await analyticsApi.visitsRoomsDashboard(villaChartFilters);
+        if (cancelled) return;
+
+        setVillaChartData(
+          Array.isArray(data?.villa_stats) ? data.villa_stats : [],
+        );
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setVillaChartData([]);
+      }
+    }
+
+    loadVillaChart();
+    return () => {
+      cancelled = true;
+    };
+  }, [villaChartFilters]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadVillaTable() {
+      try {
+        const data = await analyticsApi.visitsRoomsDashboard(villaTableFilters);
+        if (cancelled) return;
+
+        setVillaTableData(
+          Array.isArray(data?.villa_stats) ? data.villa_stats : [],
+        );
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setVillaTableData([]);
+      }
+    }
+
+    loadVillaTable();
+    return () => {
+      cancelled = true;
+    };
+  }, [villaTableFilters]);
+
+  useEffect(() => {
+    if (!selectedVillaName) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadSelectedVillaMonthly() {
+      try {
+        const data = await analyticsApi.visitsRoomsDashboard({
+          villa: selectedVillaName,
+          ...selectedVillaChartFilters,
+        });
+        if (cancelled) return;
+
+        setVillaMonthlyData(
+          Array.isArray(data?.villa_monthly) ? data.villa_monthly : [],
+        );
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setVillaMonthlyData([]);
+      }
+    }
+
+    loadSelectedVillaMonthly();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedVillaName, selectedVillaChartFilters]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadBedroomCharts() {
+      try {
+        const data =
+          await analyticsApi.visitsRoomsDashboard(bedroomChartFilters);
+        if (cancelled) return;
+
+        setBookingsByBedroomData(
+          Array.isArray(data?.bookings_by_bedroom)
+            ? data.bookings_by_bedroom
+            : [],
+        );
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setBookingsByBedroomData([]);
+      }
+    }
+
+    loadBedroomCharts();
+    return () => {
+      cancelled = true;
+    };
+  }, [bedroomChartFilters]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadMonthlyTrends() {
+      try {
+        const data =
+          await analyticsApi.visitsRoomsDashboard(monthlyChartFilters);
+        if (cancelled) return;
+
+        setMonthlyRevenueData(
+          Array.isArray(data?.monthly_revenue) ? data.monthly_revenue : [],
+        );
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setMonthlyRevenueData([]);
+      }
+    }
+
+    loadMonthlyTrends();
+    return () => {
+      cancelled = true;
+    };
+  }, [monthlyChartFilters]);
+
+  const tableVillas = villaTableData;
+
+  const filteredTableVillas = useMemo(() => {
+    const searched = searchRows(tableVillas, villaTableSearch);
+    return sortRows(searched, villaTableSortKey, villaTableSortDir);
+  }, [tableVillas, villaTableSearch, villaTableSortKey, villaTableSortDir]);
+
+  const chartVillas = villaChartData;
+
+  const mostVilla = chartVillas[0];
+  const leastVilla = chartVillas.length
+    ? [...chartVillas].sort(
         (a, b) => Number(a.bookings ?? 0) - Number(b.bookings ?? 0),
       )[0]
     : null;
 
   const selectedVilla =
-    filteredVillas.find((v) => v.villa_name === selectedVillaName) ??
+    tableVillas.find((v) => v.villa_name === selectedVillaName) ??
     mostVilla ??
     null;
 
   const bedroomsLabel = (villa) => {
     if (!villa) return "—";
-
     if (villa.bedroom_counts) {
       return String(villa.bedroom_counts)
         .split(",")
@@ -490,105 +936,262 @@ export default function VisitsRoomsTab({
         .filter(Boolean)
         .join(", ");
     }
-
     return villa.bedroom_count ?? "—";
   };
 
+  // ── Villa modal — independent filters ────────────────────────────────────
   const [villaModalOpen, setVillaModalOpen] = useState(false);
   const [villaBookings, setVillaBookings] = useState([]);
   const [villaBookingsLoading, setVillaBookingsLoading] = useState(false);
+  const [villaYear, setVillaYear] = useState("All");
+  const [villaMonth, setVillaMonth] = useState("All");
 
-  const openVillaModal = async (villaName) => {
-    if (!villaName) return;
+  const villaModalFilters = useMemo(
+    () => toFilters(villaYear, villaMonth),
+    [villaYear, villaMonth],
+  );
 
-    onVillaSelect(villaName);
-    setVillaModalOpen(true);
-    setVillaBookingsLoading(true);
+  // Fetch villa bookings whenever the modal is open and its filters change
+  useEffect(() => {
+    if (!villaModalOpen || !selectedVillaName) return;
+    let cancelled = false;
 
-    try {
-      const data = await analyticsApi.villaBookings(villaName, activeFilters);
-      setVillaBookings(data);
-    } catch (err) {
-      console.error(err);
-      setVillaBookings([]);
-    } finally {
-      setVillaBookingsLoading(false);
+    async function load() {
+      setVillaBookingsLoading(true);
+      try {
+        const data = await analyticsApi.villaBookings(
+          selectedVillaName,
+          villaModalFilters,
+        );
+        if (!cancelled) setVillaBookings(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setVillaBookings([]);
+      } finally {
+        if (!cancelled) setVillaBookingsLoading(false);
+      }
     }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [villaModalOpen, selectedVillaName, villaModalFilters]);
+
+  const openVillaModal = (villaName) => {
+    if (!villaName) return;
+    onVillaSelect(villaName);
+    // Reset modal filters to tab-level defaults when opening
+    setVillaYear(year);
+    setVillaMonth(month);
+    setVillaModalOpen(true);
   };
 
+  // ── Bedroom modal — independent filters ──────────────────────────────────
   const [bedroomModalOpen, setBedroomModalOpen] = useState(false);
   const [selectedBedroom, setSelectedBedroom] = useState(null);
   const [bedroomBookings, setBedroomBookings] = useState([]);
   const [bedroomBookingsLoading, setBedroomBookingsLoading] = useState(false);
+  const [bedroomYear, setBedroomYear] = useState("All");
+  const [bedroomMonth, setBedroomMonth] = useState("All");
 
-  const openBedroomModal = async (beds) => {
-    if (!beds) return;
+  const bedroomModalFilters = useMemo(
+    () => toFilters(bedroomYear, bedroomMonth),
+    [bedroomYear, bedroomMonth],
+  );
 
-    setSelectedBedroom(beds);
-    setBedroomModalOpen(true);
-    setBedroomBookingsLoading(true);
+  // Fetch bedroom bookings whenever the modal is open and its filters change
+  useEffect(() => {
+    if (!bedroomModalOpen || !selectedBedroom) return;
+    let cancelled = false;
 
-    try {
-      const data = await analyticsApi.bedroomBookings(beds, activeFilters);
-      setBedroomBookings(data);
-    } catch (err) {
-      console.error(err);
-      setBedroomBookings([]);
-    } finally {
-      setBedroomBookingsLoading(false);
+    async function load() {
+      setBedroomBookingsLoading(true);
+      try {
+        const data = await analyticsApi.bedroomBookings(
+          selectedBedroom,
+          bedroomModalFilters,
+        );
+        if (!cancelled) setBedroomBookings(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setBedroomBookings([]);
+      } finally {
+        if (!cancelled) setBedroomBookingsLoading(false);
+      }
     }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [bedroomModalOpen, selectedBedroom, bedroomModalFilters]);
+
+  const openBedroomModal = (beds) => {
+    if (!beds) return;
+    setSelectedBedroom(beds);
+    // Reset modal filters to tab-level defaults when opening
+    setBedroomYear(year);
+    setBedroomMonth(month);
+    setBedroomModalOpen(true);
   };
 
+  // ── People modal — independent filters (unchanged pattern) ───────────────
   const [peopleModalOpen, setPeopleModalOpen] = useState(false);
   const [peopleKind, setPeopleKind] = useState("members");
   const [peopleRows, setPeopleRows] = useState([]);
   const [peopleLoading, setPeopleLoading] = useState(false);
-  const [peopleYear, setPeopleYear] = useState(year);
-  const [peopleMonth, setPeopleMonth] = useState(month);
+  const [peopleYear, setPeopleYear] = useState("All");
+  const [peopleMonth, setPeopleMonth] = useState("All");
 
   const peopleFilters = useMemo(
-    () => ({
-      year: peopleYear === "All" ? null : Number(peopleYear),
-      month: peopleMonth === "All" ? null : months.indexOf(peopleMonth),
-    }),
+    () => toFilters(peopleYear, peopleMonth),
     [peopleYear, peopleMonth],
   );
 
-  const loadPeopleRows = async (kind, filters = peopleFilters) => {
-    setPeopleLoading(true);
-    try {
-      const data = await analyticsApi.bookedPeople(kind, filters);
-      setPeopleRows(Array.isArray(data) ? data : []);
-    } catch (err) {
-      console.error(err);
-      setPeopleRows([]);
-    } finally {
-      setPeopleLoading(false);
-    }
-  };
+  useEffect(() => {
+    if (!peopleModalOpen) return;
+    let cancelled = false;
 
-  const openPeopleModal = async (kind) => {
+    async function load() {
+      setPeopleLoading(true);
+      try {
+        const data = await analyticsApi.bookedPeople(peopleKind, peopleFilters);
+        if (!cancelled) setPeopleRows(Array.isArray(data) ? data : []);
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setPeopleRows([]);
+      } finally {
+        if (!cancelled) setPeopleLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [peopleModalOpen, peopleKind, peopleFilters]);
+
+  const openPeopleModal = (kind) => {
     setPeopleKind(kind);
+    // Reset modal filters to tab-level defaults when opening
     setPeopleYear(year);
     setPeopleMonth(month);
     setPeopleModalOpen(true);
-
-    const filters = {
-      year: year === "All" ? null : Number(year),
-      month: month === "All" ? null : months.indexOf(month),
-    };
-
-    await loadPeopleRows(kind, filters);
   };
 
-  useEffect(() => {
-    if (!peopleModalOpen) return;
-    loadPeopleRows(peopleKind, peopleFilters);
-  }, [peopleKind, peopleFilters, peopleModalOpen]);
+  const filteredPeopleRows = useMemo(() => {
+    const searched = searchRows(peopleRows, peopleSearch);
+    return sortRows(searched, peopleSortKey, peopleSortDir);
+  }, [peopleRows, peopleSearch, peopleSortKey, peopleSortDir]);
+
+  const filteredBedroomBookings = useMemo(() => {
+    const searched = searchRows(bedroomBookings, bedroomSearch);
+    return sortRows(searched, bedroomSortKey, bedroomSortDir);
+  }, [bedroomBookings, bedroomSearch, bedroomSortKey, bedroomSortDir]);
+
+  const filteredVillaBookings = useMemo(() => {
+    const searched = searchRows(villaBookings, villaBookingSearch);
+    return sortRows(searched, villaBookingSortKey, villaBookingSortDir);
+  }, [
+    villaBookings,
+    villaBookingSearch,
+    villaBookingSortKey,
+    villaBookingSortDir,
+  ]);
+
+  const today = new Date().toISOString().split("T")[0];
+
+  const villaBedroomLabel = (villa) =>
+    villa?.bedroom_count != null && villa?.bedroom_count !== ""
+      ? villa.bedroom_count
+      : bedroomsLabel(villa);
+
+  const villaPerformanceRows = filteredTableVillas.map((v) => ({
+    Villa: v.villa_name ?? "",
+    Bedrooms: villaBedroomLabel(v),
+    Bookings: v.bookings ?? "",
+    Nights: v.total_nights ?? "",
+    "Avg Stay": v.avg_stay ?? "",
+    Revenue: v.revenue ?? "",
+  }));
+
+  const villaPerformanceFilename = `villa_performance_by_bedroom_${safeFilePart(villaTableYear)}_${safeFilePart(villaTableMonth)}_${today}`;
+
+  const peopleExportRows = filteredPeopleRows.map((p) => ({
+    Name:
+      p.member_full_name ||
+      p.member_name ||
+      p.folio_guest_name ||
+      p.guest_name ||
+      "",
+    Title: p.title ?? p.prefix ?? "",
+    Email: p.email ?? "",
+    Phone: p.phone ?? p.telephone ?? p.phone_number ?? "",
+    Address: p.address ?? "",
+    Country: p.country ?? "",
+    State: p.state ?? "",
+    "Member #": p.member_number ?? "",
+    "Member Type": p.member_type ?? "",
+    Account: p.member_or_guest ?? "",
+    Bookings: p.bookings ?? "",
+    Nights: p.nights ?? "",
+    "First In": p.first_check_in ?? "",
+    "Last Out": p.last_check_out ?? "",
+  }));
+
+  const peopleFilename = `${peopleKind}_booked_${safeFilePart(peopleYear)}_${safeFilePart(peopleMonth)}_${today}`;
+
+  const bedroomExportRows = filteredBedroomBookings.map((b) => ({
+    Bedroom: selectedBedroom ?? "",
+    Who: b.member_full_name || b.member_name || b.guest_name || "",
+    Title: b.title ?? b.prefix ?? "",
+    Email: b.email ?? "",
+    Phone: b.phone ?? b.telephone ?? b.phone_number ?? "",
+    Address: b.address ?? "",
+    Country: b.country ?? "",
+    State: b.state ?? "",
+    Villa: b.villa_name ?? "",
+    "Check In": b.check_in_date ?? "",
+    "Check Out": b.check_out_date ?? "",
+    Nights: b.nights ?? "",
+    Guests: b.persons ?? "",
+    "Confirmation Code": b.conf_code ?? "",
+  }));
+
+  const bedroomFilename = `${safeFilePart(selectedBedroom)}_bedroom_bookings_${safeFilePart(bedroomYear)}_${safeFilePart(bedroomMonth)}_${today}`;
+
+  const villaBookingRows = filteredVillaBookings.map((b) => ({
+    Villa: selectedVillaName ?? "",
+    Guest: b.member_full_name || b.member_name || b.guest_name || "",
+    Title: b.title ?? b.prefix ?? "",
+    Email: b.email ?? "",
+    Phone: b.phone ?? b.telephone ?? b.phone_number ?? "",
+    Address: b.address ?? "",
+    Country: b.country ?? "",
+    State: b.state ?? "",
+    "Member #": b.member_number ?? "",
+    "Confirmation Code": b.conf_code ?? "",
+    Revenue: b.revenue ?? "",
+    "Check In": b.check_in_date ?? "",
+    "Check Out": b.check_out_date ?? "",
+    Nights: b.nights ?? "",
+    Guests: b.persons ?? "",
+    "Guest Manifest": Array.isArray(b.guests)
+      ? b.guests
+          .map((g) => g.name || g.guest_name || g.full_name || "")
+          .filter(Boolean)
+          .join(", ")
+      : "",
+  }));
+
+  const villaBookingFilename = `${safeFilePart(selectedVillaName)}_bookings_${safeFilePart(villaYear)}_${safeFilePart(villaMonth)}_${today}`;
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="dashboard-section">
-      {/* Filters */}
+      {/* Tab-level Filters */}
       <div
         className="dashboard-card"
         style={{
@@ -638,7 +1241,6 @@ export default function VisitsRoomsTab({
           sub="Unique members"
           onClick={() => openPeopleModal("members")}
         />
-
         <Stat
           icon={Users}
           label="Total Guests Booked"
@@ -677,16 +1279,24 @@ export default function VisitsRoomsTab({
         title="Bookings by Villa"
         action={<ChartInfo id="bookingsByVilla" />}
       >
+        <ModalFilterBar
+          year={villaChartYear}
+          month={villaChartMonth}
+          onYearChange={setVillaChartYear}
+          onMonthChange={setVillaChartMonth}
+          years={years}
+          months={months}
+        />
         <div style={{ overflowX: "auto" }}>
           <div
             style={{
-              minWidth: Math.max(filteredVillas.length * 60, 420),
+              minWidth: Math.max(chartVillas.length * 60, 420),
               height: 320,
             }}
           >
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
-                data={filteredVillas}
+                data={chartVillas}
                 margin={{ top: 8, right: 16, bottom: 90, left: 16 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
@@ -810,9 +1420,59 @@ export default function VisitsRoomsTab({
               <div className="dashboard-eyebrow">All Villas</div>
               <h2 className="dashboard-card-title">Villa performance</h2>
             </div>
-            <ChartInfo id="villaTable" />
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <ExportMenu
+                rows={villaPerformanceRows}
+                filenameBase={villaPerformanceFilename}
+                disabled={!villaPerformanceRows.length}
+              />
+
+              <ChartInfo id="villaTable" />
+            </div>
           </div>
-          <div style={{ overflowY: "auto", maxHeight: 480, marginTop: 8 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              marginTop: 10,
+              marginBottom: 10,
+            }}
+          >
+            <ModalFilterBar
+              year={villaTableYear}
+              month={villaTableMonth}
+              onYearChange={setVillaTableYear}
+              onMonthChange={setVillaTableMonth}
+              years={years}
+              months={months}
+            />
+          </div>
+
+          <TableControls
+            search={villaTableSearch}
+            onSearchChange={setVillaTableSearch}
+            sortKey={villaTableSortKey}
+            onSortKeyChange={setVillaTableSortKey}
+            sortDir={villaTableSortDir}
+            onSortDirChange={setVillaTableSortDir}
+            sortOptions={[
+              "villa_name",
+              "bedroom_count",
+              "bookings",
+              "total_nights",
+              "avg_stay",
+              "revenue",
+            ]}
+            placeholder="Search villas..."
+          />
+
+          <div style={{ overflowY: "auto", maxHeight: 567, marginTop: 8 }}>
             <table
               style={{
                 width: "100%",
@@ -829,30 +1489,35 @@ export default function VisitsRoomsTab({
                 }}
               >
                 <tr className="dashboard-eyebrow">
-                  {["Villa", "Bookings", "Nights", "Avg Stay", "Revenue"].map(
-                    (h) => (
-                      <th
-                        key={h}
-                        style={{
-                          textAlign: h === "Villa" ? "left" : "right",
-                          padding: "10px 10px",
-                          borderBottom: `1px solid ${C.border}`,
-                          fontWeight: 600,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {h}
-                      </th>
-                    ),
-                  )}
+                  {[
+                    "Villa",
+                    "Bedrooms",
+                    "Bookings",
+                    "Nights",
+                    "Avg Stay",
+                    "Revenue",
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      style={{
+                        textAlign: h === "Villa" ? "left" : "right",
+                        padding: "10px 10px",
+                        borderBottom: `1px solid ${C.border}`,
+                        fontWeight: 600,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {filteredVillas.map((villa) => {
+                {filteredTableVillas.map((villa) => {
                   const active = villa.villa_name === selectedVillaName;
                   return (
                     <tr
-                      key={villa.villa_name}
+                      key={`${villa.villa_name}-${villaBedroomLabel(villa)}`}
                       onClick={() => openVillaModal(villa.villa_name)}
                       style={{
                         borderBottom: `1px solid ${C.border}`,
@@ -880,6 +1545,16 @@ export default function VisitsRoomsTab({
                         }}
                       >
                         {villa.villa_name}
+                      </td>
+                      <td
+                        style={{
+                          padding: "10px 10px",
+                          textAlign: "right",
+                          color: C.soft,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {villaBedroomLabel(villa)}
                       </td>
                       <td
                         style={{
@@ -937,6 +1612,23 @@ export default function VisitsRoomsTab({
         >
           {selectedVilla ? (
             <>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  marginBottom: 12,
+                }}
+              >
+                <ModalFilterBar
+                  year={selectedVillaChartYear}
+                  month={selectedVillaChartMonth}
+                  onYearChange={setSelectedVillaChartYear}
+                  onMonthChange={setSelectedVillaChartMonth}
+                  years={years}
+                  months={months}
+                />
+              </div>
+
               <Card
                 title={`${selectedVilla.villa_name} — Monthly Bookings`}
                 sub="Selected villa drill-down"
@@ -1049,200 +1741,240 @@ export default function VisitsRoomsTab({
         </div>
       </div>
 
-      {/* Bedroom + monthly revenue */}
-      <div className="dashboard-grid dashboard-grid-main">
-        <Card
-          title="Bookings by Bedroom Count"
-          sub="Bedroom demand"
-          action={<ChartInfo id="bookingsByBedroom" />}
+      {/* Bedroom */}
+      <div>
+        <div
+          style={{
+            width: "100%",
+            display: "flex",
+            justifyContent: "flex-end",
+            paddingBottom: 10,
+          }}
         >
-          <div style={{ height: 240 }}>
-            <ResponsiveContainer>
-              <BarChart
-                data={bookingsByBedroomData}
-                margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                <XAxis
-                  dataKey="beds"
-                  stroke={AX}
-                  fontSize={11}
-                  label={{
-                    value: "Bedrooms",
-                    position: "insideBottom",
-                    offset: -10,
-                    style: LABEL_STYLE,
-                  }}
-                />
-                <YAxis
-                  stroke={AX}
-                  fontSize={11}
-                  label={{
-                    value: "Bookings",
-                    angle: -90,
-                    position: "insideLeft",
-                    offset: 10,
-                    dy: 40,
-                    style: LABEL_STYLE,
-                  }}
-                />
-                <Tooltip contentStyle={TIP} />
-                <Bar
-                  dataKey="bookings"
-                  fill="var(--dashboard-flame)"
-                  radius={[6, 6, 0, 0]}
-                  cursor="pointer"
-                  onClick={(entry) => openBedroomModal(entry?.beds)}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
+          <ModalFilterBar
+            year={bedroomChartYear}
+            month={bedroomChartMonth}
+            onYearChange={setBedroomChartYear}
+            onMonthChange={setBedroomChartMonth}
+            years={years}
+            months={months}
+          />
+        </div>
 
-        <Card
-          title="Average Stay by Bedroom Count"
-          sub="Length of stay"
-          action={<ChartInfo id="avgStayByBedroom" />}
-        >
-          <div style={{ height: 240 }}>
-            <ResponsiveContainer>
-              <BarChart
-                data={bookingsByBedroomData}
-                margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                <XAxis
-                  dataKey="beds"
-                  stroke={AX}
-                  fontSize={11}
-                  label={{
-                    value: "Bedrooms",
-                    position: "insideBottom",
-                    offset: -10,
-                    style: LABEL_STYLE,
-                  }}
-                />
-                <YAxis
-                  stroke={AX}
-                  fontSize={11}
-                  label={{
-                    value: "Nights",
-                    angle: -90,
-                    position: "insideLeft",
-                    offset: 10,
-                    dy: 30,
-                    style: LABEL_STYLE,
-                  }}
-                />
-                <Tooltip contentStyle={TIP} />
-                <Bar
-                  dataKey="avg_stay"
-                  fill="var(--dashboard-deep-blue)"
-                  radius={[6, 6, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
+        <div className="dashboard-grid dashboard-grid-main">
+          <Card
+            title="Bookings by Bedroom Count"
+            sub="Bedroom demand"
+            action={<ChartInfo id="bookingsByBedroom" />}
+          >
+            <div style={{ height: 240 }}>
+              <ResponsiveContainer>
+                <BarChart
+                  data={bookingsByBedroomData}
+                  margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
+                  <XAxis
+                    dataKey="beds"
+                    stroke={AX}
+                    fontSize={11}
+                    label={{
+                      value: "Bedrooms",
+                      position: "insideBottom",
+                      offset: -10,
+                      style: LABEL_STYLE,
+                    }}
+                  />
+                  <YAxis
+                    stroke={AX}
+                    fontSize={11}
+                    label={{
+                      value: "Bookings",
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: 10,
+                      dy: 40,
+                      style: LABEL_STYLE,
+                    }}
+                  />
+                  <Tooltip contentStyle={TIP} />
+                  <Bar
+                    dataKey="bookings"
+                    fill="var(--dashboard-flame)"
+                    radius={[6, 6, 0, 0]}
+                    cursor="pointer"
+                    onClick={(entry) => openBedroomModal(entry?.beds)}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+
+          <Card
+            title="Average Stay by Bedroom Count"
+            sub="Length of stay"
+            action={<ChartInfo id="avgStayByBedroom" />}
+          >
+            <div style={{ height: 240 }}>
+              <ResponsiveContainer>
+                <BarChart
+                  data={bookingsByBedroomData}
+                  margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
+                  <XAxis
+                    dataKey="beds"
+                    stroke={AX}
+                    fontSize={11}
+                    label={{
+                      value: "Bedrooms",
+                      position: "insideBottom",
+                      offset: -10,
+                      style: LABEL_STYLE,
+                    }}
+                  />
+                  <YAxis
+                    stroke={AX}
+                    fontSize={11}
+                    label={{
+                      value: "Nights",
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: 10,
+                      dy: 30,
+                      style: LABEL_STYLE,
+                    }}
+                  />
+                  <Tooltip contentStyle={TIP} />
+                  <Bar
+                    dataKey="avg_stay"
+                    fill="var(--dashboard-deep-blue)"
+                    radius={[6, 6, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        </div>
       </div>
 
-      <div className="dashboard-grid dashboard-grid-main">
-        <Card
-          title="Bookings by Month"
-          sub="Monthly booking trend"
-          action={<ChartInfo id="bookingsByMonth" />}
+      {/* Monthly revenue */}
+      <div>
+        <div
+          style={{
+            width: "100%",
+            display: "flex",
+            justifyContent: "flex-end",
+            paddingBottom: 10,
+          }}
         >
-          <div style={{ height: 240 }}>
-            <ResponsiveContainer>
-              <LineChart
-                data={monthlyRevenueData}
-                margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                <XAxis
-                  dataKey="month"
-                  stroke={AX}
-                  fontSize={11}
-                  label={{
-                    value: "Month",
-                    position: "insideBottom",
-                    offset: -10,
-                    style: LABEL_STYLE,
-                  }}
-                />
-                <YAxis
-                  stroke={AX}
-                  fontSize={11}
-                  label={{
-                    value: "Bookings",
-                    angle: -90,
-                    position: "insideLeft",
-                    offset: 10,
-                    dy: 40,
-                    style: LABEL_STYLE,
-                  }}
-                />
-                <Tooltip contentStyle={TIP} />
-                <Line
-                  type="monotone"
-                  dataKey="bookings"
-                  stroke="var(--dashboard-deep-blue)"
-                  strokeWidth={2.5}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
+          <ModalFilterBar
+            year={monthlyChartYear}
+            month={monthlyChartMonth}
+            onYearChange={setMonthlyChartYear}
+            onMonthChange={setMonthlyChartMonth}
+            years={years}
+            months={months}
+          />
+        </div>
 
-        <Card
-          title="Villa Rental Revenue by Month"
-          sub="Folio rental revenue"
-          action={<ChartInfo id="revenueByMonth" />}
-        >
-          <div style={{ height: 240 }}>
-            <ResponsiveContainer>
-              <BarChart
-                data={monthlyRevenueData}
-                margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                <XAxis
-                  dataKey="month"
-                  stroke={AX}
-                  fontSize={11}
-                  label={{
-                    value: "Month",
-                    position: "insideBottom",
-                    offset: -10,
-                    style: LABEL_STYLE,
-                  }}
-                />
-                <YAxis
-                  stroke={AX}
-                  fontSize={11}
-                  label={{
-                    value: "Revenue ($)",
-                    angle: -90,
-                    position: "insideLeft",
-                    offset: 10,
-                    dy: 40,
-                    style: LABEL_STYLE,
-                  }}
-                />
-                <Tooltip contentStyle={TIP} />
-                <Bar
-                  dataKey="revenue"
-                  fill="var(--dashboard-truffle)"
-                  radius={[6, 6, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </Card>
+        <div className="dashboard-grid dashboard-grid-main">
+          <Card
+            title="Bookings by Month"
+            sub="Monthly booking trend"
+            action={<ChartInfo id="bookingsByMonth" />}
+          >
+            <div style={{ height: 240 }}>
+              <ResponsiveContainer>
+                <LineChart
+                  data={monthlyRevenueData}
+                  margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
+                  <XAxis
+                    dataKey="month"
+                    stroke={AX}
+                    fontSize={11}
+                    label={{
+                      value: "Month",
+                      position: "insideBottom",
+                      offset: -10,
+                      style: LABEL_STYLE,
+                    }}
+                  />
+                  <YAxis
+                    stroke={AX}
+                    fontSize={11}
+                    label={{
+                      value: "Bookings",
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: 10,
+                      dy: 40,
+                      style: LABEL_STYLE,
+                    }}
+                  />
+                  <Tooltip contentStyle={TIP} />
+                  <Line
+                    type="monotone"
+                    dataKey="bookings"
+                    stroke="var(--dashboard-deep-blue)"
+                    strokeWidth={2.5}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+
+          <Card
+            title="Villa Rental Revenue by Month"
+            sub="Folio rental revenue"
+            action={<ChartInfo id="revenueByMonth" />}
+          >
+            <div style={{ height: 240 }}>
+              <ResponsiveContainer>
+                <BarChart
+                  data={monthlyRevenueData}
+                  margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
+                  <XAxis
+                    dataKey="month"
+                    stroke={AX}
+                    fontSize={11}
+                    label={{
+                      value: "Month",
+                      position: "insideBottom",
+                      offset: -10,
+                      style: LABEL_STYLE,
+                    }}
+                  />
+                  <YAxis
+                    stroke={AX}
+                    fontSize={11}
+                    label={{
+                      value: "Revenue ($)",
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: 10,
+                      dy: 40,
+                      style: LABEL_STYLE,
+                    }}
+                  />
+                  <Tooltip contentStyle={TIP} />
+                  <Bar
+                    dataKey="revenue"
+                    fill="var(--dashboard-truffle)"
+                    radius={[6, 6, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </Card>
+        </div>
       </div>
 
-      {/* side modals */}
-
+      {/* ── People modal ─────────────────────────────────────────────────── */}
       {peopleModalOpen && (
         <div
           onClick={() => setPeopleModalOpen(false)}
@@ -1280,30 +2012,52 @@ export default function VisitsRoomsTab({
                 : "Total Guests Booked"}
             </h2>
 
+            <ModalFilterBar
+              year={peopleYear}
+              month={peopleMonth}
+              onYearChange={setPeopleYear}
+              onMonthChange={setPeopleMonth}
+              years={years}
+              months={months}
+            />
+
+            <TableControls
+              search={peopleSearch}
+              onSearchChange={setPeopleSearch}
+              sortKey={peopleSortKey}
+              onSortKeyChange={setPeopleSortKey}
+              sortDir={peopleSortDir}
+              onSortDirChange={setPeopleSortDir}
+              sortOptions={[
+                "member_full_name",
+                "member_number",
+                "member_type",
+                "member_or_guest",
+                "bookings",
+                "nights",
+                "first_check_in",
+                "last_check_out",
+              ]}
+              placeholder="Search people..."
+            />
+
             <div
               style={{
                 display: "flex",
-                gap: 10,
-                flexWrap: "wrap",
-                marginBottom: 16,
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 12,
               }}
             >
-              <Select
-                label="Year"
-                value={peopleYear}
-                onChange={setPeopleYear}
-                options={years}
-              />
-              <Select
-                label="Month"
-                value={peopleMonth}
-                onChange={setPeopleMonth}
-                options={months}
-              />
-            </div>
+              <div style={{ color: C.muted, fontSize: 12 }}>
+                {filteredPeopleRows.length} of {peopleRows.length} records
+              </div>
 
-            <div style={{ color: C.muted, fontSize: 12, marginBottom: 12 }}>
-              {peopleRows.length} records
+              <ExportMenu
+                rows={peopleExportRows}
+                filenameBase={peopleFilename}
+                disabled={peopleLoading || !peopleExportRows.length}
+              />
             </div>
 
             {peopleLoading ? (
@@ -1344,14 +2098,13 @@ export default function VisitsRoomsTab({
                   </thead>
 
                   <tbody>
-                    {peopleRows.map((p, i) => {
+                    {filteredPeopleRows.map((p, i) => {
                       const name =
                         p.member_full_name ||
                         p.member_name ||
                         p.folio_guest_name ||
                         p.guest_name ||
                         "Unknown";
-
                       const missingMemberType = !p.member_type;
 
                       return (
@@ -1381,7 +2134,6 @@ export default function VisitsRoomsTab({
                               </div>
                             )}
                           </td>
-
                           <td
                             style={{
                               padding: "10px",
@@ -1391,7 +2143,6 @@ export default function VisitsRoomsTab({
                           >
                             {p.member_number ?? "—"}
                           </td>
-
                           <td
                             style={{
                               padding: "10px",
@@ -1402,7 +2153,6 @@ export default function VisitsRoomsTab({
                           >
                             {p.member_type ?? "NULL"}
                           </td>
-
                           <td
                             style={{
                               padding: "10px",
@@ -1413,7 +2163,6 @@ export default function VisitsRoomsTab({
                           >
                             {p.member_or_guest ?? "NULL"}
                           </td>
-
                           <td
                             style={{
                               padding: "10px",
@@ -1423,7 +2172,6 @@ export default function VisitsRoomsTab({
                           >
                             {fmt(p.bookings)}
                           </td>
-
                           <td
                             style={{
                               padding: "10px",
@@ -1433,7 +2181,6 @@ export default function VisitsRoomsTab({
                           >
                             {fmt(p.nights)}
                           </td>
-
                           <td
                             style={{
                               padding: "10px",
@@ -1443,7 +2190,6 @@ export default function VisitsRoomsTab({
                           >
                             {p.first_check_in ?? "—"}
                           </td>
-
                           <td
                             style={{
                               padding: "10px",
@@ -1464,6 +2210,7 @@ export default function VisitsRoomsTab({
         </div>
       )}
 
+      {/* ── Bedroom modal ────────────────────────────────────────────────── */}
       {bedroomModalOpen && (
         <div
           onClick={() => setBedroomModalOpen(false)}
@@ -1496,6 +2243,54 @@ export default function VisitsRoomsTab({
               {selectedBedroom} Bedroom Bookings
             </h2>
 
+            <ModalFilterBar
+              year={bedroomYear}
+              month={bedroomMonth}
+              onYearChange={setBedroomYear}
+              onMonthChange={setBedroomMonth}
+              years={years}
+              months={months}
+            />
+
+            <TableControls
+              search={bedroomSearch}
+              onSearchChange={setBedroomSearch}
+              sortKey={bedroomSortKey}
+              onSortKeyChange={setBedroomSortKey}
+              sortDir={bedroomSortDir}
+              onSortDirChange={setBedroomSortDir}
+              sortOptions={[
+                "member_full_name",
+                "villa_name",
+                "check_in_date",
+                "check_out_date",
+                "nights",
+                "persons",
+              ]}
+              placeholder="Search bedroom bookings..."
+            />
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 12,
+              }}
+            >
+              <div style={{ color: C.muted, fontSize: 12 }}>
+                {bedroomBookingsLoading
+                  ? null
+                  : `${filteredBedroomBookings.length} of ${bedroomBookings.length} records`}
+              </div>
+
+              <ExportMenu
+                rows={bedroomExportRows}
+                filenameBase={bedroomFilename}
+                disabled={bedroomBookingsLoading || !bedroomExportRows.length}
+              />
+            </div>
+
             {bedroomBookingsLoading ? (
               <div style={{ color: C.muted }}>Loading bookings…</div>
             ) : (
@@ -1523,7 +2318,7 @@ export default function VisitsRoomsTab({
                   </tr>
                 </thead>
                 <tbody>
-                  {bedroomBookings.map((b) => (
+                  {filteredBedroomBookings.map((b) => (
                     <tr
                       key={b.conf_code}
                       style={{ borderTop: `1px solid ${C.border}` }}
@@ -1548,6 +2343,7 @@ export default function VisitsRoomsTab({
         </div>
       )}
 
+      {/* ── Villa modal ──────────────────────────────────────────────────── */}
       {villaModalOpen && selectedVilla && (
         <div
           onClick={() => setVillaModalOpen(false)}
@@ -1620,6 +2416,18 @@ export default function VisitsRoomsTab({
                 {fmt(selectedVilla.total_nights)} room nights ·{" "}
                 {money(selectedVilla.revenue)} revenue
               </div>
+
+              {/* Independent filters inside the sticky header */}
+              <div style={{ marginTop: 14 }}>
+                <ModalFilterBar
+                  year={villaYear}
+                  month={villaMonth}
+                  onYearChange={setVillaYear}
+                  onMonthChange={setVillaMonth}
+                  years={years}
+                  months={months}
+                />
+              </div>
             </div>
 
             <div style={{ padding: 26 }}>
@@ -1685,11 +2493,7 @@ export default function VisitsRoomsTab({
                 <div>
                   <div className="dashboard-eyebrow">Booking timeline</div>
                   <h3
-                    style={{
-                      color: C.text,
-                      margin: "4px 0 0",
-                      fontSize: 22,
-                    }}
+                    style={{ color: C.text, margin: "4px 0 0", fontSize: 22 }}
                   >
                     People who booked this villa
                   </h3>
@@ -1697,17 +2501,52 @@ export default function VisitsRoomsTab({
 
                 <div
                   style={{
-                    color: C.muted,
-                    fontSize: 12,
-                    border: `1px solid ${C.border}`,
-                    borderRadius: 999,
-                    padding: "7px 11px",
-                    background: C.panelAlt,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
                   }}
                 >
-                  {villaBookings.length} records
+                  <div
+                    style={{
+                      color: C.muted,
+                      fontSize: 12,
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 999,
+                      padding: "7px 11px",
+                      background: C.panelAlt,
+                    }}
+                  >
+                    {filteredVillaBookings.length} of {villaBookings.length}{" "}
+                    records
+                  </div>
+
+                  <ExportMenu
+                    rows={villaBookingRows}
+                    filenameBase={villaBookingFilename}
+                    disabled={villaBookingsLoading || !villaBookingRows.length}
+                  />
                 </div>
               </div>
+
+              <TableControls
+                search={villaBookingSearch}
+                onSearchChange={setVillaBookingSearch}
+                sortKey={villaBookingSortKey}
+                onSortKeyChange={setVillaBookingSortKey}
+                sortDir={villaBookingSortDir}
+                onSortDirChange={setVillaBookingSortDir}
+                sortOptions={[
+                  "member_full_name",
+                  "member_number",
+                  "conf_code",
+                  "check_in_date",
+                  "check_out_date",
+                  "nights",
+                  "persons",
+                  "revenue",
+                ]}
+                placeholder="Search villa bookings..."
+              />
 
               {villaBookingsLoading ? (
                 <div
@@ -1733,6 +2572,18 @@ export default function VisitsRoomsTab({
                 >
                   No booking details found.
                 </div>
+              ) : filteredVillaBookings.length === 0 ? (
+                <div
+                  style={{
+                    padding: 34,
+                    textAlign: "center",
+                    color: C.muted,
+                    border: `1px dashed ${C.border}`,
+                    borderRadius: 18,
+                  }}
+                >
+                  No matching booking details found.
+                </div>
               ) : (
                 <div style={{ position: "relative" }}>
                   {/* timeline rail */}
@@ -1747,7 +2598,7 @@ export default function VisitsRoomsTab({
                     }}
                   />
 
-                  {villaBookings.map((b, index) => {
+                  {filteredVillaBookings.map((b, index) => {
                     const guests = Array.isArray(b.guests) ? b.guests : [];
                     const primaryName =
                       b.member_full_name ??
@@ -1814,7 +2665,6 @@ export default function VisitsRoomsTab({
                               >
                                 {primaryName}
                               </div>
-
                               <div
                                 style={{
                                   color: C.soft,
@@ -1827,12 +2677,7 @@ export default function VisitsRoomsTab({
                               </div>
                             </div>
 
-                            <div
-                              style={{
-                                textAlign: "right",
-                                minWidth: 100,
-                              }}
-                            >
+                            <div style={{ textAlign: "right", minWidth: 100 }}>
                               <div
                                 style={{
                                   fontWeight: 900,
