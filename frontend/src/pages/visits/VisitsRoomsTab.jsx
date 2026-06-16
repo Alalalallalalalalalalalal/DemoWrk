@@ -20,11 +20,14 @@ import {
   Info,
   Download,
   ChevronDown,
+  LayoutDashboard,
+  Tag,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { analyticsApi } from "../../api/analytics";
+import VillaSourceBreakdown from "./VillaSourceBreakdown";
 
 const C = {
   bg: "var(--dashboard-card)",
@@ -158,7 +161,6 @@ function ChartInfo({ id }) {
 
       {open && (
         <>
-          {/* backdrop to close */}
           <div
             onClick={() => setOpen(false)}
             style={{ position: "fixed", inset: 0, zIndex: 49 }}
@@ -180,7 +182,6 @@ function ChartInfo({ id }) {
               lineHeight: 1.55,
             }}
           >
-            {/* close */}
             <button
               onClick={() => setOpen(false)}
               style={{
@@ -198,7 +199,6 @@ function ChartInfo({ id }) {
               <X size={13} />
             </button>
 
-            {/* summary */}
             <p
               style={{
                 margin: "0 0 10px",
@@ -210,7 +210,6 @@ function ChartInfo({ id }) {
               {info.summary}
             </p>
 
-            {/* axes */}
             {(info.x || info.y) && (
               <div
                 style={{
@@ -255,7 +254,6 @@ function ChartInfo({ id }) {
               </div>
             )}
 
-            {/* functionality */}
             <div
               style={{
                 borderTop: `1px solid ${C.border}`,
@@ -273,15 +271,14 @@ function ChartInfo({ id }) {
   );
 }
 
-// -----
+// ─── Export helpers ─────────────────────────────────────────────────────────
+
 function downloadFile(blob, filename) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-
   link.href = url;
   link.download = filename;
   link.click();
-
   URL.revokeObjectURL(url);
 }
 
@@ -291,7 +288,6 @@ function exportRows(rows, filenameBase, format) {
   if (format === "csv") {
     const worksheet = XLSX.utils.json_to_sheet(rows);
     const csv = XLSX.utils.sheet_to_csv(worksheet);
-
     downloadFile(
       new Blob([csv], { type: "text/csv;charset=utf-8;" }),
       `${filenameBase}.csv`,
@@ -301,7 +297,6 @@ function exportRows(rows, filenameBase, format) {
   if (format === "excel") {
     const worksheet = XLSX.utils.json_to_sheet(rows);
     const workbook = XLSX.utils.book_new();
-
     XLSX.utils.book_append_sheet(workbook, worksheet, "Export");
     XLSX.writeFile(workbook, `${filenameBase}.xlsx`);
   }
@@ -309,9 +304,7 @@ function exportRows(rows, filenameBase, format) {
   if (format === "pdf") {
     const doc = new jsPDF({ orientation: "landscape" });
     const columns = Object.keys(rows[0] ?? {});
-
     doc.text(filenameBase.replaceAll("_", " "), 14, 14);
-
     autoTable(doc, {
       startY: 20,
       head: [columns],
@@ -319,7 +312,6 @@ function exportRows(rows, filenameBase, format) {
       styles: { fontSize: 7 },
       headStyles: { fillColor: [30, 48, 70] },
     });
-
     doc.save(`${filenameBase}.pdf`);
   }
 }
@@ -412,12 +404,11 @@ function ExportMenu({ rows, filenameBase, disabled }) {
   );
 }
 
-// ────────────────────────────────────────────────────────────────────────────
+// ─── Table utilities ─────────────────────────────────────────────────────────
 
 const searchRows = (rows, q) => {
   const term = q.trim().toLowerCase();
   if (!term) return rows;
-
   return rows.filter((row) =>
     Object.values(row).some((v) =>
       String(v ?? "")
@@ -429,22 +420,15 @@ const searchRows = (rows, q) => {
 
 const sortRows = (rows, key, dir = "asc") => {
   const mult = dir === "asc" ? 1 : -1;
-
   return [...rows].sort((a, b) => {
     const av = a?.[key];
     const bv = b?.[key];
-
     if (av == null && bv == null) return 0;
     if (av == null) return 1;
     if (bv == null) return -1;
-
     const an = Number(av);
     const bn = Number(bv);
-
-    if (!Number.isNaN(an) && !Number.isNaN(bn)) {
-      return (an - bn) * mult;
-    }
-
+    if (!Number.isNaN(an) && !Number.isNaN(bn)) return (an - bn) * mult;
     return (
       String(av).localeCompare(String(bv), undefined, {
         numeric: true,
@@ -454,7 +438,7 @@ const sortRows = (rows, key, dir = "asc") => {
   });
 };
 
-//---
+// ─── Formatters ───────────────────────────────────────────────────────────────
 
 const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
 const money = (v) =>
@@ -463,9 +447,10 @@ const money = (v) =>
     : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 const num = (v, d = 1) => (v == null ? "—" : Number(v).toFixed(d));
 
+// ─── UI primitives ────────────────────────────────────────────────────────────
+
 function Stat({ icon: Icon, label, value, sub, onClick }) {
   const clickable = Boolean(onClick);
-
   return (
     <div style={{ padding: "0 18px" }}>
       <button
@@ -494,7 +479,6 @@ function Stat({ icon: Icon, label, value, sub, onClick }) {
           {label}
         </span>
       </button>
-
       <div
         style={{
           fontFamily: "'Cormorant Garamond', serif",
@@ -537,7 +521,6 @@ const optionLabel = (option, label) => {
   if (option === "All") return `All ${label}s`;
   if (option === "asc") return "Ascending";
   if (option === "desc") return "Descending";
-
   return String(option)
     .replace(/_/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
@@ -568,8 +551,6 @@ function Select({ label, value, onChange, options }) {
     </label>
   );
 }
-
-// ─── Reusable modal filter bar ───────────────────────────────────────────────
 
 function ModalFilterBar({
   year,
@@ -651,7 +632,68 @@ function TableControls({
   );
 }
 
-// ────────────────────────────────────────────────────────────────────────────
+// ─── Top-level view toggle ────────────────────────────────────────────────────
+
+const TOP_VIEWS = [
+  {
+    key: "overall",
+    label: "Overall",
+    icon: LayoutDashboard,
+    desc: "Full villa booking performance",
+  },
+  {
+    key: "sources",
+    label: "Sources",
+    icon: Tag,
+    desc: "Paid vs. free / comp breakdown by business source",
+  },
+];
+
+function TopViewToggle({ value, onChange }) {
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        gap: 4,
+        background: C.panel,
+        border: `1px solid ${C.border}`,
+        borderRadius: 16,
+        padding: 4,
+      }}
+    >
+      {TOP_VIEWS.map(({ key, label, icon: Icon }) => {
+        const active = value === key;
+        return (
+          <button
+            key={key}
+            onClick={() => onChange(key)}
+            type="button"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 7,
+              padding: "9px 18px",
+              borderRadius: 12,
+              border: "none",
+              background: active ? C.accent : "transparent",
+              color: active ? "#fff" : C.muted,
+              fontWeight: active ? 800 : 500,
+              fontSize: 13,
+              cursor: "pointer",
+              transition: "all 0.18s",
+              letterSpacing: active ? "0.01em" : "0",
+            }}
+          >
+            <Icon size={14} />
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Main component ───────────────────────────────────────────────────────────
 
 export default function VisitsRoomsTab({
   selectedVillaName,
@@ -686,11 +728,13 @@ export default function VisitsRoomsTab({
     ];
   }, []);
 
-  // helper: convert UI year/month strings → API filter object
   const toFilters = (y, m) => ({
     year: y === "All" ? null : Number(y),
     month: m === "All" ? null : months.indexOf(m),
   });
+
+  // ── Top-level view ────────────────────────────────────────────────────────
+  const [topView, setTopView] = useState("overall");
 
   // ── Tab-level filters ─────────────────────────────────────────────────────
   const [year, setYear] = useState("All");
@@ -757,15 +801,13 @@ export default function VisitsRoomsTab({
   );
 
   useEffect(() => {
+    if (topView !== "overall") return;
     let cancelled = false;
-
     async function loadSummary() {
       setVisitsDataLoading(true);
       try {
         const data = await analyticsApi.visitsRoomsDashboard(activeFilters);
-
         if (cancelled) return;
-
         setSummaryData(data?.summary ?? {});
       } catch (err) {
         console.error(err);
@@ -773,21 +815,19 @@ export default function VisitsRoomsTab({
         if (!cancelled) setVisitsDataLoading(false);
       }
     }
-
     loadSummary();
     return () => {
       cancelled = true;
     };
-  }, [activeFilters]);
+  }, [activeFilters, topView]);
 
   useEffect(() => {
+    if (topView !== "overall") return;
     let cancelled = false;
-
     async function loadVillaChart() {
       try {
         const data = await analyticsApi.visitsRoomsDashboard(villaChartFilters);
         if (cancelled) return;
-
         setVillaChartData(
           Array.isArray(data?.villa_stats) ? data.villa_stats : [],
         );
@@ -796,21 +836,19 @@ export default function VisitsRoomsTab({
         if (!cancelled) setVillaChartData([]);
       }
     }
-
     loadVillaChart();
     return () => {
       cancelled = true;
     };
-  }, [villaChartFilters]);
+  }, [villaChartFilters, topView]);
 
   useEffect(() => {
+    if (topView !== "overall") return;
     let cancelled = false;
-
     async function loadVillaTable() {
       try {
         const data = await analyticsApi.visitsRoomsDashboard(villaTableFilters);
         if (cancelled) return;
-
         setVillaTableData(
           Array.isArray(data?.villa_stats) ? data.villa_stats : [],
         );
@@ -819,20 +857,15 @@ export default function VisitsRoomsTab({
         if (!cancelled) setVillaTableData([]);
       }
     }
-
     loadVillaTable();
     return () => {
       cancelled = true;
     };
-  }, [villaTableFilters]);
+  }, [villaTableFilters, topView]);
 
   useEffect(() => {
-    if (!selectedVillaName) {
-      return;
-    }
-
+    if (!selectedVillaName || topView !== "overall") return;
     let cancelled = false;
-
     async function loadSelectedVillaMonthly() {
       try {
         const data = await analyticsApi.visitsRoomsDashboard({
@@ -840,7 +873,6 @@ export default function VisitsRoomsTab({
           ...selectedVillaChartFilters,
         });
         if (cancelled) return;
-
         setVillaMonthlyData(
           Array.isArray(data?.villa_monthly) ? data.villa_monthly : [],
         );
@@ -849,22 +881,20 @@ export default function VisitsRoomsTab({
         if (!cancelled) setVillaMonthlyData([]);
       }
     }
-
     loadSelectedVillaMonthly();
     return () => {
       cancelled = true;
     };
-  }, [selectedVillaName, selectedVillaChartFilters]);
+  }, [selectedVillaName, selectedVillaChartFilters, topView]);
 
   useEffect(() => {
+    if (topView !== "overall") return;
     let cancelled = false;
-
     async function loadBedroomCharts() {
       try {
         const data =
           await analyticsApi.visitsRoomsDashboard(bedroomChartFilters);
         if (cancelled) return;
-
         setBookingsByBedroomData(
           Array.isArray(data?.bookings_by_bedroom)
             ? data.bookings_by_bedroom
@@ -875,22 +905,20 @@ export default function VisitsRoomsTab({
         if (!cancelled) setBookingsByBedroomData([]);
       }
     }
-
     loadBedroomCharts();
     return () => {
       cancelled = true;
     };
-  }, [bedroomChartFilters]);
+  }, [bedroomChartFilters, topView]);
 
   useEffect(() => {
+    if (topView !== "overall") return;
     let cancelled = false;
-
     async function loadMonthlyTrends() {
       try {
         const data =
           await analyticsApi.visitsRoomsDashboard(monthlyChartFilters);
         if (cancelled) return;
-
         setMonthlyRevenueData(
           Array.isArray(data?.monthly_revenue) ? data.monthly_revenue : [],
         );
@@ -899,12 +927,11 @@ export default function VisitsRoomsTab({
         if (!cancelled) setMonthlyRevenueData([]);
       }
     }
-
     loadMonthlyTrends();
     return () => {
       cancelled = true;
     };
-  }, [monthlyChartFilters]);
+  }, [monthlyChartFilters, topView]);
 
   const tableVillas = villaTableData;
 
@@ -914,7 +941,6 @@ export default function VisitsRoomsTab({
   }, [tableVillas, villaTableSearch, villaTableSortKey, villaTableSortDir]);
 
   const chartVillas = villaChartData;
-
   const mostVilla = chartVillas[0];
   const leastVilla = chartVillas.length
     ? [...chartVillas].sort(
@@ -939,7 +965,7 @@ export default function VisitsRoomsTab({
     return villa.bedroom_count ?? "—";
   };
 
-  // ── Villa modal — independent filters ────────────────────────────────────
+  // ── Villa modal ───────────────────────────────────────────────────────────
   const [villaModalOpen, setVillaModalOpen] = useState(false);
   const [villaBookings, setVillaBookings] = useState([]);
   const [villaBookingsLoading, setVillaBookingsLoading] = useState(false);
@@ -951,11 +977,9 @@ export default function VisitsRoomsTab({
     [villaYear, villaMonth],
   );
 
-  // Fetch villa bookings whenever the modal is open and its filters change
   useEffect(() => {
     if (!villaModalOpen || !selectedVillaName) return;
     let cancelled = false;
-
     async function load() {
       setVillaBookingsLoading(true);
       try {
@@ -971,7 +995,6 @@ export default function VisitsRoomsTab({
         if (!cancelled) setVillaBookingsLoading(false);
       }
     }
-
     load();
     return () => {
       cancelled = true;
@@ -981,13 +1004,12 @@ export default function VisitsRoomsTab({
   const openVillaModal = (villaName) => {
     if (!villaName) return;
     onVillaSelect(villaName);
-    // Reset modal filters to tab-level defaults when opening
     setVillaYear(year);
     setVillaMonth(month);
     setVillaModalOpen(true);
   };
 
-  // ── Bedroom modal — independent filters ──────────────────────────────────
+  // ── Bedroom modal ─────────────────────────────────────────────────────────
   const [bedroomModalOpen, setBedroomModalOpen] = useState(false);
   const [selectedBedroom, setSelectedBedroom] = useState(null);
   const [bedroomBookings, setBedroomBookings] = useState([]);
@@ -1000,11 +1022,9 @@ export default function VisitsRoomsTab({
     [bedroomYear, bedroomMonth],
   );
 
-  // Fetch bedroom bookings whenever the modal is open and its filters change
   useEffect(() => {
     if (!bedroomModalOpen || !selectedBedroom) return;
     let cancelled = false;
-
     async function load() {
       setBedroomBookingsLoading(true);
       try {
@@ -1020,7 +1040,6 @@ export default function VisitsRoomsTab({
         if (!cancelled) setBedroomBookingsLoading(false);
       }
     }
-
     load();
     return () => {
       cancelled = true;
@@ -1030,13 +1049,12 @@ export default function VisitsRoomsTab({
   const openBedroomModal = (beds) => {
     if (!beds) return;
     setSelectedBedroom(beds);
-    // Reset modal filters to tab-level defaults when opening
     setBedroomYear(year);
     setBedroomMonth(month);
     setBedroomModalOpen(true);
   };
 
-  // ── People modal — independent filters (unchanged pattern) ───────────────
+  // ── People modal ──────────────────────────────────────────────────────────
   const [peopleModalOpen, setPeopleModalOpen] = useState(false);
   const [peopleKind, setPeopleKind] = useState("members");
   const [peopleRows, setPeopleRows] = useState([]);
@@ -1052,7 +1070,6 @@ export default function VisitsRoomsTab({
   useEffect(() => {
     if (!peopleModalOpen) return;
     let cancelled = false;
-
     async function load() {
       setPeopleLoading(true);
       try {
@@ -1065,7 +1082,6 @@ export default function VisitsRoomsTab({
         if (!cancelled) setPeopleLoading(false);
       }
     }
-
     load();
     return () => {
       cancelled = true;
@@ -1074,7 +1090,6 @@ export default function VisitsRoomsTab({
 
   const openPeopleModal = (kind) => {
     setPeopleKind(kind);
-    // Reset modal filters to tab-level defaults when opening
     setPeopleYear(year);
     setPeopleMonth(month);
     setPeopleModalOpen(true);
@@ -1191,7 +1206,7 @@ export default function VisitsRoomsTab({
 
   return (
     <div className="dashboard-section">
-      {/* Tab-level Filters */}
+      {/* ── Top section: header + view toggle ──────────────────────────────── */}
       <div
         className="dashboard-card"
         style={{
@@ -1208,436 +1223,706 @@ export default function VisitsRoomsTab({
           <h2 className="dashboard-card-title" style={{ marginBottom: 0 }}>
             Villa booking performance
           </h2>
+          <p style={{ color: C.muted, fontSize: 12, margin: "4px 0 0" }}>
+            {topView === "overall"
+              ? "Overall booking volume, revenue, and villa performance."
+              : "Paid vs. free / comp breakdown by business source — see what's actually driving revenue."}
+          </p>
         </div>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Select
-            label="Year"
-            value={year}
-            onChange={setYear}
-            options={years}
-          />
-          <Select
-            label="Month"
-            value={month}
-            onChange={setMonth}
-            options={months}
-          />
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 10,
+            alignItems: "flex-end",
+          }}
+        >
+          <TopViewToggle value={topView} onChange={setTopView} />
+
+          {topView === "overall" && (
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <Select
+                label="Year"
+                value={year}
+                onChange={setYear}
+                options={years}
+              />
+              <Select
+                label="Month"
+                value={month}
+                onChange={setMonth}
+                options={months}
+              />
+            </div>
+          )}
         </div>
       </div>
 
-      {visitsDataLoading && (
-        <div style={{ color: C.muted, fontSize: 12, padding: "0 4px" }}>
-          Updating visits and rooms data…
-        </div>
-      )}
+      {/* ════════════════════════════════════════════════════════════════════ */}
+      {/* OVERALL VIEW                                                        */}
+      {/* ════════════════════════════════════════════════════════════════════ */}
 
-      {/* KPI band */}
-      <section className="dashboard-kpi-band" style={{ padding: "20px 18px" }}>
-        <Stat
-          icon={Users}
-          label="Total Members Booked"
-          value={fmt(summaryData?.total_members_booked)}
-          sub="Unique members"
-          onClick={() => openPeopleModal("members")}
-        />
-        <Stat
-          icon={Users}
-          label="Total Guests Booked"
-          value={fmt(summaryData?.total_guests_booked)}
-          sub="From folios"
-          onClick={() => openPeopleModal("guests")}
-        />
-        <Stat
-          icon={CalendarClock}
-          label="Average Length of Stay"
-          value={`${num(summaryData?.avg_length_of_stay)} nights`}
-          sub="Overall"
-        />
-        <Stat
-          icon={Users}
-          label="Average Party Size"
-          value={num(summaryData?.avg_party_size)}
-          sub="Guests per booking"
-        />
-        <Stat
-          icon={BedDouble}
-          label="Total Room Nights"
-          value={fmt(summaryData?.total_room_nights)}
-          sub="Booked nights"
-        />
-        <Stat
-          icon={DollarSign}
-          label="Villa Rental Revenue"
-          value={money(summaryData?.villa_rental_revenue)}
-          sub="Folio rental spend"
-        />
-      </section>
-
-      {/* Villa charts */}
-      <Card
-        title="Bookings by Villa"
-        action={<ChartInfo id="bookingsByVilla" />}
-      >
-        <ModalFilterBar
-          year={villaChartYear}
-          month={villaChartMonth}
-          onYearChange={setVillaChartYear}
-          onMonthChange={setVillaChartMonth}
-          years={years}
-          months={months}
-        />
-        <div style={{ overflowX: "auto" }}>
-          <div
-            style={{
-              minWidth: Math.max(chartVillas.length * 60, 420),
-              height: 320,
-            }}
-          >
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={chartVillas}
-                margin={{ top: 8, right: 16, bottom: 90, left: 16 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                <XAxis
-                  dataKey="villa_name"
-                  stroke={AX}
-                  fontSize={11}
-                  angle={-35}
-                  textAnchor="end"
-                  interval={0}
-                  height={90}
-                  label={{
-                    value: "Villa",
-                    position: "insideBottom",
-                    offset: -20,
-                    style: LABEL_STYLE,
-                  }}
-                />
-                <YAxis
-                  stroke={AX}
-                  fontSize={11}
-                  label={{
-                    value: "Bookings",
-                    angle: -90,
-                    position: "insideLeft",
-                    offset: 10,
-                    dy: 40,
-                    style: LABEL_STYLE,
-                  }}
-                />
-                <Tooltip contentStyle={TIP} />
-                <Bar
-                  dataKey="bookings"
-                  fill="var(--dashboard-flame)"
-                  radius={[6, 6, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </Card>
-
-      <Card
-        title="Most / Least Booked Villa"
-        sub="Click through to ML Insights"
-      >
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {[mostVilla, leastVilla].map((villa, i) => (
-            <button
-              key={`${villa?.villa_name}-${i}`}
-              onClick={() => {
-                if (villa?.villa_name) onVillaSelect(villa.villa_name);
-              }}
-              style={{
-                flex: "1 1 200px",
-                textAlign: "left",
-                border: `1px solid ${C.border}`,
-                borderRadius: 16,
-                background: i === 0 ? C.panelAlt : C.panel,
-                padding: 16,
-                cursor: "pointer",
-              }}
-            >
-              <div className="dashboard-eyebrow">
-                {i === 0 ? "Most Booked" : "Least Booked"}
-              </div>
-              <div
-                style={{
-                  fontFamily: "'Cormorant Garamond', serif",
-                  fontSize: 24,
-                  color: C.text,
-                }}
-              >
-                {villa?.villa_name ?? "—"}
-              </div>
-              <div style={{ color: C.soft, fontSize: 12 }}>
-                {fmt(villa?.bookings)} bookings · {bedroomsLabel(villa)}{" "}
-                bedrooms
-              </div>
-            </button>
-          ))}
-        </div>
-
-        <button
-          onClick={onGoToML}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            width: "100%",
-            marginTop: 12,
-            padding: "13px 15px",
-            borderRadius: 14,
-            border: `1px dashed ${C.accent2}`,
-            background: C.panelAlt,
-            color: C.accent,
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
-          View season × villa insights
-          <ArrowUpRight size={17} />
-        </button>
-      </Card>
-
-      {/* Villa table + drilldown side by side */}
-      <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-        {/* Villa table */}
-        <div
-          className="dashboard-card"
-          style={{ flex: "0 0 420px", minWidth: 0 }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-            }}
-          >
-            <div>
-              <div className="dashboard-eyebrow">All Villas</div>
-              <h2 className="dashboard-card-title">Villa performance</h2>
+      {topView === "overall" && (
+        <>
+          {visitsDataLoading && (
+            <div style={{ color: C.muted, fontSize: 12, padding: "0 4px" }}>
+              Updating visits and rooms data…
             </div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-              }}
-            >
-              <ExportMenu
-                rows={villaPerformanceRows}
-                filenameBase={villaPerformanceFilename}
-                disabled={!villaPerformanceRows.length}
-              />
+          )}
 
-              <ChartInfo id="villaTable" />
-            </div>
-          </div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              marginTop: 10,
-              marginBottom: 10,
-            }}
+          {/* KPI band */}
+          <section
+            className="dashboard-kpi-band"
+            style={{ padding: "20px 18px" }}
+          >
+            <Stat
+              icon={Users}
+              label="Total Members Booked"
+              value={fmt(summaryData?.total_members_booked)}
+              sub="Unique members"
+              onClick={() => openPeopleModal("members")}
+            />
+            <Stat
+              icon={Users}
+              label="Total Guests Booked"
+              value={fmt(summaryData?.total_guests_booked)}
+              sub="From folios"
+              onClick={() => openPeopleModal("guests")}
+            />
+            <Stat
+              icon={CalendarClock}
+              label="Average Length of Stay"
+              value={`${num(summaryData?.avg_length_of_stay)} nights`}
+              sub="Overall"
+            />
+            <Stat
+              icon={Users}
+              label="Average Party Size"
+              value={num(summaryData?.avg_party_size)}
+              sub="Guests per booking"
+            />
+            <Stat
+              icon={BedDouble}
+              label="Total Room Nights"
+              value={fmt(summaryData?.total_room_nights)}
+              sub="Booked nights"
+            />
+            <Stat
+              icon={DollarSign}
+              label="Villa Rental Revenue"
+              value={money(summaryData?.villa_rental_revenue)}
+              sub="Folio rental spend"
+            />
+          </section>
+
+          {/* Villa charts */}
+          <Card
+            title="Bookings by Villa"
+            action={<ChartInfo id="bookingsByVilla" />}
           >
             <ModalFilterBar
-              year={villaTableYear}
-              month={villaTableMonth}
-              onYearChange={setVillaTableYear}
-              onMonthChange={setVillaTableMonth}
+              year={villaChartYear}
+              month={villaChartMonth}
+              onYearChange={setVillaChartYear}
+              onMonthChange={setVillaChartMonth}
               years={years}
               months={months}
             />
-          </div>
-
-          <TableControls
-            search={villaTableSearch}
-            onSearchChange={setVillaTableSearch}
-            sortKey={villaTableSortKey}
-            onSortKeyChange={setVillaTableSortKey}
-            sortDir={villaTableSortDir}
-            onSortDirChange={setVillaTableSortDir}
-            sortOptions={[
-              "villa_name",
-              "bedroom_count",
-              "bookings",
-              "total_nights",
-              "avg_stay",
-              "revenue",
-            ]}
-            placeholder="Search villas..."
-          />
-
-          <div style={{ overflowY: "auto", maxHeight: 567, marginTop: 8 }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 12,
-              }}
-            >
-              <thead
+            <div style={{ overflowX: "auto" }}>
+              <div
                 style={{
-                  position: "sticky",
-                  top: 0,
-                  background: C.bg,
-                  zIndex: 1,
+                  minWidth: Math.max(chartVillas.length * 60, 420),
+                  height: 320,
                 }}
               >
-                <tr className="dashboard-eyebrow">
-                  {[
-                    "Villa",
-                    "Bedrooms",
-                    "Bookings",
-                    "Nights",
-                    "Avg Stay",
-                    "Revenue",
-                  ].map((h) => (
-                    <th
-                      key={h}
-                      style={{
-                        textAlign: h === "Villa" ? "left" : "right",
-                        padding: "10px 10px",
-                        borderBottom: `1px solid ${C.border}`,
-                        fontWeight: 600,
-                        whiteSpace: "nowrap",
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={chartVillas}
+                    margin={{ top: 8, right: 16, bottom: 90, left: 16 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
+                    <XAxis
+                      dataKey="villa_name"
+                      stroke={AX}
+                      fontSize={11}
+                      angle={-35}
+                      textAnchor="end"
+                      interval={0}
+                      height={90}
+                      label={{
+                        value: "Villa",
+                        position: "insideBottom",
+                        offset: -20,
+                        style: LABEL_STYLE,
                       }}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filteredTableVillas.map((villa) => {
-                  const active = villa.villa_name === selectedVillaName;
-                  return (
-                    <tr
-                      key={`${villa.villa_name}-${villaBedroomLabel(villa)}`}
-                      onClick={() => openVillaModal(villa.villa_name)}
-                      style={{
-                        borderBottom: `1px solid ${C.border}`,
-                        background: active ? C.panelAlt : "transparent",
-                        borderLeft: active
-                          ? `3px solid ${C.accent2}`
-                          : "3px solid transparent",
-                        cursor: "pointer",
-                        transition: "background 0.15s",
+                    />
+                    <YAxis
+                      stroke={AX}
+                      fontSize={11}
+                      label={{
+                        value: "Bookings",
+                        angle: -90,
+                        position: "insideLeft",
+                        offset: 10,
+                        dy: 40,
+                        style: LABEL_STYLE,
                       }}
-                      onMouseEnter={(e) => {
-                        if (!active) e.currentTarget.style.background = C.panel;
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!active)
-                          e.currentTarget.style.background = "transparent";
-                      }}
-                    >
-                      <td
-                        style={{
-                          padding: "10px 10px",
-                          fontWeight: active ? 700 : 400,
-                          color: C.text,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {villa.villa_name}
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px 10px",
-                          textAlign: "right",
-                          color: C.soft,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {villaBedroomLabel(villa)}
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px 10px",
-                          textAlign: "right",
-                          color: C.soft,
-                        }}
-                      >
-                        {fmt(villa.bookings)}
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px 10px",
-                          textAlign: "right",
-                          color: C.soft,
-                        }}
-                      >
-                        {fmt(villa.total_nights)}
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px 10px",
-                          textAlign: "right",
-                          color: C.soft,
-                        }}
-                      >
-                        {num(villa.avg_stay)}n
-                      </td>
-                      <td
-                        style={{
-                          padding: "10px 10px",
-                          textAlign: "right",
-                          color: C.soft,
-                        }}
-                      >
-                        {money(villa.revenue)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+                    />
+                    <Tooltip contentStyle={TIP} />
+                    <Bar
+                      dataKey="bookings"
+                      fill="var(--dashboard-flame)"
+                      radius={[6, 6, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </Card>
 
-        {/* Drilldown charts */}
-        <div
-          style={{
-            flex: 1,
-            minWidth: 0,
-            display: "flex",
-            flexDirection: "column",
-            gap: 16,
-          }}
-        >
-          {selectedVilla ? (
-            <>
+          <Card
+            title="Most / Least Booked Villa"
+            sub="Click through to ML Insights"
+          >
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {[mostVilla, leastVilla].map((villa, i) => (
+                <button
+                  key={`${villa?.villa_name}-${i}`}
+                  onClick={() => {
+                    if (villa?.villa_name) onVillaSelect(villa.villa_name);
+                  }}
+                  style={{
+                    flex: "1 1 200px",
+                    textAlign: "left",
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 16,
+                    background: i === 0 ? C.panelAlt : C.panel,
+                    padding: 16,
+                    cursor: "pointer",
+                  }}
+                >
+                  <div className="dashboard-eyebrow">
+                    {i === 0 ? "Most Booked" : "Least Booked"}
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "'Cormorant Garamond', serif",
+                      fontSize: 24,
+                      color: C.text,
+                    }}
+                  >
+                    {villa?.villa_name ?? "—"}
+                  </div>
+                  <div style={{ color: C.soft, fontSize: 12 }}>
+                    {fmt(villa?.bookings)} bookings · {bedroomsLabel(villa)}{" "}
+                    bedrooms
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={onGoToML}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                width: "100%",
+                marginTop: 12,
+                padding: "13px 15px",
+                borderRadius: 14,
+                border: `1px dashed ${C.accent2}`,
+                background: C.panelAlt,
+                color: C.accent,
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              View season × villa insights
+              <ArrowUpRight size={17} />
+            </button>
+          </Card>
+
+          {/* Villa table + drilldown */}
+          <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+            <div
+              className="dashboard-card"
+              style={{ flex: "0 0 420px", minWidth: 0 }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                }}
+              >
+                <div>
+                  <div className="dashboard-eyebrow">All Villas</div>
+                  <h2 className="dashboard-card-title">Villa performance</h2>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <ExportMenu
+                    rows={villaPerformanceRows}
+                    filenameBase={villaPerformanceFilename}
+                    disabled={!villaPerformanceRows.length}
+                  />
+                  <ChartInfo id="villaTable" />
+                </div>
+              </div>
               <div
                 style={{
                   display: "flex",
                   justifyContent: "flex-end",
-                  marginBottom: 12,
+                  marginTop: 10,
+                  marginBottom: 10,
                 }}
               >
                 <ModalFilterBar
-                  year={selectedVillaChartYear}
-                  month={selectedVillaChartMonth}
-                  onYearChange={setSelectedVillaChartYear}
-                  onMonthChange={setSelectedVillaChartMonth}
+                  year={villaTableYear}
+                  month={villaTableMonth}
+                  onYearChange={setVillaTableYear}
+                  onMonthChange={setVillaTableMonth}
                   years={years}
                   months={months}
                 />
               </div>
 
+              <TableControls
+                search={villaTableSearch}
+                onSearchChange={setVillaTableSearch}
+                sortKey={villaTableSortKey}
+                onSortKeyChange={setVillaTableSortKey}
+                sortDir={villaTableSortDir}
+                onSortDirChange={setVillaTableSortDir}
+                sortOptions={[
+                  "villa_name",
+                  "bedroom_count",
+                  "bookings",
+                  "total_nights",
+                  "avg_stay",
+                  "revenue",
+                ]}
+                placeholder="Search villas..."
+              />
+
+              <div style={{ overflowY: "auto", maxHeight: 567, marginTop: 8 }}>
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 12,
+                  }}
+                >
+                  <thead
+                    style={{
+                      position: "sticky",
+                      top: 0,
+                      background: C.bg,
+                      zIndex: 1,
+                    }}
+                  >
+                    <tr className="dashboard-eyebrow">
+                      {[
+                        "Villa",
+                        "Bedrooms",
+                        "Bookings",
+                        "Nights",
+                        "Avg Stay",
+                        "Revenue",
+                      ].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            textAlign: h === "Villa" ? "left" : "right",
+                            padding: "10px 10px",
+                            borderBottom: `1px solid ${C.border}`,
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredTableVillas.map((villa) => {
+                      const active = villa.villa_name === selectedVillaName;
+                      return (
+                        <tr
+                          key={`${villa.villa_name}-${villaBedroomLabel(villa)}`}
+                          onClick={() => openVillaModal(villa.villa_name)}
+                          style={{
+                            borderBottom: `1px solid ${C.border}`,
+                            background: active ? C.panelAlt : "transparent",
+                            borderLeft: active
+                              ? `3px solid ${C.accent2}`
+                              : "3px solid transparent",
+                            cursor: "pointer",
+                            transition: "background 0.15s",
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!active)
+                              e.currentTarget.style.background = C.panel;
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!active)
+                              e.currentTarget.style.background = "transparent";
+                          }}
+                        >
+                          <td
+                            style={{
+                              padding: "10px 10px",
+                              fontWeight: active ? 700 : 400,
+                              color: C.text,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {villa.villa_name}
+                          </td>
+                          <td
+                            style={{
+                              padding: "10px 10px",
+                              textAlign: "right",
+                              color: C.soft,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {villaBedroomLabel(villa)}
+                          </td>
+                          <td
+                            style={{
+                              padding: "10px 10px",
+                              textAlign: "right",
+                              color: C.soft,
+                            }}
+                          >
+                            {fmt(villa.bookings)}
+                          </td>
+                          <td
+                            style={{
+                              padding: "10px 10px",
+                              textAlign: "right",
+                              color: C.soft,
+                            }}
+                          >
+                            {fmt(villa.total_nights)}
+                          </td>
+                          <td
+                            style={{
+                              padding: "10px 10px",
+                              textAlign: "right",
+                              color: C.soft,
+                            }}
+                          >
+                            {num(villa.avg_stay)}n
+                          </td>
+                          <td
+                            style={{
+                              padding: "10px 10px",
+                              textAlign: "right",
+                              color: C.soft,
+                            }}
+                          >
+                            {money(villa.revenue)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Drilldown charts */}
+            <div
+              style={{
+                flex: 1,
+                minWidth: 0,
+                display: "flex",
+                flexDirection: "column",
+                gap: 16,
+              }}
+            >
+              {selectedVilla ? (
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      marginBottom: 12,
+                    }}
+                  >
+                    <ModalFilterBar
+                      year={selectedVillaChartYear}
+                      month={selectedVillaChartMonth}
+                      onYearChange={setSelectedVillaChartYear}
+                      onMonthChange={setSelectedVillaChartMonth}
+                      years={years}
+                      months={months}
+                    />
+                  </div>
+
+                  <Card
+                    title={`${selectedVilla.villa_name} — Monthly Bookings`}
+                    sub="Selected villa drill-down"
+                    action={<ChartInfo id="villaMonthlyBookings" />}
+                  >
+                    <div style={{ height: 200 }}>
+                      <ResponsiveContainer>
+                        <LineChart
+                          data={villaMonthlyData}
+                          margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
+                          <XAxis
+                            dataKey="month"
+                            stroke={AX}
+                            fontSize={11}
+                            label={{
+                              value: "Month",
+                              position: "insideBottom",
+                              offset: -10,
+                              style: LABEL_STYLE,
+                            }}
+                          />
+                          <YAxis
+                            stroke={AX}
+                            fontSize={11}
+                            label={{
+                              value: "Bookings",
+                              angle: -90,
+                              position: "insideLeft",
+                              offset: 10,
+                              dy: 30,
+                              style: LABEL_STYLE,
+                            }}
+                          />
+                          <Tooltip contentStyle={TIP} />
+                          <Line
+                            type="monotone"
+                            dataKey="bookings"
+                            stroke="var(--dashboard-deep-blue)"
+                            strokeWidth={2.5}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </Card>
+
+                  <Card
+                    title={`${selectedVilla.villa_name} — Rental Revenue`}
+                    sub="Monthly villa revenue"
+                    action={<ChartInfo id="villaMonthlyRevenue" />}
+                  >
+                    <div style={{ height: 200 }}>
+                      <ResponsiveContainer>
+                        <BarChart
+                          data={villaMonthlyData}
+                          margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
+                          <XAxis
+                            dataKey="month"
+                            stroke={AX}
+                            fontSize={11}
+                            label={{
+                              value: "Month",
+                              position: "insideBottom",
+                              offset: -10,
+                              style: LABEL_STYLE,
+                            }}
+                          />
+                          <YAxis
+                            stroke={AX}
+                            fontSize={11}
+                            label={{
+                              value: "Revenue ($)",
+                              angle: -90,
+                              position: "insideLeft",
+                              offset: 10,
+                              dy: 40,
+                              style: LABEL_STYLE,
+                            }}
+                          />
+                          <Tooltip contentStyle={TIP} />
+                          <Bar
+                            dataKey="revenue"
+                            fill="var(--dashboard-truffle)"
+                            radius={[6, 6, 0, 0]}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </Card>
+                </>
+              ) : (
+                <div
+                  className="dashboard-card"
+                  style={{
+                    height: "100%",
+                    minHeight: 200,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: C.muted,
+                    fontSize: 13,
+                  }}
+                >
+                  Select a villa to see monthly detail
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Bedroom */}
+          <div>
+            <div
+              style={{
+                width: "100%",
+                display: "flex",
+                justifyContent: "flex-end",
+                paddingBottom: 10,
+              }}
+            >
+              <ModalFilterBar
+                year={bedroomChartYear}
+                month={bedroomChartMonth}
+                onYearChange={setBedroomChartYear}
+                onMonthChange={setBedroomChartMonth}
+                years={years}
+                months={months}
+              />
+            </div>
+
+            <div className="dashboard-grid dashboard-grid-main">
               <Card
-                title={`${selectedVilla.villa_name} — Monthly Bookings`}
-                sub="Selected villa drill-down"
-                action={<ChartInfo id="villaMonthlyBookings" />}
+                title="Bookings by Bedroom Count"
+                sub="Bedroom demand"
+                action={<ChartInfo id="bookingsByBedroom" />}
               >
-                <div style={{ height: 200 }}>
+                <div style={{ height: 240 }}>
+                  <ResponsiveContainer>
+                    <BarChart
+                      data={bookingsByBedroomData}
+                      margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
+                      <XAxis
+                        dataKey="beds"
+                        stroke={AX}
+                        fontSize={11}
+                        label={{
+                          value: "Bedrooms",
+                          position: "insideBottom",
+                          offset: -10,
+                          style: LABEL_STYLE,
+                        }}
+                      />
+                      <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                        label={{
+                          value: "Bookings",
+                          angle: -90,
+                          position: "insideLeft",
+                          offset: 10,
+                          dy: 40,
+                          style: LABEL_STYLE,
+                        }}
+                      />
+                      <Tooltip contentStyle={TIP} />
+                      <Bar
+                        dataKey="bookings"
+                        fill="var(--dashboard-flame)"
+                        radius={[6, 6, 0, 0]}
+                        cursor="pointer"
+                        onClick={(entry) => openBedroomModal(entry?.beds)}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+
+              <Card
+                title="Average Stay by Bedroom Count"
+                sub="Length of stay"
+                action={<ChartInfo id="avgStayByBedroom" />}
+              >
+                <div style={{ height: 240 }}>
+                  <ResponsiveContainer>
+                    <BarChart
+                      data={bookingsByBedroomData}
+                      margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
+                      <XAxis
+                        dataKey="beds"
+                        stroke={AX}
+                        fontSize={11}
+                        label={{
+                          value: "Bedrooms",
+                          position: "insideBottom",
+                          offset: -10,
+                          style: LABEL_STYLE,
+                        }}
+                      />
+                      <YAxis
+                        stroke={AX}
+                        fontSize={11}
+                        label={{
+                          value: "Nights",
+                          angle: -90,
+                          position: "insideLeft",
+                          offset: 10,
+                          dy: 30,
+                          style: LABEL_STYLE,
+                        }}
+                      />
+                      <Tooltip contentStyle={TIP} />
+                      <Bar
+                        dataKey="avg_stay"
+                        fill="var(--dashboard-deep-blue)"
+                        radius={[6, 6, 0, 0]}
+                      />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+            </div>
+          </div>
+
+          {/* Monthly revenue */}
+          <div>
+            <div
+              style={{
+                width: "100%",
+                display: "flex",
+                justifyContent: "flex-end",
+                paddingBottom: 10,
+              }}
+            >
+              <ModalFilterBar
+                year={monthlyChartYear}
+                month={monthlyChartMonth}
+                onYearChange={setMonthlyChartYear}
+                onMonthChange={setMonthlyChartMonth}
+                years={years}
+                months={months}
+              />
+            </div>
+
+            <div className="dashboard-grid dashboard-grid-main">
+              <Card
+                title="Bookings by Month"
+                sub="Monthly booking trend"
+                action={<ChartInfo id="bookingsByMonth" />}
+              >
+                <div style={{ height: 240 }}>
                   <ResponsiveContainer>
                     <LineChart
-                      data={villaMonthlyData}
+                      data={monthlyRevenueData}
                       margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
@@ -1660,7 +1945,7 @@ export default function VisitsRoomsTab({
                           angle: -90,
                           position: "insideLeft",
                           offset: 10,
-                          dy: 30,
+                          dy: 40,
                           style: LABEL_STYLE,
                         }}
                       />
@@ -1677,14 +1962,14 @@ export default function VisitsRoomsTab({
               </Card>
 
               <Card
-                title={`${selectedVilla.villa_name} — Rental Revenue`}
-                sub="Monthly villa revenue"
-                action={<ChartInfo id="villaMonthlyRevenue" />}
+                title="Villa Rental Revenue by Month"
+                sub="Folio rental revenue"
+                action={<ChartInfo id="revenueByMonth" />}
               >
-                <div style={{ height: 200 }}>
+                <div style={{ height: 240 }}>
                   <ResponsiveContainer>
                     <BarChart
-                      data={villaMonthlyData}
+                      data={monthlyRevenueData}
                       margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
                     >
                       <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
@@ -1721,1134 +2006,893 @@ export default function VisitsRoomsTab({
                   </ResponsiveContainer>
                 </div>
               </Card>
-            </>
-          ) : (
+            </div>
+          </div>
+
+          {/* ── People modal ───────────────────────────────────────────────── */}
+          {peopleModalOpen && (
             <div
-              className="dashboard-card"
+              onClick={() => setPeopleModalOpen(false)}
               style={{
-                height: "100%",
-                minHeight: 200,
+                position: "fixed",
+                inset: 0,
+                background: "rgba(8, 18, 32, 0.48)",
+                zIndex: 1000,
                 display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: C.muted,
-                fontSize: 13,
+                justifyContent: "flex-end",
               }}
             >
-              Select a villa to see monthly detail
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Bedroom */}
-      <div>
-        <div
-          style={{
-            width: "100%",
-            display: "flex",
-            justifyContent: "flex-end",
-            paddingBottom: 10,
-          }}
-        >
-          <ModalFilterBar
-            year={bedroomChartYear}
-            month={bedroomChartMonth}
-            onYearChange={setBedroomChartYear}
-            onMonthChange={setBedroomChartMonth}
-            years={years}
-            months={months}
-          />
-        </div>
-
-        <div className="dashboard-grid dashboard-grid-main">
-          <Card
-            title="Bookings by Bedroom Count"
-            sub="Bedroom demand"
-            action={<ChartInfo id="bookingsByBedroom" />}
-          >
-            <div style={{ height: 240 }}>
-              <ResponsiveContainer>
-                <BarChart
-                  data={bookingsByBedroomData}
-                  margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                  <XAxis
-                    dataKey="beds"
-                    stroke={AX}
-                    fontSize={11}
-                    label={{
-                      value: "Bedrooms",
-                      position: "insideBottom",
-                      offset: -10,
-                      style: LABEL_STYLE,
-                    }}
-                  />
-                  <YAxis
-                    stroke={AX}
-                    fontSize={11}
-                    label={{
-                      value: "Bookings",
-                      angle: -90,
-                      position: "insideLeft",
-                      offset: 10,
-                      dy: 40,
-                      style: LABEL_STYLE,
-                    }}
-                  />
-                  <Tooltip contentStyle={TIP} />
-                  <Bar
-                    dataKey="bookings"
-                    fill="var(--dashboard-flame)"
-                    radius={[6, 6, 0, 0]}
-                    cursor="pointer"
-                    onClick={(entry) => openBedroomModal(entry?.beds)}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-
-          <Card
-            title="Average Stay by Bedroom Count"
-            sub="Length of stay"
-            action={<ChartInfo id="avgStayByBedroom" />}
-          >
-            <div style={{ height: 240 }}>
-              <ResponsiveContainer>
-                <BarChart
-                  data={bookingsByBedroomData}
-                  margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                  <XAxis
-                    dataKey="beds"
-                    stroke={AX}
-                    fontSize={11}
-                    label={{
-                      value: "Bedrooms",
-                      position: "insideBottom",
-                      offset: -10,
-                      style: LABEL_STYLE,
-                    }}
-                  />
-                  <YAxis
-                    stroke={AX}
-                    fontSize={11}
-                    label={{
-                      value: "Nights",
-                      angle: -90,
-                      position: "insideLeft",
-                      offset: 10,
-                      dy: 30,
-                      style: LABEL_STYLE,
-                    }}
-                  />
-                  <Tooltip contentStyle={TIP} />
-                  <Bar
-                    dataKey="avg_stay"
-                    fill="var(--dashboard-deep-blue)"
-                    radius={[6, 6, 0, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      {/* Monthly revenue */}
-      <div>
-        <div
-          style={{
-            width: "100%",
-            display: "flex",
-            justifyContent: "flex-end",
-            paddingBottom: 10,
-          }}
-        >
-          <ModalFilterBar
-            year={monthlyChartYear}
-            month={monthlyChartMonth}
-            onYearChange={setMonthlyChartYear}
-            onMonthChange={setMonthlyChartMonth}
-            years={years}
-            months={months}
-          />
-        </div>
-
-        <div className="dashboard-grid dashboard-grid-main">
-          <Card
-            title="Bookings by Month"
-            sub="Monthly booking trend"
-            action={<ChartInfo id="bookingsByMonth" />}
-          >
-            <div style={{ height: 240 }}>
-              <ResponsiveContainer>
-                <LineChart
-                  data={monthlyRevenueData}
-                  margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                  <XAxis
-                    dataKey="month"
-                    stroke={AX}
-                    fontSize={11}
-                    label={{
-                      value: "Month",
-                      position: "insideBottom",
-                      offset: -10,
-                      style: LABEL_STYLE,
-                    }}
-                  />
-                  <YAxis
-                    stroke={AX}
-                    fontSize={11}
-                    label={{
-                      value: "Bookings",
-                      angle: -90,
-                      position: "insideLeft",
-                      offset: 10,
-                      dy: 40,
-                      style: LABEL_STYLE,
-                    }}
-                  />
-                  <Tooltip contentStyle={TIP} />
-                  <Line
-                    type="monotone"
-                    dataKey="bookings"
-                    stroke="var(--dashboard-deep-blue)"
-                    strokeWidth={2.5}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-
-          <Card
-            title="Villa Rental Revenue by Month"
-            sub="Folio rental revenue"
-            action={<ChartInfo id="revenueByMonth" />}
-          >
-            <div style={{ height: 240 }}>
-              <ResponsiveContainer>
-                <BarChart
-                  data={monthlyRevenueData}
-                  margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                  <XAxis
-                    dataKey="month"
-                    stroke={AX}
-                    fontSize={11}
-                    label={{
-                      value: "Month",
-                      position: "insideBottom",
-                      offset: -10,
-                      style: LABEL_STYLE,
-                    }}
-                  />
-                  <YAxis
-                    stroke={AX}
-                    fontSize={11}
-                    label={{
-                      value: "Revenue ($)",
-                      angle: -90,
-                      position: "insideLeft",
-                      offset: 10,
-                      dy: 40,
-                      style: LABEL_STYLE,
-                    }}
-                  />
-                  <Tooltip contentStyle={TIP} />
-                  <Bar
-                    dataKey="revenue"
-                    fill="var(--dashboard-truffle)"
-                    radius={[6, 6, 0, 0]}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      {/* ── People modal ─────────────────────────────────────────────────── */}
-      {peopleModalOpen && (
-        <div
-          onClick={() => setPeopleModalOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(8, 18, 32, 0.48)",
-            zIndex: 1000,
-            display: "flex",
-            justifyContent: "flex-end",
-          }}
-        >
-          <aside
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "min(820px, 96vw)",
-              height: "100vh",
-              background: C.bg,
-              borderLeft: `1px solid ${C.border}`,
-              overflowY: "auto",
-              padding: 26,
-            }}
-          >
-            <button onClick={() => setPeopleModalOpen(false)}>
-              <X size={18} />
-            </button>
-
-            <div className="dashboard-eyebrow">
-              {peopleKind === "members" ? "Members booked" : "Guests booked"}
-            </div>
-
-            <h2 className="dashboard-card-title">
-              {peopleKind === "members"
-                ? "Total Members Booked"
-                : "Total Guests Booked"}
-            </h2>
-
-            <ModalFilterBar
-              year={peopleYear}
-              month={peopleMonth}
-              onYearChange={setPeopleYear}
-              onMonthChange={setPeopleMonth}
-              years={years}
-              months={months}
-            />
-
-            <TableControls
-              search={peopleSearch}
-              onSearchChange={setPeopleSearch}
-              sortKey={peopleSortKey}
-              onSortKeyChange={setPeopleSortKey}
-              sortDir={peopleSortDir}
-              onSortDirChange={setPeopleSortDir}
-              sortOptions={[
-                "member_full_name",
-                "member_number",
-                "member_type",
-                "member_or_guest",
-                "bookings",
-                "nights",
-                "first_check_in",
-                "last_check_out",
-              ]}
-              placeholder="Search people..."
-            />
-
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 12,
-              }}
-            >
-              <div style={{ color: C.muted, fontSize: 12 }}>
-                {filteredPeopleRows.length} of {peopleRows.length} records
-              </div>
-
-              <ExportMenu
-                rows={peopleExportRows}
-                filenameBase={peopleFilename}
-                disabled={peopleLoading || !peopleExportRows.length}
-              />
-            </div>
-
-            {peopleLoading ? (
-              <div style={{ color: C.muted }}>Loading people...</div>
-            ) : (
-              <div style={{ overflowX: "auto" }}>
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: 12,
-                  }}
-                >
-                  <thead>
-                    <tr className="dashboard-eyebrow">
-                      {[
-                        "Name",
-                        "Member #",
-                        "Member Type",
-                        "Account",
-                        "Bookings",
-                        "Nights",
-                        "First In",
-                        "Last Out",
-                      ].map((h) => (
-                        <th
-                          key={h}
-                          style={{
-                            textAlign: h === "Name" ? "left" : "right",
-                            padding: "10px",
-                            borderBottom: `1px solid ${C.border}`,
-                          }}
-                        >
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {filteredPeopleRows.map((p, i) => {
-                      const name =
-                        p.member_full_name ||
-                        p.member_name ||
-                        p.folio_guest_name ||
-                        p.guest_name ||
-                        "Unknown";
-                      const missingMemberType = !p.member_type;
-
-                      return (
-                        <tr
-                          key={`${name}-${p.member_number ?? i}`}
-                          style={{
-                            background: missingMemberType
-                              ? "rgba(255, 193, 7, 0.14)"
-                              : "transparent",
-                            borderTop: `1px solid ${C.border}`,
-                          }}
-                        >
-                          <td style={{ padding: "10px", color: C.text }}>
-                            {name}
-                            {missingMemberType && (
-                              <div
-                                style={{
-                                  marginTop: 4,
-                                  color: C.accent3,
-                                  fontSize: 10,
-                                  fontWeight: 800,
-                                  textTransform: "uppercase",
-                                  letterSpacing: "0.05em",
-                                }}
-                              >
-                                Member type is null
-                              </div>
-                            )}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px",
-                              textAlign: "right",
-                              color: C.soft,
-                            }}
-                          >
-                            {p.member_number ?? "—"}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px",
-                              textAlign: "right",
-                              color: missingMemberType ? C.accent3 : C.soft,
-                              fontWeight: missingMemberType ? 800 : 400,
-                            }}
-                          >
-                            {p.member_type ?? "NULL"}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px",
-                              textAlign: "right",
-                              color: !p.member_or_guest ? C.accent3 : C.soft,
-                              fontWeight: !p.member_or_guest ? 800 : 400,
-                            }}
-                          >
-                            {p.member_or_guest ?? "NULL"}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px",
-                              textAlign: "right",
-                              color: C.soft,
-                            }}
-                          >
-                            {fmt(p.bookings)}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px",
-                              textAlign: "right",
-                              color: C.soft,
-                            }}
-                          >
-                            {fmt(p.nights)}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px",
-                              textAlign: "right",
-                              color: C.soft,
-                            }}
-                          >
-                            {p.first_check_in ?? "—"}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px",
-                              textAlign: "right",
-                              color: C.soft,
-                            }}
-                          >
-                            {p.last_check_out ?? "—"}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </aside>
-        </div>
-      )}
-
-      {/* ── Bedroom modal ────────────────────────────────────────────────── */}
-      {bedroomModalOpen && (
-        <div
-          onClick={() => setBedroomModalOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(8, 18, 32, 0.48)",
-            zIndex: 1000,
-            display: "flex",
-            justifyContent: "flex-end",
-          }}
-        >
-          <aside
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "min(760px, 96vw)",
-              height: "100vh",
-              background: C.bg,
-              borderLeft: `1px solid ${C.border}`,
-              overflowY: "auto",
-              padding: 26,
-            }}
-          >
-            <button onClick={() => setBedroomModalOpen(false)}>
-              <X size={18} />
-            </button>
-
-            <div className="dashboard-eyebrow">Bedroom booking profile</div>
-            <h2 className="dashboard-card-title">
-              {selectedBedroom} Bedroom Bookings
-            </h2>
-
-            <ModalFilterBar
-              year={bedroomYear}
-              month={bedroomMonth}
-              onYearChange={setBedroomYear}
-              onMonthChange={setBedroomMonth}
-              years={years}
-              months={months}
-            />
-
-            <TableControls
-              search={bedroomSearch}
-              onSearchChange={setBedroomSearch}
-              sortKey={bedroomSortKey}
-              onSortKeyChange={setBedroomSortKey}
-              sortDir={bedroomSortDir}
-              onSortDirChange={setBedroomSortDir}
-              sortOptions={[
-                "member_full_name",
-                "villa_name",
-                "check_in_date",
-                "check_out_date",
-                "nights",
-                "persons",
-              ]}
-              placeholder="Search bedroom bookings..."
-            />
-
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 12,
-              }}
-            >
-              <div style={{ color: C.muted, fontSize: 12 }}>
-                {bedroomBookingsLoading
-                  ? null
-                  : `${filteredBedroomBookings.length} of ${bedroomBookings.length} records`}
-              </div>
-
-              <ExportMenu
-                rows={bedroomExportRows}
-                filenameBase={bedroomFilename}
-                disabled={bedroomBookingsLoading || !bedroomExportRows.length}
-              />
-            </div>
-
-            {bedroomBookingsLoading ? (
-              <div style={{ color: C.muted }}>Loading bookings…</div>
-            ) : (
-              <table
+              <aside
+                onClick={(e) => e.stopPropagation()}
                 style={{
-                  width: "100%",
-                  borderCollapse: "collapse",
-                  fontSize: 12,
+                  width: "min(820px, 96vw)",
+                  height: "100vh",
+                  background: C.bg,
+                  borderLeft: `1px solid ${C.border}`,
+                  overflowY: "auto",
+                  padding: 26,
                 }}
               >
-                <thead>
-                  <tr className="dashboard-eyebrow">
-                    {[
-                      "Who",
-                      "Villa",
-                      "Check in",
-                      "Check out",
-                      "Nights",
-                      "Guests",
-                    ].map((h) => (
-                      <th key={h} style={{ textAlign: "left", padding: 10 }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredBedroomBookings.map((b) => (
-                    <tr
-                      key={b.conf_code}
-                      style={{ borderTop: `1px solid ${C.border}` }}
-                    >
-                      <td style={{ padding: 10 }}>
-                        {b.member_full_name ||
-                          b.member_name ||
-                          b.guest_name ||
-                          "—"}
-                      </td>
-                      <td style={{ padding: 10 }}>{b.villa_name || "—"}</td>
-                      <td style={{ padding: 10 }}>{b.check_in_date || "—"}</td>
-                      <td style={{ padding: 10 }}>{b.check_out_date || "—"}</td>
-                      <td style={{ padding: 10 }}>{fmt(b.nights)}</td>
-                      <td style={{ padding: 10 }}>{fmt(b.persons)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </aside>
-        </div>
-      )}
+                <button onClick={() => setPeopleModalOpen(false)}>
+                  <X size={18} />
+                </button>
+                <div className="dashboard-eyebrow">
+                  {peopleKind === "members"
+                    ? "Members booked"
+                    : "Guests booked"}
+                </div>
+                <h2 className="dashboard-card-title">
+                  {peopleKind === "members"
+                    ? "Total Members Booked"
+                    : "Total Guests Booked"}
+                </h2>
 
-      {/* ── Villa modal ──────────────────────────────────────────────────── */}
-      {villaModalOpen && selectedVilla && (
-        <div
-          onClick={() => setVillaModalOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(8, 18, 32, 0.48)",
-            zIndex: 1000,
-            display: "flex",
-            justifyContent: "flex-end",
-            backdropFilter: "blur(3px)",
-          }}
-        >
-          <aside
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "min(860px, 96vw)",
-              height: "100vh",
-              background: C.bg,
-              borderLeft: `1px solid ${C.border}`,
-              boxShadow: "-24px 0 60px rgba(0,0,0,0.22)",
-              overflowY: "auto",
-            }}
-          >
-            {/* Sticky header */}
-            <div
-              style={{
-                position: "sticky",
-                top: 0,
-                zIndex: 5,
-                background: C.bg,
-                borderBottom: `1px solid ${C.border}`,
-                padding: "22px 26px 18px",
-              }}
-            >
-              <button
-                onClick={() => setVillaModalOpen(false)}
-                style={{
-                  position: "absolute",
-                  right: 22,
-                  top: 22,
-                  border: `1px solid ${C.border}`,
-                  background: C.panel,
-                  width: 36,
-                  height: 36,
-                  borderRadius: 999,
-                  cursor: "pointer",
-                  color: C.text,
-                }}
-              >
-                <X size={18} />
-              </button>
-
-              <div className="dashboard-eyebrow">Villa booking profile</div>
-
-              <h2
-                style={{
-                  fontFamily: "'Cormorant Garamond', serif",
-                  fontSize: 38,
-                  color: C.text,
-                  margin: "4px 48px 4px 0",
-                  lineHeight: 1,
-                }}
-              >
-                {selectedVilla.villa_name}
-              </h2>
-
-              <div style={{ color: C.soft, fontSize: 13 }}>
-                {fmt(selectedVilla.bookings)} bookings ·{" "}
-                {fmt(selectedVilla.total_nights)} room nights ·{" "}
-                {money(selectedVilla.revenue)} revenue
-              </div>
-
-              {/* Independent filters inside the sticky header */}
-              <div style={{ marginTop: 14 }}>
                 <ModalFilterBar
-                  year={villaYear}
-                  month={villaMonth}
-                  onYearChange={setVillaYear}
-                  onMonthChange={setVillaMonth}
+                  year={peopleYear}
+                  month={peopleMonth}
+                  onYearChange={setPeopleYear}
+                  onMonthChange={setPeopleMonth}
                   years={years}
                   months={months}
                 />
-              </div>
-            </div>
 
-            <div style={{ padding: 26 }}>
-              {/* Summary tiles */}
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                  gap: 12,
-                  marginBottom: 24,
-                }}
-              >
-                {[
-                  ["Bookings", fmt(selectedVilla.bookings), "Total stays"],
-                  ["Revenue", money(selectedVilla.revenue), "Rental spend"],
-                  [
-                    "Avg Stay",
-                    `${num(selectedVilla.avg_stay)}n`,
-                    "Per booking",
-                  ],
-                  ["Guests", fmt(selectedVilla.total_guests), "Total guests"],
-                  ["Bedrooms", bedroomsLabel(selectedVilla), "Villa setup"],
-                  [
-                    "Members",
-                    fmt(selectedVilla.unique_members),
-                    "Unique members",
-                  ],
-                ].map(([label, value, sub]) => (
-                  <div
-                    key={label}
-                    style={{
-                      border: `1px solid ${C.border}`,
-                      background: C.panel,
-                      borderRadius: 18,
-                      padding: 16,
-                    }}
-                  >
-                    <div className="dashboard-eyebrow">{label}</div>
-                    <div
-                      style={{
-                        fontFamily: "'Cormorant Garamond', serif",
-                        color: C.text,
-                        fontSize: 28,
-                        marginTop: 4,
-                      }}
-                    >
-                      {value}
-                    </div>
-                    <div style={{ color: C.muted, fontSize: 11 }}>{sub}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  alignItems: "end",
-                  marginBottom: 12,
-                }}
-              >
-                <div>
-                  <div className="dashboard-eyebrow">Booking timeline</div>
-                  <h3
-                    style={{ color: C.text, margin: "4px 0 0", fontSize: 22 }}
-                  >
-                    People who booked this villa
-                  </h3>
-                </div>
+                <TableControls
+                  search={peopleSearch}
+                  onSearchChange={setPeopleSearch}
+                  sortKey={peopleSortKey}
+                  onSortKeyChange={setPeopleSortKey}
+                  sortDir={peopleSortDir}
+                  onSortDirChange={setPeopleSortDir}
+                  sortOptions={[
+                    "member_full_name",
+                    "member_number",
+                    "member_type",
+                    "member_or_guest",
+                    "bookings",
+                    "nights",
+                    "first_check_in",
+                    "last_check_out",
+                  ]}
+                  placeholder="Search people..."
+                />
 
                 <div
                   style={{
                     display: "flex",
+                    justifyContent: "space-between",
                     alignItems: "center",
-                    gap: 10,
+                    marginBottom: 12,
                   }}
                 >
-                  <div
-                    style={{
-                      color: C.muted,
-                      fontSize: 12,
-                      border: `1px solid ${C.border}`,
-                      borderRadius: 999,
-                      padding: "7px 11px",
-                      background: C.panelAlt,
-                    }}
-                  >
-                    {filteredVillaBookings.length} of {villaBookings.length}{" "}
-                    records
+                  <div style={{ color: C.muted, fontSize: 12 }}>
+                    {filteredPeopleRows.length} of {peopleRows.length} records
                   </div>
-
                   <ExportMenu
-                    rows={villaBookingRows}
-                    filenameBase={villaBookingFilename}
-                    disabled={villaBookingsLoading || !villaBookingRows.length}
+                    rows={peopleExportRows}
+                    filenameBase={peopleFilename}
+                    disabled={peopleLoading || !peopleExportRows.length}
                   />
                 </div>
-              </div>
 
-              <TableControls
-                search={villaBookingSearch}
-                onSearchChange={setVillaBookingSearch}
-                sortKey={villaBookingSortKey}
-                onSortKeyChange={setVillaBookingSortKey}
-                sortDir={villaBookingSortDir}
-                onSortDirChange={setVillaBookingSortDir}
-                sortOptions={[
-                  "member_full_name",
-                  "member_number",
-                  "conf_code",
-                  "check_in_date",
-                  "check_out_date",
-                  "nights",
-                  "persons",
-                  "revenue",
-                ]}
-                placeholder="Search villa bookings..."
-              />
-
-              {villaBookingsLoading ? (
-                <div
-                  style={{
-                    padding: 34,
-                    textAlign: "center",
-                    color: C.muted,
-                    border: `1px dashed ${C.border}`,
-                    borderRadius: 18,
-                  }}
-                >
-                  Loading booking details...
-                </div>
-              ) : villaBookings.length === 0 ? (
-                <div
-                  style={{
-                    padding: 34,
-                    textAlign: "center",
-                    color: C.muted,
-                    border: `1px dashed ${C.border}`,
-                    borderRadius: 18,
-                  }}
-                >
-                  No booking details found.
-                </div>
-              ) : filteredVillaBookings.length === 0 ? (
-                <div
-                  style={{
-                    padding: 34,
-                    textAlign: "center",
-                    color: C.muted,
-                    border: `1px dashed ${C.border}`,
-                    borderRadius: 18,
-                  }}
-                >
-                  No matching booking details found.
-                </div>
-              ) : (
-                <div style={{ position: "relative" }}>
-                  {/* timeline rail */}
-                  <div
-                    style={{
-                      position: "absolute",
-                      left: 17,
-                      top: 8,
-                      bottom: 8,
-                      width: 2,
-                      background: C.border,
-                    }}
-                  />
-
-                  {filteredVillaBookings.map((b, index) => {
-                    const guests = Array.isArray(b.guests) ? b.guests : [];
-                    const primaryName =
-                      b.member_full_name ??
-                      b.member_name ??
-                      b.guest_name ??
-                      "Unknown guest";
-
-                    return (
-                      <div
-                        key={b.conf_code ?? index}
-                        style={{
-                          position: "relative",
-                          display: "grid",
-                          gridTemplateColumns: "38px 1fr",
-                          gap: 14,
-                          marginBottom: 16,
-                        }}
-                      >
-                        {/* date dot */}
-                        <div
-                          style={{
-                            width: 34,
-                            height: 34,
-                            borderRadius: 999,
-                            background: C.accent2,
-                            color: "#fff",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            fontSize: 12,
-                            fontWeight: 800,
-                            zIndex: 1,
-                            marginTop: 10,
-                          }}
-                        >
-                          {index + 1}
-                        </div>
-
-                        {/* booking card */}
-                        <div
-                          style={{
-                            border: `1px solid ${C.border}`,
-                            background: index === 0 ? C.panelAlt : C.panel,
-                            borderRadius: 20,
-                            padding: 18,
-                            boxShadow: "0 10px 28px rgba(0,0,0,0.04)",
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              gap: 14,
-                              alignItems: "flex-start",
-                            }}
-                          >
-                            <div>
-                              <div
-                                style={{
-                                  fontSize: 18,
-                                  fontWeight: 850,
-                                  color: C.text,
-                                }}
-                              >
-                                {primaryName}
-                              </div>
-                              <div
-                                style={{
-                                  color: C.soft,
-                                  fontSize: 12,
-                                  marginTop: 4,
-                                }}
-                              >
-                                Member #{b.member_number ?? "—"} · Confirmation{" "}
-                                {b.conf_code ?? "—"}
-                              </div>
-                            </div>
-
-                            <div style={{ textAlign: "right", minWidth: 100 }}>
-                              <div
-                                style={{
-                                  fontWeight: 900,
-                                  color: C.text,
-                                  fontSize: 18,
-                                }}
-                              >
-                                {money(b.revenue)}
-                              </div>
-                              <div style={{ color: C.muted, fontSize: 11 }}>
-                                revenue
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* stay strip */}
-                          <div
-                            style={{
-                              marginTop: 16,
-                              display: "grid",
-                              gridTemplateColumns: "1fr auto 1fr",
-                              alignItems: "center",
-                              gap: 10,
-                              background: C.bg,
-                              border: `1px solid ${C.border}`,
-                              borderRadius: 16,
-                              padding: 12,
-                            }}
-                          >
-                            <div>
-                              <div className="dashboard-eyebrow">Check-in</div>
-                              <div style={{ color: C.text, fontWeight: 800 }}>
-                                {b.check_in_date ?? "—"}
-                              </div>
-                            </div>
-
-                            <div
+                {peopleLoading ? (
+                  <div style={{ color: C.muted }}>Loading people...</div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table
+                      style={{
+                        width: "100%",
+                        borderCollapse: "collapse",
+                        fontSize: 12,
+                      }}
+                    >
+                      <thead>
+                        <tr className="dashboard-eyebrow">
+                          {[
+                            "Name",
+                            "Member #",
+                            "Member Type",
+                            "Account",
+                            "Bookings",
+                            "Nights",
+                            "First In",
+                            "Last Out",
+                          ].map((h) => (
+                            <th
+                              key={h}
                               style={{
-                                borderRadius: 999,
-                                padding: "7px 12px",
-                                background: C.panelAlt,
-                                color: C.accent,
-                                fontWeight: 800,
-                                fontSize: 12,
-                                whiteSpace: "nowrap",
+                                textAlign: h === "Name" ? "left" : "right",
+                                padding: "10px",
+                                borderBottom: `1px solid ${C.border}`,
                               }}
                             >
-                              {fmt(b.nights)} nights · {fmt(b.persons)} guests
-                            </div>
-
-                            <div style={{ textAlign: "right" }}>
-                              <div className="dashboard-eyebrow">Check-out</div>
-                              <div style={{ color: C.text, fontWeight: 800 }}>
-                                {b.check_out_date ?? "—"}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* contact row */}
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "1fr 1fr",
-                              gap: 10,
-                              marginTop: 12,
-                            }}
-                          >
-                            <div
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredPeopleRows.map((p, i) => {
+                          const name =
+                            p.member_full_name ||
+                            p.member_name ||
+                            p.folio_guest_name ||
+                            p.guest_name ||
+                            "Unknown";
+                          const missingMemberType = !p.member_type;
+                          return (
+                            <tr
+                              key={`${name}-${p.member_number ?? i}`}
                               style={{
-                                border: `1px solid ${C.border}`,
-                                borderRadius: 14,
-                                padding: 11,
-                                background: C.bg,
+                                background: missingMemberType
+                                  ? "rgba(255, 193, 7, 0.14)"
+                                  : "transparent",
+                                borderTop: `1px solid ${C.border}`,
                               }}
                             >
-                              <div className="dashboard-eyebrow">Email</div>
-                              <div
-                                style={{
-                                  color: C.soft,
-                                  fontSize: 12,
-                                  wordBreak: "break-word",
-                                }}
-                              >
-                                {b.email ?? "—"}
-                              </div>
-                            </div>
-
-                            <div
-                              style={{
-                                border: `1px solid ${C.border}`,
-                                borderRadius: 14,
-                                padding: 11,
-                                background: C.bg,
-                              }}
-                            >
-                              <div className="dashboard-eyebrow">Phone</div>
-                              <div style={{ color: C.soft, fontSize: 12 }}>
-                                {b.phone ?? "—"}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* guest manifest */}
-                          {guests.length > 0 && (
-                            <div style={{ marginTop: 15 }}>
-                              <div
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "space-between",
-                                  marginBottom: 8,
-                                }}
-                              >
-                                <div className="dashboard-eyebrow">
-                                  Guest manifest
-                                </div>
-                                <div style={{ color: C.muted, fontSize: 11 }}>
-                                  {guests.length} guest
-                                  {guests.length === 1 ? "" : "s"}
-                                </div>
-                              </div>
-
-                              <div
-                                style={{
-                                  display: "flex",
-                                  flexWrap: "wrap",
-                                  gap: 8,
-                                }}
-                              >
-                                {guests.map((g, i) => (
+                              <td style={{ padding: "10px", color: C.text }}>
+                                {name}
+                                {missingMemberType && (
                                   <div
-                                    key={`${b.conf_code}-${i}`}
                                     style={{
-                                      border: `1px solid ${C.border}`,
-                                      borderRadius: 999,
-                                      padding: "8px 11px",
-                                      background: g.is_owner
-                                        ? C.panelAlt
-                                        : C.bg,
-                                      color: C.text,
-                                      fontSize: 12,
-                                      display: "flex",
-                                      gap: 6,
-                                      alignItems: "center",
+                                      marginTop: 4,
+                                      color: C.accent3,
+                                      fontSize: 10,
+                                      fontWeight: 800,
+                                      textTransform: "uppercase",
+                                      letterSpacing: "0.05em",
                                     }}
                                   >
-                                    <span style={{ fontWeight: 800 }}>
-                                      {g.guest_name ?? "Unnamed guest"}
-                                    </span>
-                                    <span style={{ color: C.muted }}>
-                                      {g.is_owner ? "Owner" : "Guest"}
-                                    </span>
-                                    {g.room_number && (
-                                      <span style={{ color: C.soft }}>
-                                        Room {g.room_number}
-                                      </span>
-                                    )}
+                                    Member type is null
+                                  </div>
+                                )}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "10px",
+                                  textAlign: "right",
+                                  color: C.soft,
+                                }}
+                              >
+                                {p.member_number ?? "—"}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "10px",
+                                  textAlign: "right",
+                                  color: missingMemberType ? C.accent3 : C.soft,
+                                  fontWeight: missingMemberType ? 800 : 400,
+                                }}
+                              >
+                                {p.member_type ?? "NULL"}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "10px",
+                                  textAlign: "right",
+                                  color: !p.member_or_guest
+                                    ? C.accent3
+                                    : C.soft,
+                                  fontWeight: !p.member_or_guest ? 800 : 400,
+                                }}
+                              >
+                                {p.member_or_guest ?? "NULL"}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "10px",
+                                  textAlign: "right",
+                                  color: C.soft,
+                                }}
+                              >
+                                {fmt(p.bookings)}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "10px",
+                                  textAlign: "right",
+                                  color: C.soft,
+                                }}
+                              >
+                                {fmt(p.nights)}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "10px",
+                                  textAlign: "right",
+                                  color: C.soft,
+                                }}
+                              >
+                                {p.first_check_in ?? "—"}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "10px",
+                                  textAlign: "right",
+                                  color: C.soft,
+                                }}
+                              >
+                                {p.last_check_out ?? "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </aside>
+            </div>
+          )}
+
+          {/* ── Bedroom modal ──────────────────────────────────────────────── */}
+          {bedroomModalOpen && (
+            <div
+              onClick={() => setBedroomModalOpen(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(8, 18, 32, 0.48)",
+                zIndex: 1000,
+                display: "flex",
+                justifyContent: "flex-end",
+              }}
+            >
+              <aside
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  width: "min(760px, 96vw)",
+                  height: "100vh",
+                  background: C.bg,
+                  borderLeft: `1px solid ${C.border}`,
+                  overflowY: "auto",
+                  padding: 26,
+                }}
+              >
+                <button onClick={() => setBedroomModalOpen(false)}>
+                  <X size={18} />
+                </button>
+                <div className="dashboard-eyebrow">Bedroom booking profile</div>
+                <h2 className="dashboard-card-title">
+                  {selectedBedroom} Bedroom Bookings
+                </h2>
+
+                <ModalFilterBar
+                  year={bedroomYear}
+                  month={bedroomMonth}
+                  onYearChange={setBedroomYear}
+                  onMonthChange={setBedroomMonth}
+                  years={years}
+                  months={months}
+                />
+
+                <TableControls
+                  search={bedroomSearch}
+                  onSearchChange={setBedroomSearch}
+                  sortKey={bedroomSortKey}
+                  onSortKeyChange={setBedroomSortKey}
+                  sortDir={bedroomSortDir}
+                  onSortDirChange={setBedroomSortDir}
+                  sortOptions={[
+                    "member_full_name",
+                    "villa_name",
+                    "check_in_date",
+                    "check_out_date",
+                    "nights",
+                    "persons",
+                  ]}
+                  placeholder="Search bedroom bookings..."
+                />
+
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 12,
+                  }}
+                >
+                  <div style={{ color: C.muted, fontSize: 12 }}>
+                    {bedroomBookingsLoading
+                      ? null
+                      : `${filteredBedroomBookings.length} of ${bedroomBookings.length} records`}
+                  </div>
+                  <ExportMenu
+                    rows={bedroomExportRows}
+                    filenameBase={bedroomFilename}
+                    disabled={
+                      bedroomBookingsLoading || !bedroomExportRows.length
+                    }
+                  />
+                </div>
+
+                {bedroomBookingsLoading ? (
+                  <div style={{ color: C.muted }}>Loading bookings…</div>
+                ) : (
+                  <table
+                    style={{
+                      width: "100%",
+                      borderCollapse: "collapse",
+                      fontSize: 12,
+                    }}
+                  >
+                    <thead>
+                      <tr className="dashboard-eyebrow">
+                        {[
+                          "Who",
+                          "Villa",
+                          "Check in",
+                          "Check out",
+                          "Nights",
+                          "Guests",
+                        ].map((h) => (
+                          <th
+                            key={h}
+                            style={{ textAlign: "left", padding: 10 }}
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredBedroomBookings.map((b) => (
+                        <tr
+                          key={b.conf_code}
+                          style={{ borderTop: `1px solid ${C.border}` }}
+                        >
+                          <td style={{ padding: 10 }}>
+                            {b.member_full_name ||
+                              b.member_name ||
+                              b.guest_name ||
+                              "—"}
+                          </td>
+                          <td style={{ padding: 10 }}>{b.villa_name || "—"}</td>
+                          <td style={{ padding: 10 }}>
+                            {b.check_in_date || "—"}
+                          </td>
+                          <td style={{ padding: 10 }}>
+                            {b.check_out_date || "—"}
+                          </td>
+                          <td style={{ padding: 10 }}>{fmt(b.nights)}</td>
+                          <td style={{ padding: 10 }}>{fmt(b.persons)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </aside>
+            </div>
+          )}
+
+          {/* ── Villa modal ────────────────────────────────────────────────── */}
+          {villaModalOpen && selectedVilla && (
+            <div
+              onClick={() => setVillaModalOpen(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(8, 18, 32, 0.48)",
+                zIndex: 1000,
+                display: "flex",
+                justifyContent: "flex-end",
+                backdropFilter: "blur(3px)",
+              }}
+            >
+              <aside
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  width: "min(860px, 96vw)",
+                  height: "100vh",
+                  background: C.bg,
+                  borderLeft: `1px solid ${C.border}`,
+                  boxShadow: "-24px 0 60px rgba(0,0,0,0.22)",
+                  overflowY: "auto",
+                }}
+              >
+                <div
+                  style={{
+                    position: "sticky",
+                    top: 0,
+                    zIndex: 5,
+                    background: C.bg,
+                    borderBottom: `1px solid ${C.border}`,
+                    padding: "22px 26px 18px",
+                  }}
+                >
+                  <button
+                    onClick={() => setVillaModalOpen(false)}
+                    style={{
+                      position: "absolute",
+                      right: 22,
+                      top: 22,
+                      border: `1px solid ${C.border}`,
+                      background: C.panel,
+                      width: 36,
+                      height: 36,
+                      borderRadius: 999,
+                      cursor: "pointer",
+                      color: C.text,
+                    }}
+                  >
+                    <X size={18} />
+                  </button>
+                  <div className="dashboard-eyebrow">Villa booking profile</div>
+                  <h2
+                    style={{
+                      fontFamily: "'Cormorant Garamond', serif",
+                      fontSize: 38,
+                      color: C.text,
+                      margin: "4px 48px 4px 0",
+                      lineHeight: 1,
+                    }}
+                  >
+                    {selectedVilla.villa_name}
+                  </h2>
+                  <div style={{ color: C.soft, fontSize: 13 }}>
+                    {fmt(selectedVilla.bookings)} bookings ·{" "}
+                    {fmt(selectedVilla.total_nights)} room nights ·{" "}
+                    {money(selectedVilla.revenue)} revenue
+                  </div>
+                  <div style={{ marginTop: 14 }}>
+                    <ModalFilterBar
+                      year={villaYear}
+                      month={villaMonth}
+                      onYearChange={setVillaYear}
+                      onMonthChange={setVillaMonth}
+                      years={years}
+                      months={months}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ padding: 26 }}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                      gap: 12,
+                      marginBottom: 24,
+                    }}
+                  >
+                    {[
+                      ["Bookings", fmt(selectedVilla.bookings), "Total stays"],
+                      ["Revenue", money(selectedVilla.revenue), "Rental spend"],
+                      [
+                        "Avg Stay",
+                        `${num(selectedVilla.avg_stay)}n`,
+                        "Per booking",
+                      ],
+                      [
+                        "Guests",
+                        fmt(selectedVilla.total_guests),
+                        "Total guests",
+                      ],
+                      ["Bedrooms", bedroomsLabel(selectedVilla), "Villa setup"],
+                      [
+                        "Members",
+                        fmt(selectedVilla.unique_members),
+                        "Unique members",
+                      ],
+                    ].map(([label, value, sub]) => (
+                      <div
+                        key={label}
+                        style={{
+                          border: `1px solid ${C.border}`,
+                          background: C.panel,
+                          borderRadius: 18,
+                          padding: 16,
+                        }}
+                      >
+                        <div className="dashboard-eyebrow">{label}</div>
+                        <div
+                          style={{
+                            fontFamily: "'Cormorant Garamond', serif",
+                            color: C.text,
+                            fontSize: 28,
+                            marginTop: 4,
+                          }}
+                        >
+                          {value}
+                        </div>
+                        <div style={{ color: C.muted, fontSize: 11 }}>
+                          {sub}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      alignItems: "end",
+                      marginBottom: 12,
+                    }}
+                  >
+                    <div>
+                      <div className="dashboard-eyebrow">Booking timeline</div>
+                      <h3
+                        style={{
+                          color: C.text,
+                          margin: "4px 0 0",
+                          fontSize: 22,
+                        }}
+                      >
+                        People who booked this villa
+                      </h3>
+                    </div>
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: 10 }}
+                    >
+                      <div
+                        style={{
+                          color: C.muted,
+                          fontSize: 12,
+                          border: `1px solid ${C.border}`,
+                          borderRadius: 999,
+                          padding: "7px 11px",
+                          background: C.panelAlt,
+                        }}
+                      >
+                        {filteredVillaBookings.length} of {villaBookings.length}{" "}
+                        records
+                      </div>
+                      <ExportMenu
+                        rows={villaBookingRows}
+                        filenameBase={villaBookingFilename}
+                        disabled={
+                          villaBookingsLoading || !villaBookingRows.length
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <TableControls
+                    search={villaBookingSearch}
+                    onSearchChange={setVillaBookingSearch}
+                    sortKey={villaBookingSortKey}
+                    onSortKeyChange={setVillaBookingSortKey}
+                    sortDir={villaBookingSortDir}
+                    onSortDirChange={setVillaBookingSortDir}
+                    sortOptions={[
+                      "member_full_name",
+                      "member_number",
+                      "conf_code",
+                      "check_in_date",
+                      "check_out_date",
+                      "nights",
+                      "persons",
+                      "revenue",
+                    ]}
+                    placeholder="Search villa bookings..."
+                  />
+
+                  {villaBookingsLoading ? (
+                    <div
+                      style={{
+                        padding: 34,
+                        textAlign: "center",
+                        color: C.muted,
+                        border: `1px dashed ${C.border}`,
+                        borderRadius: 18,
+                      }}
+                    >
+                      Loading booking details...
+                    </div>
+                  ) : villaBookings.length === 0 ? (
+                    <div
+                      style={{
+                        padding: 34,
+                        textAlign: "center",
+                        color: C.muted,
+                        border: `1px dashed ${C.border}`,
+                        borderRadius: 18,
+                      }}
+                    >
+                      No booking details found.
+                    </div>
+                  ) : filteredVillaBookings.length === 0 ? (
+                    <div
+                      style={{
+                        padding: 34,
+                        textAlign: "center",
+                        color: C.muted,
+                        border: `1px dashed ${C.border}`,
+                        borderRadius: 18,
+                      }}
+                    >
+                      No matching booking details found.
+                    </div>
+                  ) : (
+                    <div style={{ position: "relative" }}>
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: 17,
+                          top: 8,
+                          bottom: 8,
+                          width: 2,
+                          background: C.border,
+                        }}
+                      />
+                      {filteredVillaBookings.map((b, index) => {
+                        const guests = Array.isArray(b.guests) ? b.guests : [];
+                        const primaryName =
+                          b.member_full_name ??
+                          b.member_name ??
+                          b.guest_name ??
+                          "Unknown guest";
+                        return (
+                          <div
+                            key={b.conf_code ?? index}
+                            style={{
+                              position: "relative",
+                              display: "grid",
+                              gridTemplateColumns: "38px 1fr",
+                              gap: 14,
+                              marginBottom: 16,
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: 34,
+                                height: 34,
+                                borderRadius: 999,
+                                background: C.accent2,
+                                color: "#fff",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontSize: 12,
+                                fontWeight: 800,
+                                zIndex: 1,
+                                marginTop: 10,
+                              }}
+                            >
+                              {index + 1}
+                            </div>
+                            <div
+                              style={{
+                                border: `1px solid ${C.border}`,
+                                background: index === 0 ? C.panelAlt : C.panel,
+                                borderRadius: 20,
+                                padding: 18,
+                                boxShadow: "0 10px 28px rgba(0,0,0,0.04)",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  gap: 14,
+                                  alignItems: "flex-start",
+                                }}
+                              >
+                                <div>
+                                  <div
+                                    style={{
+                                      fontSize: 18,
+                                      fontWeight: 850,
+                                      color: C.text,
+                                    }}
+                                  >
+                                    {primaryName}
+                                  </div>
+                                  <div
+                                    style={{
+                                      color: C.soft,
+                                      fontSize: 12,
+                                      marginTop: 4,
+                                    }}
+                                  >
+                                    Member #{b.member_number ?? "—"} ·
+                                    Confirmation {b.conf_code ?? "—"}
+                                  </div>
+                                </div>
+                                <div
+                                  style={{ textAlign: "right", minWidth: 100 }}
+                                >
+                                  <div
+                                    style={{
+                                      fontWeight: 900,
+                                      color: C.text,
+                                      fontSize: 18,
+                                    }}
+                                  >
+                                    {money(b.revenue)}
+                                  </div>
+                                  <div style={{ color: C.muted, fontSize: 11 }}>
+                                    revenue
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div
+                                style={{
+                                  marginTop: 16,
+                                  display: "grid",
+                                  gridTemplateColumns: "1fr auto 1fr",
+                                  alignItems: "center",
+                                  gap: 10,
+                                  background: C.bg,
+                                  border: `1px solid ${C.border}`,
+                                  borderRadius: 16,
+                                  padding: 12,
+                                }}
+                              >
+                                <div>
+                                  <div className="dashboard-eyebrow">
+                                    Check-in
+                                  </div>
+                                  <div
+                                    style={{ color: C.text, fontWeight: 800 }}
+                                  >
+                                    {b.check_in_date ?? "—"}
+                                  </div>
+                                </div>
+                                <div
+                                  style={{
+                                    borderRadius: 999,
+                                    padding: "7px 12px",
+                                    background: C.panelAlt,
+                                    color: C.accent,
+                                    fontWeight: 800,
+                                    fontSize: 12,
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  {fmt(b.nights)} nights · {fmt(b.persons)}{" "}
+                                  guests
+                                </div>
+                                <div style={{ textAlign: "right" }}>
+                                  <div className="dashboard-eyebrow">
+                                    Check-out
+                                  </div>
+                                  <div
+                                    style={{ color: C.text, fontWeight: 800 }}
+                                  >
+                                    {b.check_out_date ?? "—"}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "1fr 1fr",
+                                  gap: 10,
+                                  marginTop: 12,
+                                }}
+                              >
+                                {[
+                                  ["Email", b.email ?? "—"],
+                                  ["Phone", b.phone ?? "—"],
+                                ].map(([lbl, val]) => (
+                                  <div
+                                    key={lbl}
+                                    style={{
+                                      border: `1px solid ${C.border}`,
+                                      borderRadius: 14,
+                                      padding: 11,
+                                      background: C.bg,
+                                    }}
+                                  >
+                                    <div className="dashboard-eyebrow">
+                                      {lbl}
+                                    </div>
+                                    <div
+                                      style={{
+                                        color: C.soft,
+                                        fontSize: 12,
+                                        wordBreak: "break-word",
+                                      }}
+                                    >
+                                      {val}
+                                    </div>
                                   </div>
                                 ))}
                               </div>
+
+                              {guests.length > 0 && (
+                                <div style={{ marginTop: 15 }}>
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      justifyContent: "space-between",
+                                      marginBottom: 8,
+                                    }}
+                                  >
+                                    <div className="dashboard-eyebrow">
+                                      Guest manifest
+                                    </div>
+                                    <div
+                                      style={{ color: C.muted, fontSize: 11 }}
+                                    >
+                                      {guests.length} guest
+                                      {guests.length === 1 ? "" : "s"}
+                                    </div>
+                                  </div>
+                                  <div
+                                    style={{
+                                      display: "flex",
+                                      flexWrap: "wrap",
+                                      gap: 8,
+                                    }}
+                                  >
+                                    {guests.map((g, i) => (
+                                      <div
+                                        key={`${b.conf_code}-${i}`}
+                                        style={{
+                                          border: `1px solid ${C.border}`,
+                                          borderRadius: 999,
+                                          padding: "8px 11px",
+                                          background: g.is_owner
+                                            ? C.panelAlt
+                                            : C.bg,
+                                          color: C.text,
+                                          fontSize: 12,
+                                          display: "flex",
+                                          gap: 6,
+                                          alignItems: "center",
+                                        }}
+                                      >
+                                        <span style={{ fontWeight: 800 }}>
+                                          {g.guest_name ?? "Unnamed guest"}
+                                        </span>
+                                        <span style={{ color: C.muted }}>
+                                          {g.is_owner ? "Owner" : "Guest"}
+                                        </span>
+                                        {g.room_number && (
+                                          <span style={{ color: C.soft }}>
+                                            Room {g.room_number}
+                                          </span>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              )}
+              </aside>
             </div>
-          </aside>
-        </div>
+          )}
+        </>
+      )}
+
+      {/* ════════════════════════════════════════════════════════════════════ */}
+      {/* SOURCES VIEW                                                        */}
+      {/* ════════════════════════════════════════════════════════════════════ */}
+
+      {topView === "sources" && (
+        <VillaSourceBreakdown years={years} months={months} />
       )}
     </div>
   );

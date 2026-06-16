@@ -39,24 +39,12 @@ export const analyticsApi = {
 
   // Demographics detail endpoints
   stateAccounts: (stateCode) =>
-    fetchData(
-      `/analytics/state-accounts/${encodeURIComponent(
-        stateCode,
-      )}`,
-    ),
+    fetchData(`/analytics/state-accounts/${encodeURIComponent(stateCode)}`),
 
   accountCategoryDetails: (category) =>
-    fetchData(
-      `/analytics/account-category/${encodeURIComponent(
-        category,
-      )}`,
-    ),
+    fetchData(`/analytics/account-category/${encodeURIComponent(category)}`),
 
-  demographicAccountDetails: ({
-    dimension,
-    value,
-    category,
-  }) => {
+  demographicAccountDetails: ({ dimension, value, category }) => {
     const params = new URLSearchParams({
       dimension,
       value,
@@ -130,4 +118,21 @@ export const analyticsApi = {
 
   bookedPeople: (kind, params = {}) =>
     fetchData(withQuery("/analytics/booked-people", { kind, ...params })),
+
+  // Villa × business source
+  villaSourceBreakdown: (params = {}) =>
+    fetchData(withQuery("/analytics/villa-source-breakdown", params)),
+
+  villaSourceBookings: (villa, params = {}) =>
+    fetchData(
+      withQuery("/analytics/villa-source-bookings", { villa, ...params }),
+    ),
+
+  villaSources: (villa = null, params = {}) =>
+    fetchData(
+      withQuery("/analytics/villa-sources", {
+        ...(villa ? { villa } : {}),
+        ...params,
+      }),
+    ),
 };
