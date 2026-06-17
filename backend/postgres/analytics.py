@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from postgres.database import SessionLocal
+from datetime import date
 
 router = APIRouter()
 
@@ -1228,8 +1229,6 @@ def update_segment_config(payload: dict, db: Session = Depends(get_db)):
     db.commit()
     return {"ok": True, "updated": updates}
 
-# villa
-
 
 def rows(db: Session, sql: str, params: dict | None = None):
     return [dict(row) for row in db.execute(text(sql), params or {}).mappings().all()]
@@ -1238,37 +1237,67 @@ def rows(db: Session, sql: str, params: dict | None = None):
 def one(db: Session, sql: str, params: dict | None = None):
     return dict(db.execute(text(sql), params or {}).mappings().first() or {})
 
+def date_filter_sql(alias="f", column="check_in_date"):
+    d = f"{alias}.{column}"
+    out = f"{alias}.check_out_date"
 
-def date_filter_sql(alias="f"):
     return f"""
       AND (
-        :year IS NULL
+        (:date IS NULL AND :start_date IS NULL AND :end_date IS NULL)
         OR (
-          {alias}.check_in_date <= MAKE_DATE(:year, 12, 31)
-          AND {alias}.check_out_date >= MAKE_DATE(:year, 1, 1)
+          :date IS NOT NULL
+          AND {d} <= :date
+          AND {out} >= :date
+        )
+        OR (
+          :date IS NULL
+          AND :start_date IS NOT NULL
+          AND :end_date IS NOT NULL
+          AND {d} <= :end_date
+          AND {out} >= :start_date
         )
       )
       AND (
-        :month IS NULL
+        :date IS NOT NULL OR :start_date IS NOT NULL OR :end_date IS NOT NULL
+        OR :year IS NULL
+        OR (
+          {d} <= MAKE_DATE(:year, 12, 31)
+          AND {out} >= MAKE_DATE(:year, 1, 1)
+        )
+      )
+      AND (
+        :date IS NOT NULL OR :start_date IS NOT NULL OR :end_date IS NOT NULL
+        OR :month IS NULL
         OR (
           :year IS NOT NULL
-          AND {alias}.check_in_date <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::DATE
-          AND {alias}.check_out_date >= MAKE_DATE(:year, :month, 1)
+          AND {d} <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::DATE
+          AND {out} >= MAKE_DATE(:year, :month, 1)
         )
         OR (
           :year IS NULL
           AND (
-            EXTRACT(MONTH FROM {alias}.check_in_date)::INT = :month
-            OR EXTRACT(MONTH FROM {alias}.check_out_date)::INT = :month
+            EXTRACT(MONTH FROM {d})::INT = :month
+            OR EXTRACT(MONTH FROM {out})::INT = :month
           )
         )
       )
     """
 
 
-def filter_params(year: int | None, month: int | None):
-    return {"year": year, "month": month}
-
+def filter_params(
+    year: int | None = None,
+    month: int | None = None,
+    date: date | None = None,
+    start_date: date | None = None,
+    end_date: date | None = None,
+):
+    return {
+        "year": year,
+        "month": month,
+        "date": date,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
 
 def valid_booking_sql(alias="f"):
     return f"""
@@ -1287,6 +1316,9 @@ def valid_booking_sql(alias="f"):
 def villa_stats(
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     # One row per villa + bedroom count.
@@ -1338,13 +1370,16 @@ def villa_stats(
         FROM booking_rows
         GROUP BY villa_name, bedroom_count
         ORDER BY bookings DESC, villa_name, bedroom_count NULLS LAST
-    """, filter_params(year, month))
+    """, filter_params(year, month, date, start_date, end_date))
 
 @router.get("/villa-monthly")
 def villa_monthly(
     villa: str = Query(...),
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     return rows(db, f"""
@@ -1383,12 +1418,15 @@ def villa_monthly(
         FROM booking_rows
         GROUP BY month, month_num
         ORDER BY month_num
-    """, {"villa": villa, **filter_params(year, month)})
+    """, {"villa": villa, **filter_params(year, month, date, start_date, end_date)})
 
 @router.get("/bookings-by-bedroom")
 def bookings_by_bedroom(
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     return rows(db, f"""
@@ -1407,7 +1445,7 @@ def bookings_by_bedroom(
           {date_filter_sql("f")}
         GROUP BY f.bedroom_count
         ORDER BY f.bedroom_count
-    """, filter_params(year, month))
+    """, filter_params(year, month, date, start_date, end_date))
 
 
 @router.get("/bedroom-bookings")
@@ -1415,6 +1453,9 @@ def bedroom_bookings(
     beds: int = Query(...),
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     return rows(db, f"""
@@ -1481,12 +1522,15 @@ def bedroom_bookings(
         SELECT *
         FROM booking_rows
         ORDER BY check_in_date DESC
-    """, {"beds": beds, **filter_params(year, month)})
+    """, {"beds": beds, **filter_params(year, month, date, start_date, end_date)})
 
 @router.get("/monthly-revenue")
 def monthly_revenue(
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     return rows(db, f"""
@@ -1523,12 +1567,15 @@ def monthly_revenue(
         FROM booking_rows
         GROUP BY month, month_num
         ORDER BY month_num
-    """, filter_params(year, month))
+    """, filter_params(year, month, date, start_date, end_date))
 
 @router.get("/visits-tab-summary")
 def visits_tab_summary(
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     return one(db, f"""
@@ -1592,13 +1639,16 @@ def visits_tab_summary(
             COALESCE(SUM(nights), 0) AS total_room_nights,
             COALESCE(SUM(villa_revenue), 0) AS villa_rental_revenue
         FROM bookings
-    """, filter_params(year, month))
+    """, filter_params(year, month, date, start_date, end_date))
 
 @router.get("/villa-bookings")
 def villa_bookings(
     villa: str = Query(...),
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     return rows(db, f"""
@@ -1710,7 +1760,7 @@ def villa_bookings(
             br.nights,
             br.revenue
         ORDER BY br.check_in_date DESC
-    """, {"villa": villa, **filter_params(year, month)})
+    """, {"villa": villa, **filter_params(year, month, date, start_date, end_date)})
 
 
 @router.get("/booked-people")
@@ -1718,6 +1768,9 @@ def booked_people(
     kind: str = Query(pattern="^(members|guests)$"),
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     member_filter = """
@@ -1846,19 +1899,22 @@ def booked_people(
             ba.state
         ORDER BY bookings DESC, member_full_name, member_name
         LIMIT 1000
-    """, filter_params(year, month))
+    """, filter_params(year, month, date, start_date, end_date))
 
 @router.get("/visits-rooms-dashboard")
 def visits_rooms_dashboard(
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     villa: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    summary = visits_tab_summary(year=year, month=month, db=db)
-    villa_stats_data = villa_stats(year=year, month=month, db=db)
-    bedroom_stats = bookings_by_bedroom(year=year, month=month, db=db)
-    monthly_revenue_data = monthly_revenue(year=year, month=month, db=db)
+    summary = visits_tab_summary(year=year, month=month, date=date, start_date=start_date, end_date=end_date, db=db)
+    villa_stats_data = villa_stats(year=year, month=month, date=date, start_date=start_date, end_date=end_date, db=db)
+    bedroom_stats = bookings_by_bedroom(year=year, month=month, date=date, start_date=start_date, end_date=end_date, db=db)
+    monthly_revenue_data = monthly_revenue(year=year, month=month, date=date, start_date=start_date, end_date=end_date, db=db)
 
     selected_villa = villa
     if not selected_villa and villa_stats_data:
@@ -1869,6 +1925,9 @@ def visits_rooms_dashboard(
             villa=selected_villa,
             year=year,
             month=month,
+            date=date,
+            start_date=start_date,
+            end_date=end_date,
             db=db,
         )
         if selected_villa
@@ -1894,6 +1953,9 @@ def visits_rooms_dashboard(
 def villa_source_breakdown(
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     """
@@ -1978,7 +2040,7 @@ def villa_source_breakdown(
         FROM tagged
         GROUP BY villa_name, source, payment_type, is_free
         ORDER BY villa_name, is_free, bookings DESC
-    """, filter_params(year, month))
+    """, filter_params(year, month, date, start_date, end_date))
 
 
 @router.get("/villa-source-bookings")
@@ -1988,6 +2050,9 @@ def villa_source_bookings(
     is_free: bool | None = Query(default=None),
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     """
@@ -2038,7 +2103,7 @@ def villa_source_bookings(
         "villa": villa,
         "source_val": source,
         "is_free_val": is_free,
-        **filter_params(year, month),
+        **filter_params(year, month, date, start_date, end_date),
     }
 
     return rows(db, f"""
@@ -2183,6 +2248,9 @@ def villa_sources(
     villa: str | None = Query(default=None),
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     """
@@ -2191,7 +2259,7 @@ def villa_sources(
     Useful for populating filter dropdowns.
     """
     villa_filter = "AND f.villa_name = :villa" if villa else ""
-    params = {"villa": villa, **filter_params(year, month)}
+    params = {"villa": villa, **filter_params(year, month, date, start_date, end_date)}
 
     return rows(db, f"""
         SELECT DISTINCT

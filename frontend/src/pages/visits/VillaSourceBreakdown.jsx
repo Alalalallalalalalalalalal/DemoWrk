@@ -12,7 +12,6 @@ import {
   Tooltip,
   CartesianGrid,
   ResponsiveContainer,
-  Legend,
   Cell,
 } from "recharts";
 import {
@@ -70,7 +69,7 @@ const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
 const money = (v) =>
   v == null
     ? "—"
-    : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+    : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })} USD`;
 const num = (v, d = 1) => (v == null ? "—" : Number(v).toFixed(d));
 const pct = (part, whole, d = 1) =>
   !Number(whole || 0)
@@ -82,6 +81,50 @@ const safeFilePart = (v) =>
     .replace(/[^a-z0-9]+/gi, "_")
     .replace(/^_+|_+$/g, "")
     .toLowerCase();
+
+const dateFilterLabel = (filter) => {
+  if (!filter) return "All available data";
+  if (filter.mode === "day")
+    return filter.date ? `Specific day: ${filter.date}` : "All available data";
+  if (filter.mode === "range") {
+    return filter.startDate && filter.endDate
+      ? `Date range: ${filter.startDate} to ${filter.endDate}`
+      : "All available data";
+  }
+  const year = filter.year === "All" ? "All years" : `Year: ${filter.year}`;
+  const month =
+    filter.month === "All" ? "All months" : `Month: ${filter.month}`;
+  return `${year} · ${month}`;
+};
+
+function PeriodPill({ label = "Data period", filter }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        border: `1px solid ${C.border}`,
+        background: C.panelAlt,
+        color: C.soft,
+        borderRadius: 999,
+        padding: "6px 10px",
+        fontSize: 11,
+        fontWeight: 800,
+      }}
+    >
+      {label}: {dateFilterLabel(filter)}
+    </span>
+  );
+}
+
+const withExportContext = (rows, context) =>
+  rows.map((row) => ({
+    "Export Period": context.period,
+    "Export Source Filter": context.source,
+    "Export View": context.view,
+    ...row,
+  }));
 
 function downloadFile(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -157,6 +200,9 @@ const sortRows = (rows, key, dir = "asc") => {
 function Select({ label, value, onChange, options }) {
   const optLabel = (o) => {
     if (o === "All") return `All ${label}s`;
+    if (o === "ym") return "Year / Month";
+    if (o === "day") return "Specific Day";
+    if (o === "range") return "Date Range";
     if (o === "asc") return "Ascending";
     if (o === "desc") return "Descending";
     return String(o)
@@ -185,6 +231,88 @@ function Select({ label, value, onChange, options }) {
         ))}
       </select>
     </label>
+  );
+}
+
+function DateFilterBar({ value, onChange, years, months }) {
+  const update = (patch) => onChange({ ...value, ...patch });
+  const inputStyle = {
+    padding: "8px 10px",
+    borderRadius: 10,
+    border: `1px solid ${C.border}`,
+    background: C.bg,
+    color: C.text,
+    fontSize: 12,
+  };
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 10,
+        flexWrap: "wrap",
+        alignItems: "center",
+      }}
+    >
+      <Select
+        label="Mode"
+        value={value.mode}
+        onChange={(mode) => update({ mode })}
+        options={["ym", "day", "range"]}
+      />
+
+      {value.mode === "ym" && (
+        <>
+          <Select
+            label="Year"
+            value={value.year}
+            onChange={(year) => update({ year })}
+            options={years}
+          />
+          <Select
+            label="Month"
+            value={value.month}
+            onChange={(month) => update({ month })}
+            options={months}
+          />
+        </>
+      )}
+
+      {value.mode === "day" && (
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="dashboard-eyebrow">Date</span>
+          <input
+            type="date"
+            value={value.date}
+            onChange={(e) => update({ date: e.target.value })}
+            style={inputStyle}
+          />
+        </label>
+      )}
+
+      {value.mode === "range" && (
+        <>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="dashboard-eyebrow">Start</span>
+            <input
+              type="date"
+              value={value.startDate}
+              onChange={(e) => update({ startDate: e.target.value })}
+              style={inputStyle}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="dashboard-eyebrow">End</span>
+            <input
+              type="date"
+              value={value.endDate}
+              onChange={(e) => update({ endDate: e.target.value })}
+              style={inputStyle}
+            />
+          </label>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -313,8 +441,18 @@ function ViewToggle({ value, onChange }) {
 }
 
 // ─── KPI tile ─────────────────────────────────────────────────────────────
-function KpiTile({ icon: Icon, label, value, sub, meta, highlight, onClick }) {
+function KpiTile({
+  icon: Icon,
+  label,
+  value,
+  sub,
+  meta,
+  active = false,
+  highlight = false,
+  onClick,
+}) {
   const clickable = Boolean(onClick);
+  const selected = active || highlight;
   return (
     <button
       type="button"
@@ -323,12 +461,10 @@ function KpiTile({ icon: Icon, label, value, sub, meta, highlight, onClick }) {
       style={{
         width: "100%",
         textAlign: "left",
-        border: `1px solid ${highlight ? C.accent3 : C.border}`,
+        border: `1px solid ${selected ? C.accent2 : C.border}`,
         borderRadius: 18,
         padding: "16px 18px",
-        background: highlight
-          ? "rgba(var(--dashboard-flame-rgb, 210,80,50), 0.06)"
-          : C.panel,
+        background: selected ? C.panelAlt : C.panel,
         cursor: clickable ? "pointer" : "default",
       }}
     >
@@ -340,7 +476,7 @@ function KpiTile({ icon: Icon, label, value, sub, meta, highlight, onClick }) {
           marginBottom: 6,
         }}
       >
-        {Icon && <Icon size={13} color={highlight ? C.accent3 : C.accent2} />}
+        {Icon && <Icon size={13} color={selected ? C.accent : C.accent2} />}
         <span className="dashboard-eyebrow">{label}</span>
       </div>
       <div
@@ -429,6 +565,384 @@ function ScrollTableShell({ children, maxHeight = 420 }) {
       }}
     >
       {children}
+    </div>
+  );
+}
+
+function InlineLegend() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 14,
+        alignItems: "center",
+        flexWrap: "wrap",
+      }}
+    >
+      {[
+        ["Paid", COLOR_PAID],
+        ["Free / Comp", COLOR_FREE],
+      ].map(([label, color]) => (
+        <span
+          key={label}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 7,
+            color: C.soft,
+            fontSize: 11,
+            fontWeight: 700,
+          }}
+        >
+          <span
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: 3,
+              background: color,
+              display: "inline-block",
+            }}
+          />
+          {label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SignalMetric({
+  label,
+  villa,
+  value,
+  sub,
+  split,
+  tiedCount = 0,
+  onClick,
+  onViewAll,
+}) {
+  const hasVilla = Boolean(villa);
+  return (
+    <div
+      style={{
+        border: `1px solid ${C.border}`,
+        background: C.bg,
+        borderRadius: 16,
+        padding: "13px 14px",
+      }}
+    >
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={!hasVilla}
+        style={{
+          width: "100%",
+          textAlign: "left",
+          border: "none",
+          background: "transparent",
+          padding: 0,
+          cursor: hasVilla ? "pointer" : "default",
+        }}
+      >
+        <div className="dashboard-eyebrow">{label}</div>
+        <div
+          style={{
+            color: C.text,
+            fontWeight: 850,
+            fontSize: 15,
+            marginTop: 4,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {villa?.villa_name ?? "—"}
+        </div>
+        <div style={{ color: C.soft, fontSize: 12, marginTop: 3 }}>{value}</div>
+        {split && <div style={{ marginTop: 8 }}>{split}</div>}
+        {sub && (
+          <div style={{ color: C.muted, fontSize: 10, marginTop: 6 }}>
+            {sub}
+          </div>
+        )}
+      </button>
+      {tiedCount > 1 && onViewAll && (
+        <button
+          type="button"
+          onClick={onViewAll}
+          style={{
+            marginTop: 8,
+            border: "none",
+            background: "transparent",
+            color: C.accent,
+            fontSize: 10,
+            fontWeight: 900,
+            padding: 0,
+            cursor: "pointer",
+          }}
+        >
+          View all {tiedCount} tied villas
+        </button>
+      )}
+    </div>
+  );
+}
+
+function PortfolioSignals({
+  insights,
+  periodFilter,
+  financeExportRows,
+  financeFilename,
+  onSelectVilla,
+  onOpenFinance,
+  onOpenTies,
+}) {
+  const paid = Number(insights?.mostRevenue?.revenue || 0);
+  const comp = Number(insights?.mostCompValue?.free_value || 0);
+  const totalValue = paid + comp;
+  const periodText = dateFilterLabel(periodFilter);
+  const splitFor = (villa) =>
+    villa ? (
+      <MiniSplitBar paid={villa.paid_bookings} free={villa.free_bookings} />
+    ) : null;
+
+  return (
+    <div className="dashboard-card">
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 16,
+          alignItems: "flex-start",
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <div className="dashboard-eyebrow">Booking Highlights</div>
+          <h2 className="dashboard-card-title">Villa Source Performance</h2>
+          <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>
+            Key booking, revenue, and comp-value leaders based on the displayed
+            period and active source filter.
+          </p>
+          <div style={{ marginTop: 8 }}>
+            <PeriodPill filter={periodFilter} />
+          </div>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+          }}
+        >
+          <ExportMenu
+            rows={financeExportRows}
+            filenameBase={financeFilename}
+            disabled={!financeExportRows.length}
+          />
+          <button
+            type="button"
+            onClick={onOpenFinance}
+            style={{
+              border: `1px solid ${C.accent2}`,
+              background: C.panelAlt,
+              color: C.accent,
+              borderRadius: 999,
+              padding: "8px 12px",
+              fontSize: 11,
+              fontWeight: 800,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Open finance breakdown
+          </button>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(260px, 0.95fr) minmax(320px, 1.35fr)",
+          gap: 16,
+        }}
+      >
+        <div
+          style={{
+            border: `1px solid ${C.border}`,
+            borderRadius: 20,
+            background: C.panel,
+            padding: 18,
+          }}
+        >
+          <div className="dashboard-eyebrow">
+            Highest Revenue Villa vs Highest Comp Value Villa
+          </div>
+          <div
+            style={{
+              fontFamily: "'Cormorant Garamond', serif",
+              fontSize: 30,
+              color: C.text,
+              marginTop: 4,
+            }}
+          >
+            {money(totalValue)}
+          </div>
+          <div
+            style={{
+              color: C.muted,
+              fontSize: 11,
+              marginTop: 2,
+              lineHeight: 1.5,
+            }}
+          >
+            Based on: {periodText}. Paid revenue uses paid bookings only. Comp
+            value uses free/complimentary stays only. The total above adds the
+            two leading values for comparison.
+          </div>
+          <div style={{ marginTop: 16 }}>
+            <MiniSplitBar paid={paid} free={comp} />
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 10,
+              marginTop: 16,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() =>
+                insights?.mostRevenue?.villa_name &&
+                onSelectVilla(insights.mostRevenue.villa_name)
+              }
+              style={{
+                borderTop: `1px solid ${C.border}`,
+                borderLeft: "none",
+                borderRight: "none",
+                borderBottom: "none",
+                paddingTop: 10,
+                background: "transparent",
+                textAlign: "left",
+                cursor: insights?.mostRevenue?.villa_name
+                  ? "pointer"
+                  : "default",
+              }}
+            >
+              <div className="dashboard-eyebrow">Highest Paid Revenue</div>
+              <div style={{ color: C.text, fontWeight: 850 }}>
+                {insights?.mostRevenue?.villa_name ?? "—"}
+              </div>
+              <div style={{ color: C.soft, fontSize: 12 }}>
+                {money(insights?.mostRevenue?.revenue)}
+              </div>
+              <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>
+                Paid bookings only
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                insights?.mostCompValue?.villa_name &&
+                onSelectVilla(insights.mostCompValue.villa_name)
+              }
+              style={{
+                borderTop: `1px solid ${C.border}`,
+                borderLeft: "none",
+                borderRight: "none",
+                borderBottom: "none",
+                paddingTop: 10,
+                background: "transparent",
+                textAlign: "left",
+                cursor: insights?.mostCompValue?.villa_name
+                  ? "pointer"
+                  : "default",
+              }}
+            >
+              <div className="dashboard-eyebrow">Highest Comp Value</div>
+              <div style={{ color: C.text, fontWeight: 850 }}>
+                {insights?.mostCompValue?.villa_name ?? "—"}
+              </div>
+              <div style={{ color: C.soft, fontSize: 12 }}>
+                {money(insights?.mostCompValue?.free_value)}
+              </div>
+              <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>
+                Free / comp stays only
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))",
+            gap: 10,
+          }}
+        >
+          <SignalMetric
+            label="Most Booked"
+            villa={insights.mostBooked}
+            value={`${fmt(insights.mostBooked?.total_bookings)} bookings`}
+            split={splitFor(insights.mostBooked)}
+            tiedCount={insights.mostBookedTies?.length || 0}
+            sub="Highest total demand"
+            onViewAll={() =>
+              onOpenTies("Most Booked Villas", insights.mostBookedTies)
+            }
+            onClick={() =>
+              insights.mostBooked?.villa_name &&
+              onSelectVilla(insights.mostBooked.villa_name)
+            }
+          />
+          <SignalMetric
+            label="Least Booked"
+            villa={insights.leastBooked}
+            value={`${fmt(insights.leastBooked?.total_bookings)} bookings`}
+            split={splitFor(insights.leastBooked)}
+            tiedCount={insights.leastBookedTies?.length || 0}
+            sub="Lowest non-zero demand"
+            onViewAll={() =>
+              onOpenTies("Least Booked Villas", insights.leastBookedTies)
+            }
+            onClick={() =>
+              insights.leastBooked?.villa_name &&
+              onSelectVilla(insights.leastBooked.villa_name)
+            }
+          />
+          <SignalMetric
+            label="Most Paid"
+            villa={insights.mostPaid}
+            value={`${fmt(insights.mostPaid?.paid_bookings)} paid`}
+            split={splitFor(insights.mostPaid)}
+            tiedCount={insights.mostPaidTies?.length || 0}
+            sub="Highest paid booking count"
+            onViewAll={() =>
+              onOpenTies("Most Paid Villas", insights.mostPaidTies)
+            }
+            onClick={() =>
+              insights.mostPaid?.villa_name &&
+              onSelectVilla(insights.mostPaid.villa_name)
+            }
+          />
+          <SignalMetric
+            label="Most Free / Comp"
+            villa={insights.mostFree}
+            value={`${fmt(insights.mostFree?.free_bookings)} free/comp`}
+            split={splitFor(insights.mostFree)}
+            tiedCount={insights.mostFreeTies?.length || 0}
+            sub="Highest comp booking count"
+            onViewAll={() =>
+              onOpenTies("Most Free / Comp Villas", insights.mostFreeTies)
+            }
+            onClick={() =>
+              insights.mostFree?.villa_name &&
+              onSelectVilla(insights.mostFree.villa_name)
+            }
+          />
+        </div>
+      </div>
     </div>
   );
 }
@@ -723,51 +1237,122 @@ function BookingCard({ booking, index }) {
 // ─── Main component ───────────────────────────────────────────────────────
 export default function VillaSourceBreakdown({ years, months }) {
   // ── Filters ──────────────────────────────────────────────────────────────
-  const [year, setYear] = useState("All");
-  const [month, setMonth] = useState("All");
+  const createDateFilter = () => ({
+    mode: "ym", // ym | day | range
+    year: "All",
+    month: "All",
+    date: "",
+    startDate: "",
+    endDate: "",
+  });
+
+  const toDateParams = (filter) => {
+    if (filter.mode === "day") return filter.date ? { date: filter.date } : {};
+    if (filter.mode === "range") {
+      return filter.startDate && filter.endDate
+        ? { start_date: filter.startDate, end_date: filter.endDate }
+        : {};
+    }
+    return {
+      year: filter.year === "All" ? null : Number(filter.year),
+      month: filter.month === "All" ? null : months.indexOf(filter.month),
+    };
+  };
+
+  const dateFilterFilePart = (filter) => {
+    if (filter.mode === "day") return filter.date || "all_dates";
+    if (filter.mode === "range") {
+      return filter.startDate && filter.endDate
+        ? `${filter.startDate}_to_${filter.endDate}`
+        : "all_dates";
+    }
+    return `${filter.year}_${filter.month}`;
+  };
+
   const [viewMode, setViewMode] = useState("overall"); // overall | paid | free
   const [sourceFilter, setSourceFilter] = useState("All");
   const [villaChartLimit, setVillaChartLimit] = useState("15");
 
-  const toFilters = (y, m) => ({
-    year: y === "All" ? null : Number(y),
-    month: m === "All" ? null : months.indexOf(m),
-  });
-  const activeFilters = useMemo(() => toFilters(year, month), [year, month]);
+  const [kpiDateFilter, setKpiDateFilter] = useState(createDateFilter);
+  const [signalsDateFilter, setSignalsDateFilter] = useState(createDateFilter);
+  const [chartDateFilter, setChartDateFilter] = useState(createDateFilter);
+  const [sourceSummaryDateFilter, setSourceSummaryDateFilter] =
+    useState(createDateFilter);
+  const [selectedVillaDateFilter, setSelectedVillaDateFilter] =
+    useState(createDateFilter);
+
+  const kpiFilters = useMemo(
+    () => toDateParams(kpiDateFilter),
+    [kpiDateFilter],
+  );
+  const signalsFilters = useMemo(
+    () => toDateParams(signalsDateFilter),
+    [signalsDateFilter],
+  );
+  const chartFilters = useMemo(
+    () => toDateParams(chartDateFilter),
+    [chartDateFilter],
+  );
+  const sourceSummaryFilters = useMemo(
+    () => toDateParams(sourceSummaryDateFilter),
+    [sourceSummaryDateFilter],
+  );
+  const selectedVillaFilters = useMemo(
+    () => toDateParams(selectedVillaDateFilter),
+    [selectedVillaDateFilter],
+  );
 
   // ── Source-breakdown data ─────────────────────────────────────────────────
-  const [breakdownRaw, setBreakdownRaw] = useState([]);
+  const [kpiRaw, setKpiRaw] = useState([]);
+  const [signalsRaw, setSignalsRaw] = useState([]);
+  const [chartRaw, setChartRaw] = useState([]);
+  const [sourceSummaryRaw, setSourceSummaryRaw] = useState([]);
+  const [selectedVillaRaw, setSelectedVillaRaw] = useState([]);
   const [loading, setLoading] = useState(false);
   const [allSources, setAllSources] = useState([]);
 
-  useEffect(() => {
+  const loadBreakdown = (filters, setter, setGlobalLoading = false) => {
     let cancelled = false;
-    setLoading(true);
+    if (setGlobalLoading) setLoading(true);
     analyticsApi
-      .villaSourceBreakdown(activeFilters)
+      .villaSourceBreakdown(filters)
       .then((data) => {
         if (cancelled) return;
         const rows = Array.isArray(data) ? data : [];
-        setBreakdownRaw(rows);
-        // Derive unique sources for filter
+        setter(rows);
         const srcs = [
           ...new Set(rows.map((r) => r.source || "Unknown")),
         ].sort();
-        setAllSources(srcs);
+        setAllSources((current) => [...new Set([...current, ...srcs])].sort());
       })
       .catch(console.error)
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && setGlobalLoading) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [activeFilters]);
+  };
+
+  useEffect(() => loadBreakdown(kpiFilters, setKpiRaw, true), [kpiFilters]);
+  useEffect(
+    () => loadBreakdown(signalsFilters, setSignalsRaw),
+    [signalsFilters],
+  );
+  useEffect(() => loadBreakdown(chartFilters, setChartRaw), [chartFilters]);
+  useEffect(
+    () => loadBreakdown(sourceSummaryFilters, setSourceSummaryRaw),
+    [sourceSummaryFilters],
+  );
+  useEffect(
+    () => loadBreakdown(selectedVillaFilters, setSelectedVillaRaw),
+    [selectedVillaFilters],
+  );
 
   // ── Aggregate: villa-level summary for bar chart ──────────────────────────
   const villaChartData = useMemo(() => {
     // Filter by view mode and source
-    let rows = breakdownRaw;
+    let rows = chartRaw;
     if (viewMode === "paid") rows = rows.filter((r) => !r.is_free);
     if (viewMode === "free") rows = rows.filter((r) => r.is_free);
     if (sourceFilter !== "All")
@@ -805,24 +1390,24 @@ export default function VillaSourceBreakdown({ years, months }) {
     return [...map.values()].sort(
       (a, b) => b.total_bookings - a.total_bookings,
     );
-  }, [breakdownRaw, viewMode, sourceFilter]);
+  }, [chartRaw, viewMode, sourceFilter]);
 
   // ── Source breakdown table (for selected villa) ───────────────────────────
   const [selectedVilla, setSelectedVilla] = useState(null);
 
   const villaSourceRows = useMemo(() => {
     if (!selectedVilla) return [];
-    let rows = breakdownRaw.filter((r) => r.villa_name === selectedVilla);
+    let rows = selectedVillaRaw.filter((r) => r.villa_name === selectedVilla);
     if (viewMode === "paid") rows = rows.filter((r) => !r.is_free);
     if (viewMode === "free") rows = rows.filter((r) => r.is_free);
     if (sourceFilter !== "All")
       rows = rows.filter((r) => (r.source || "Unknown") === sourceFilter);
     return rows;
-  }, [breakdownRaw, selectedVilla, viewMode, sourceFilter]);
+  }, [selectedVillaRaw, selectedVilla, viewMode, sourceFilter]);
 
   // ── KPIs (view-mode aware) ────────────────────────────────────────────────
   const kpis = useMemo(() => {
-    let rows = breakdownRaw;
+    let rows = kpiRaw;
     if (viewMode === "paid") rows = rows.filter((r) => !r.is_free);
     if (viewMode === "free") rows = rows.filter((r) => r.is_free);
     if (sourceFilter !== "All")
@@ -854,15 +1439,52 @@ export default function VillaSourceBreakdown({ years, months }) {
       freeValue,
       totalNights,
     };
-  }, [breakdownRaw, viewMode, sourceFilter]);
+  }, [kpiRaw, viewMode, sourceFilter]);
+
+  const villaStackedChartData = useMemo(() => {
+    let rows = chartRaw;
+    if (sourceFilter !== "All") {
+      rows = rows.filter((r) => (r.source || "Unknown") === sourceFilter);
+    }
+
+    const map = new Map();
+    rows.forEach((r) => {
+      const key = r.villa_name || "Unknown villa";
+      if (!map.has(key)) {
+        map.set(key, {
+          villa_name: key,
+          paid_bookings: 0,
+          free_bookings: 0,
+          total_bookings: 0,
+          revenue: 0,
+          free_value: 0,
+          total_nights: 0,
+        });
+      }
+      const e = map.get(key);
+      if (r.is_free) {
+        e.free_bookings += Number(r.bookings ?? 0);
+        e.free_value += Number(r.free_value ?? r.total_value ?? 0);
+      } else {
+        e.paid_bookings += Number(r.bookings ?? 0);
+        e.revenue += Number(r.revenue ?? 0);
+      }
+      e.total_bookings += Number(r.bookings ?? 0);
+      e.total_nights += Number(r.total_nights ?? 0);
+    });
+
+    return [...map.values()].sort(
+      (a, b) => Number(b.total_bookings || 0) - Number(a.total_bookings || 0),
+    );
+  }, [chartRaw, sourceFilter]);
 
   const visibleVillaChartData = useMemo(() => {
-    if (villaChartLimit === "All") return villaChartData;
-    return villaChartData.slice(0, Number(villaChartLimit));
-  }, [villaChartData, villaChartLimit]);
+    if (villaChartLimit === "All") return villaStackedChartData;
+    return villaStackedChartData.slice(0, Number(villaChartLimit));
+  }, [villaStackedChartData, villaChartLimit]);
 
   const sourceSummaryRows = useMemo(() => {
-    let rows = breakdownRaw;
+    let rows = sourceSummaryRaw;
     if (viewMode === "paid") rows = rows.filter((r) => !r.is_free);
     if (viewMode === "free") rows = rows.filter((r) => r.is_free);
     if (sourceFilter !== "All") {
@@ -904,7 +1526,7 @@ export default function VillaSourceBreakdown({ years, months }) {
       .sort(
         (a, b) => Number(b.total_bookings || 0) - Number(a.total_bookings || 0),
       );
-  }, [breakdownRaw, viewMode, sourceFilter]);
+  }, [sourceSummaryRaw, viewMode, sourceFilter]);
 
   const selectedVillaTotals = useMemo(() => {
     const paid = villaSourceRows.filter((r) => !r.is_free);
@@ -929,32 +1551,85 @@ export default function VillaSourceBreakdown({ years, months }) {
   }, [villaSourceRows]);
 
   const sourceInsights = useMemo(() => {
-    const rows = villaChartData;
+    let rawRows = signalsRaw;
+    if (sourceFilter !== "All") {
+      rawRows = rawRows.filter((r) => (r.source || "Unknown") === sourceFilter);
+    }
+
+    const map = new Map();
+    rawRows.forEach((r) => {
+      const key = r.villa_name || "Unknown villa";
+      if (!map.has(key)) {
+        map.set(key, {
+          villa_name: key,
+          paid_bookings: 0,
+          free_bookings: 0,
+          total_bookings: 0,
+          revenue: 0,
+          free_value: 0,
+        });
+      }
+      const e = map.get(key);
+      if (r.is_free) {
+        e.free_bookings += Number(r.bookings ?? 0);
+        e.free_value += Number(r.free_value ?? r.total_value ?? 0);
+      } else {
+        e.paid_bookings += Number(r.bookings ?? 0);
+        e.revenue += Number(r.revenue ?? 0);
+      }
+      e.total_bookings += Number(r.bookings ?? 0);
+    });
+
+    const rows = [...map.values()];
     const nonZeroTotal = rows.filter((r) => Number(r.total_bookings || 0) > 0);
     const nonZeroPaid = rows.filter((r) => Number(r.paid_bookings || 0) > 0);
     const nonZeroFree = rows.filter((r) => Number(r.free_bookings || 0) > 0);
     const nonZeroRevenue = rows.filter((r) => Number(r.revenue || 0) > 0);
-    const by = (arr, key, dir = "desc") =>
+    const sortMetric = (arr, key, dir = "desc") =>
       [...arr].sort((a, b) =>
         dir === "asc"
           ? Number(a[key] || 0) - Number(b[key] || 0)
           : Number(b[key] || 0) - Number(a[key] || 0),
-      )[0] ?? null;
+      );
+    const by = (arr, key, dir = "desc") => sortMetric(arr, key, dir)[0] ?? null;
+    const tiesFor = (arr, key, dir = "desc") => {
+      const top = by(arr, key, dir);
+      if (!top) return [];
+      const target = Number(top[key] || 0);
+      return sortMetric(
+        arr.filter((r) => Number(r[key] || 0) === target),
+        "villa_name",
+        "asc",
+      );
+    };
+    const compRows = rows.filter((r) => Number(r.free_value || 0) > 0);
     return {
       mostBooked: by(nonZeroTotal, "total_bookings"),
       leastBooked: by(nonZeroTotal, "total_bookings", "asc"),
       mostPaid: by(nonZeroPaid, "paid_bookings"),
       mostFree: by(nonZeroFree, "free_bookings"),
       mostRevenue: by(nonZeroRevenue, "revenue"),
-      mostCompValue: by(
-        rows.filter((r) => Number(r.free_value || 0) > 0),
-        "free_value",
-      ),
+      mostCompValue: by(compRows, "free_value"),
+      mostBookedTies: tiesFor(nonZeroTotal, "total_bookings"),
+      leastBookedTies: tiesFor(nonZeroTotal, "total_bookings", "asc"),
+      mostPaidTies: tiesFor(nonZeroPaid, "paid_bookings"),
+      mostFreeTies: tiesFor(nonZeroFree, "free_bookings"),
+      mostRevenueTies: tiesFor(nonZeroRevenue, "revenue"),
+      mostCompValueTies: tiesFor(compRows, "free_value"),
     };
-  }, [villaChartData]);
+  }, [signalsRaw, sourceFilter]);
 
   const openAllVillaBreakdown = (mode = viewMode) => {
     setSummaryModalMode(mode);
+    setSummaryModalTitleOverride(null);
+    setSummaryModalRowsOverride(null);
+    setSummaryModalOpen(true);
+  };
+
+  const openTiedVillaBreakdown = (title, rows = []) => {
+    setSummaryModalMode("overall");
+    setSummaryModalTitleOverride(title);
+    setSummaryModalRowsOverride(rows);
     setSummaryModalOpen(true);
   };
 
@@ -965,21 +1640,38 @@ export default function VillaSourceBreakdown({ years, months }) {
   const [modalIsFree, setModalIsFree] = useState(null); // null|true|false
   const [modalBookings, setModalBookings] = useState([]);
   const [modalLoading, setModalLoading] = useState(false);
-  const [modalYear, setModalYear] = useState("All");
-  const [modalMonth, setModalMonth] = useState("All");
+  const [modalDateFilter, setModalDateFilter] = useState(createDateFilter);
   const [modalSearch, setModalSearch] = useState("");
   const [modalSortKey, setModalSortKey] = useState("check_in_date");
   const [modalSortDir, setModalSortDir] = useState("desc");
   const [summaryModalOpen, setSummaryModalOpen] = useState(false);
   const [summaryModalMode, setSummaryModalMode] = useState("overall");
+  const [summaryModalDateFilter, setSummaryModalDateFilter] =
+    useState(createDateFilter);
+  const [summaryModalRaw, setSummaryModalRaw] = useState([]);
   const [summarySearch, setSummarySearch] = useState("");
   const [summarySortKey, setSummarySortKey] = useState("total_bookings");
   const [summarySortDir, setSummarySortDir] = useState("desc");
+  const [summaryModalTitleOverride, setSummaryModalTitleOverride] =
+    useState(null);
+  const [summaryModalRowsOverride, setSummaryModalRowsOverride] =
+    useState(null);
+  const [modalReturnToSummary, setModalReturnToSummary] = useState(false);
 
   const modalFilters = useMemo(
-    () => toFilters(modalYear, modalMonth),
-    [modalYear, modalMonth],
+    () => toDateParams(modalDateFilter),
+    [modalDateFilter],
   );
+
+  const summaryModalFilters = useMemo(
+    () => toDateParams(summaryModalDateFilter),
+    [summaryModalDateFilter],
+  );
+
+  useEffect(() => {
+    if (!summaryModalOpen) return undefined;
+    return loadBreakdown(summaryModalFilters, setSummaryModalRaw);
+  }, [summaryModalOpen, summaryModalFilters]);
 
   // Fetch drilldown when modal is open
   useEffect(() => {
@@ -1007,12 +1699,17 @@ export default function VillaSourceBreakdown({ years, months }) {
     };
   }, [modalOpen, modalVilla, modalSource, modalIsFree, modalFilters]);
 
-  const openModal = (villa, source = null, isFree = null) => {
+  const openModal = (
+    villa,
+    source = null,
+    isFree = null,
+    returnToSummary = false,
+  ) => {
     setModalVilla(villa);
     setModalSource(source);
     setModalIsFree(isFree);
-    setModalYear(year);
-    setModalMonth(month);
+    setModalReturnToSummary(returnToSummary);
+    setModalDateFilter(createDateFilter());
     setModalSearch("");
     setModalOpen(true);
   };
@@ -1023,9 +1720,10 @@ export default function VillaSourceBreakdown({ years, months }) {
   }, [modalBookings, modalSearch, modalSortKey, modalSortDir]);
 
   const summaryModalRows = useMemo(() => {
-    let rows = breakdownRaw;
+    let rows = summaryModalRaw;
     if (summaryModalMode === "paid") rows = rows.filter((r) => !r.is_free);
     if (summaryModalMode === "free") rows = rows.filter((r) => r.is_free);
+    // finance mode intentionally includes both paid revenue and free/comp value rows.
     if (sourceFilter !== "All")
       rows = rows.filter((r) => (r.source || "Unknown") === sourceFilter);
     const mapped = rows.map((r) => ({
@@ -1048,9 +1746,38 @@ export default function VillaSourceBreakdown({ years, months }) {
       summarySortDir,
     );
   }, [
-    breakdownRaw,
+    summaryModalRaw,
     summaryModalMode,
     sourceFilter,
+    summarySearch,
+    summarySortKey,
+    summarySortDir,
+  ]);
+
+  const displayedSummaryModalRows = useMemo(() => {
+    if (!summaryModalRowsOverride) return summaryModalRows;
+    const mapped = summaryModalRowsOverride.map((r) => ({
+      villa_name: r.villa_name ?? "Unknown villa",
+      source: "All selected sources",
+      payment_type: "—",
+      type: "Paid + Free / Comp",
+      total_bookings: Number(r.total_bookings ?? 0),
+      paid_bookings: Number(r.paid_bookings ?? 0),
+      free_bookings: Number(r.free_bookings ?? 0),
+      total_nights: Number(r.total_nights ?? 0),
+      revenue: Number(r.revenue ?? 0),
+      free_value: Number(r.free_value ?? 0),
+      unique_members: Number(r.unique_members ?? 0),
+      is_free: null,
+    }));
+    return sortRows(
+      searchRows(mapped, summarySearch),
+      summarySortKey,
+      summarySortDir,
+    );
+  }, [
+    summaryModalRows,
+    summaryModalRowsOverride,
     summarySearch,
     summarySortKey,
     summarySortDir,
@@ -1082,7 +1809,7 @@ export default function VillaSourceBreakdown({ years, months }) {
     "Reservation Status": b.reservation_status ?? "",
   }));
 
-  const modalFilename = `${safeFilePart(modalVilla)}_source_${safeFilePart(modalSource)}_${safeFilePart(modalIsFree === true ? "free" : modalIsFree === false ? "paid" : "all")}_${safeFilePart(modalYear)}_${today}`;
+  const modalFilename = `${safeFilePart(modalVilla)}_source_${safeFilePart(modalSource)}_${safeFilePart(modalIsFree === true ? "free" : modalIsFree === false ? "paid" : "all")}_${safeFilePart(dateFilterFilePart(modalDateFilter))}_${today}`;
 
   const breakdownExportRows = villaSourceRows.map((r) => ({
     Villa: r.villa_name ?? "",
@@ -1097,7 +1824,66 @@ export default function VillaSourceBreakdown({ years, months }) {
     "Unique Members": r.unique_members ?? "",
   }));
 
-  const breakdownFilename = `source_breakdown_${safeFilePart(selectedVilla)}_${safeFilePart(year)}_${today}`;
+  const breakdownFilename = `source_breakdown_${safeFilePart(selectedVilla)}_${safeFilePart(dateFilterFilePart(selectedVillaDateFilter))}_${today}`;
+
+  const currentViewLabel =
+    viewMode === "paid"
+      ? "Paid"
+      : viewMode === "free"
+        ? "Free / Comp"
+        : "Overall";
+  const financeExportRows = withExportContext(
+    [
+      {
+        Metric: "Highest Paid Revenue",
+        Villa: sourceInsights?.mostRevenue?.villa_name ?? "",
+        Value: sourceInsights?.mostRevenue?.revenue ?? "",
+        "Paid Bookings": sourceInsights?.mostRevenue?.paid_bookings ?? "",
+        "Free / Comp Bookings":
+          sourceInsights?.mostRevenue?.free_bookings ?? "",
+        "Total Bookings": sourceInsights?.mostRevenue?.total_bookings ?? "",
+        Notes: "Paid bookings only",
+      },
+      {
+        Metric: "Highest Comp Value",
+        Villa: sourceInsights?.mostCompValue?.villa_name ?? "",
+        Value: sourceInsights?.mostCompValue?.free_value ?? "",
+        "Paid Bookings": sourceInsights?.mostCompValue?.paid_bookings ?? "",
+        "Free / Comp Bookings":
+          sourceInsights?.mostCompValue?.free_bookings ?? "",
+        "Total Bookings": sourceInsights?.mostCompValue?.total_bookings ?? "",
+        Notes: "Free / comp stays only",
+      },
+    ],
+    {
+      period: dateFilterLabel(signalsDateFilter),
+      source: sourceFilter,
+      view: currentViewLabel,
+    },
+  );
+  const financeFilename = `finance_leaders_${safeFilePart(sourceFilter)}_${safeFilePart(dateFilterFilePart(signalsDateFilter))}_${today}`;
+
+  const summaryModalExportRows = withExportContext(
+    displayedSummaryModalRows.map((r) => ({
+      Villa: r.villa_name,
+      Source: r.source,
+      Payment: r.payment_type,
+      Type: r.type,
+      Bookings: r.total_bookings,
+      Paid: r.paid_bookings,
+      "Free / Comp": r.free_bookings,
+      Nights: r.total_nights,
+      Revenue: r.revenue,
+      "Comp Value": r.free_value,
+      Members: r.unique_members,
+    })),
+    {
+      period: dateFilterLabel(summaryModalDateFilter),
+      source: sourceFilter,
+      view: summaryModalTitleOverride || summaryModalMode,
+    },
+  );
+  const summaryModalFilename = `aggregate_breakdown_${safeFilePart(summaryModalTitleOverride || summaryModalMode)}_${safeFilePart(sourceFilter)}_${safeFilePart(dateFilterFilePart(summaryModalDateFilter))}_${today}`;
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
@@ -1140,18 +1926,9 @@ export default function VillaSourceBreakdown({ years, months }) {
             alignItems: "center",
           }}
         >
-          <Select
-            label="Year"
-            value={year}
-            onChange={setYear}
-            options={years}
-          />
-          <Select
-            label="Month"
-            value={month}
-            onChange={setMonth}
-            options={months}
-          />
+          <span style={{ color: C.muted, fontSize: 12 }}>
+            Date filters are scoped to each card, chart, table, and modal.
+          </span>
         </div>
       </div>
 
@@ -1237,6 +2014,31 @@ export default function VillaSourceBreakdown({ years, months }) {
       {/* ── KPI band ─────────────────────────────────────────────────────── */}
       <div
         style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          marginBottom: 10,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            flexWrap: "wrap",
+            justifyContent: "flex-end",
+          }}
+        >
+          <PeriodPill filter={kpiDateFilter} />
+          <DateFilterBar
+            value={kpiDateFilter}
+            onChange={setKpiDateFilter}
+            years={years}
+            months={months}
+          />
+        </div>
+      </div>
+      <div
+        style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(175px, 1fr))",
           gap: 12,
@@ -1249,6 +2051,7 @@ export default function VillaSourceBreakdown({ years, months }) {
           sub="Paid + free/comp bookings"
           meta={`${pct(kpis.totalPaid, kpis.totalBookings)} paid · ${pct(kpis.totalFree, kpis.totalBookings)} free/comp`}
           onClick={() => openAllVillaBreakdown("overall")}
+          active={summaryModalOpen && summaryModalMode === "overall"}
         />
         <KpiTile
           icon={DollarSign}
@@ -1257,6 +2060,7 @@ export default function VillaSourceBreakdown({ years, months }) {
           sub="Revenue bookings"
           meta={`${pct(kpis.totalPaid, kpis.totalBookings)} of total bookings`}
           onClick={() => openAllVillaBreakdown("paid")}
+          active={summaryModalOpen && summaryModalMode === "paid"}
         />
         <KpiTile
           icon={Gift}
@@ -1264,7 +2068,7 @@ export default function VillaSourceBreakdown({ years, months }) {
           value={fmt(kpis.totalFree)}
           sub="Non-revenue bookings"
           meta={`${pct(kpis.totalFree, kpis.totalBookings)} of total bookings`}
-          highlight={kpis.totalFree > 0}
+          active={summaryModalOpen && summaryModalMode === "free"}
           onClick={() => openAllVillaBreakdown("free")}
         />
         <KpiTile
@@ -1272,8 +2076,9 @@ export default function VillaSourceBreakdown({ years, months }) {
           label="Paid Revenue"
           value={money(kpis.revenue)}
           sub="Paid folio value"
-          meta="Filtered by current year, month, view, and source."
-          onClick={() => openAllVillaBreakdown("paid")}
+          meta="Shows paid revenue beside free/comp value in the breakdown."
+          onClick={() => openAllVillaBreakdown("finance")}
+          active={summaryModalOpen && summaryModalMode === "finance"}
         />
         <KpiTile
           icon={Gift}
@@ -1281,7 +2086,7 @@ export default function VillaSourceBreakdown({ years, months }) {
           value={money(kpis.freeValue)}
           sub="Free/comp value"
           meta="Tracked separately from paid revenue."
-          highlight={kpis.freeValue > 0}
+          active={summaryModalOpen && summaryModalMode === "free"}
           onClick={() => openAllVillaBreakdown("free")}
         />
         <KpiTile
@@ -1291,118 +2096,34 @@ export default function VillaSourceBreakdown({ years, months }) {
           sub="Occupancy impact"
           meta="Includes paid and free/comp nights."
           onClick={() => openAllVillaBreakdown("overall")}
+          active={summaryModalOpen && summaryModalMode === "overall"}
         />
       </div>
 
-      {/* ── Extremes card ────────────────────────────────────────────────── */}
-      <div className="dashboard-card">
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 12,
-            alignItems: "flex-start",
-            marginBottom: 14,
-          }}
-        >
-          <div>
-            <div className="dashboard-eyebrow">Villa Extremes</div>
-            <h2 className="dashboard-card-title">
-              Most / Least Booked, Paid, Free/Comp, and Revenue
-            </h2>
-            <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>
-              Ranking is based on the active year, month, source, and paid/free
-              filter.
-            </p>
-          </div>
-        </div>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 12,
-          }}
-        >
-          {[
-            [
-              "Most Booked",
-              sourceInsights.mostBooked,
-              "total_bookings",
-              "bookings",
-            ],
-            [
-              "Least Booked",
-              sourceInsights.leastBooked,
-              "total_bookings",
-              "bookings",
-            ],
-            [
-              "Most Paid",
-              sourceInsights.mostPaid,
-              "paid_bookings",
-              "paid bookings",
-            ],
-            [
-              "Most Free / Comp",
-              sourceInsights.mostFree,
-              "free_bookings",
-              "free/comp bookings",
-            ],
-            [
-              "Top Revenue",
-              sourceInsights.mostRevenue,
-              "revenue",
-              "paid revenue",
-            ],
-            [
-              "Top Comp Value",
-              sourceInsights.mostCompValue,
-              "free_value",
-              "comp value",
-            ],
-          ].map(([label, villa, key, suffix]) => (
-            <button
-              key={label}
-              type="button"
-              onClick={() =>
-                villa?.villa_name && setSelectedVilla(villa.villa_name)
-              }
-              style={{
-                textAlign: "left",
-                border: `1px solid ${C.border}`,
-                borderRadius: 16,
-                background: C.panel,
-                padding: 14,
-                cursor: villa?.villa_name ? "pointer" : "default",
-              }}
-            >
-              <div className="dashboard-eyebrow">{label}</div>
-              <div
-                style={{
-                  color: C.text,
-                  fontWeight: 850,
-                  fontSize: 16,
-                  marginTop: 4,
-                }}
-              >
-                {villa?.villa_name ?? "—"}
-              </div>
-              <div style={{ color: C.soft, fontSize: 12, marginTop: 4 }}>
-                {key === "revenue" || key === "free_value"
-                  ? money(villa?.[key])
-                  : fmt(villa?.[key])}{" "}
-                {suffix}
-              </div>
-              {villa && (
-                <MiniSplitBar
-                  paid={villa.paid_bookings}
-                  free={villa.free_bookings}
-                />
-              )}
-            </button>
-          ))}
-        </div>
+      {/* ── Portfolio signals ───────────────────────────────────────────── */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          marginBottom: 10,
+        }}
+      >
+        <DateFilterBar
+          value={signalsDateFilter}
+          onChange={setSignalsDateFilter}
+          years={years}
+          months={months}
+        />
       </div>
+      <PortfolioSignals
+        insights={sourceInsights}
+        periodFilter={signalsDateFilter}
+        financeExportRows={financeExportRows}
+        financeFilename={financeFilename}
+        onSelectVilla={setSelectedVilla}
+        onOpenFinance={() => openAllVillaBreakdown("finance")}
+        onOpenTies={openTiedVillaBreakdown}
+      />
 
       {/* ── Business source summary ──────────────────────────────────────── */}
       <div className="dashboard-card">
@@ -1419,10 +2140,19 @@ export default function VillaSourceBreakdown({ years, months }) {
             <div className="dashboard-eyebrow">Business Source Summary</div>
             <h2 className="dashboard-card-title">Source Performance</h2>
             <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>
-              Click a source to filter the All Villas chart and villa breakdowns
-              by that source.
+              This table has its own date filter. Click a source once to filter;
+              click it again to clear.
             </p>
+            <div style={{ marginTop: 8 }}>
+              <PeriodPill filter={sourceSummaryDateFilter} />
+            </div>
           </div>
+          <DateFilterBar
+            value={sourceSummaryDateFilter}
+            onChange={setSourceSummaryDateFilter}
+            years={years}
+            months={months}
+          />
         </div>
         <ScrollTableShell maxHeight={340}>
           <table
@@ -1484,22 +2214,28 @@ export default function VillaSourceBreakdown({ years, months }) {
                 <tr
                   key={r.source}
                   onClick={() => {
-                    setSourceFilter(r.source);
+                    setSourceFilter((current) =>
+                      current === r.source ? "All" : r.source,
+                    );
                     setSelectedVilla(null);
                   }}
                   style={{
                     borderBottom: `1px solid ${C.border}`,
                     cursor: "pointer",
+                    background:
+                      sourceFilter === r.source ? C.panelAlt : "transparent",
                   }}
                   onMouseEnter={(e) =>
                     (e.currentTarget.style.background = C.panel)
                   }
                   onMouseLeave={(e) =>
-                    (e.currentTarget.style.background = "transparent")
+                    (e.currentTarget.style.background =
+                      sourceFilter === r.source ? C.panelAlt : "transparent")
                   }
                 >
                   <td style={{ padding: 10, color: C.text, fontWeight: 800 }}>
                     {r.source}
+                    {sourceFilter === r.source ? " ✓" : ""}
                   </td>
                   <td
                     style={{ padding: 10, textAlign: "right", color: C.soft }}
@@ -1586,22 +2322,26 @@ export default function VillaSourceBreakdown({ years, months }) {
           <div>
             <div className="dashboard-eyebrow">All Villas</div>
             <h2 className="dashboard-card-title">
-              {viewMode === "overall"
-                ? "Paid vs Free Bookings by Villa"
-                : viewMode === "paid"
-                  ? "Paid Bookings by Villa"
-                  : "Free / Comp Bookings by Villa"}
+              Paid vs Free / Comp Bookings by Villa
             </h2>
+            <PeriodPill filter={chartDateFilter} />
           </div>
           <div
             style={{
               display: "flex",
-              gap: 10,
+              gap: 14,
               alignItems: "center",
               flexWrap: "wrap",
               justifyContent: "flex-end",
             }}
           >
+            <DateFilterBar
+              value={chartDateFilter}
+              onChange={setChartDateFilter}
+              years={years}
+              months={months}
+            />
+            <InlineLegend />
             <Select
               label="Show"
               value={villaChartLimit}
@@ -1632,7 +2372,7 @@ export default function VillaSourceBreakdown({ years, months }) {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={visibleVillaChartData}
-                margin={{ top: 8, right: 16, bottom: 90, left: 16 }}
+                margin={{ top: 12, right: 18, bottom: 120, left: 18 }}
                 onClick={(e) => {
                   if (e?.activeLabel) setSelectedVilla(e.activeLabel);
                 }}
@@ -1645,11 +2385,11 @@ export default function VillaSourceBreakdown({ years, months }) {
                   angle={-35}
                   textAnchor="end"
                   interval={0}
-                  height={90}
+                  height={118}
                   label={{
                     value: "Villa",
                     position: "insideBottom",
-                    offset: -20,
+                    offset: -34,
                     style: LABEL_STYLE,
                   }}
                 />
@@ -1676,58 +2416,44 @@ export default function VillaSourceBreakdown({ years, months }) {
                         : name,
                   ]}
                 />
-                {viewMode !== "free" && (
-                  <Bar
-                    dataKey="paid_bookings"
-                    name="paid_bookings"
-                    fill={COLOR_PAID}
-                    radius={
-                      viewMode === "overall" ? [0, 0, 0, 0] : [6, 6, 0, 0]
-                    }
-                    stackId="a"
-                    cursor="pointer"
-                  >
-                    {visibleVillaChartData.map((entry) => (
-                      <Cell
-                        key={entry.villa_name}
-                        fill={
-                          selectedVilla === entry.villa_name
-                            ? "var(--dashboard-truffle)"
-                            : COLOR_PAID
-                        }
-                      />
-                    ))}
-                  </Bar>
-                )}
-                {viewMode !== "paid" && (
-                  <Bar
-                    dataKey="free_bookings"
-                    name="free_bookings"
-                    fill={COLOR_FREE}
-                    radius={[6, 6, 0, 0]}
-                    stackId="a"
-                    cursor="pointer"
-                  >
-                    {visibleVillaChartData.map((entry) => (
-                      <Cell
-                        key={entry.villa_name}
-                        fill={
-                          selectedVilla === entry.villa_name
-                            ? "#e0a060"
-                            : COLOR_FREE
-                        }
-                      />
-                    ))}
-                  </Bar>
-                )}
-                {viewMode === "overall" && (
-                  <Legend
-                    formatter={(value) =>
-                      value === "paid_bookings" ? "Paid" : "Free/Comp"
-                    }
-                    wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
-                  />
-                )}
+                <Bar
+                  dataKey="paid_bookings"
+                  name="paid_bookings"
+                  fill={COLOR_PAID}
+                  radius={[0, 0, 0, 0]}
+                  stackId="a"
+                  cursor="pointer"
+                >
+                  {visibleVillaChartData.map((entry) => (
+                    <Cell
+                      key={entry.villa_name}
+                      fill={
+                        selectedVilla === entry.villa_name
+                          ? "var(--dashboard-truffle)"
+                          : COLOR_PAID
+                      }
+                    />
+                  ))}
+                </Bar>
+                <Bar
+                  dataKey="free_bookings"
+                  name="free_bookings"
+                  fill={COLOR_FREE}
+                  radius={[6, 6, 0, 0]}
+                  stackId="a"
+                  cursor="pointer"
+                >
+                  {visibleVillaChartData.map((entry) => (
+                    <Cell
+                      key={entry.villa_name}
+                      fill={
+                        selectedVilla === entry.villa_name
+                          ? "#d8b06a"
+                          : COLOR_FREE
+                      }
+                    />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -1751,11 +2477,28 @@ export default function VillaSourceBreakdown({ years, months }) {
                 {selectedVilla} — Source Breakdown
               </h2>
               <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>
-                Rows reflect the active source, year, month, and paid/free
-                filters.
+                Rows reflect this table's own date filter plus the active source
+                and paid/free filters.
               </p>
+              <div style={{ marginTop: 8 }}>
+                <PeriodPill filter={selectedVillaDateFilter} />
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+                flexWrap: "wrap",
+                justifyContent: "flex-end",
+              }}
+            >
+              <DateFilterBar
+                value={selectedVillaDateFilter}
+                onChange={setSelectedVillaDateFilter}
+                years={years}
+                months={months}
+              />
               <ExportMenu
                 rows={breakdownExportRows}
                 filenameBase={breakdownFilename}
@@ -1796,6 +2539,11 @@ export default function VillaSourceBreakdown({ years, months }) {
               sub="Paid + free/comp"
               meta={`${pct(selectedVillaTotals.paidBookings, selectedVillaTotals.totalBookings)} paid · ${pct(selectedVillaTotals.freeBookings, selectedVillaTotals.totalBookings)} free/comp`}
               onClick={() => openModal(selectedVilla, sourceFilter, null)}
+              active={
+                modalOpen &&
+                modalVilla === selectedVilla &&
+                modalIsFree === null
+              }
             />
             <KpiTile
               icon={DollarSign}
@@ -1804,6 +2552,11 @@ export default function VillaSourceBreakdown({ years, months }) {
               sub={money(selectedVillaTotals.revenue)}
               meta="Paid booking records"
               onClick={() => openModal(selectedVilla, sourceFilter, false)}
+              active={
+                modalOpen &&
+                modalVilla === selectedVilla &&
+                modalIsFree === false
+              }
             />
             <KpiTile
               icon={Gift}
@@ -1811,7 +2564,11 @@ export default function VillaSourceBreakdown({ years, months }) {
               value={fmt(selectedVillaTotals.freeBookings)}
               sub={money(selectedVillaTotals.freeValue)}
               meta="Free/comp booking records"
-              highlight={selectedVillaTotals.freeBookings > 0}
+              active={
+                modalOpen &&
+                modalVilla === selectedVilla &&
+                modalIsFree === true
+              }
               onClick={() => openModal(selectedVilla, sourceFilter, true)}
             />
             <KpiTile
@@ -1821,6 +2578,11 @@ export default function VillaSourceBreakdown({ years, months }) {
               sub="Paid + free/comp nights"
               meta="Occupancy total"
               onClick={() => openModal(selectedVilla, sourceFilter, null)}
+              active={
+                modalOpen &&
+                modalVilla === selectedVilla &&
+                modalIsFree === null
+              }
             />
           </div>
           <div style={{ marginBottom: 14 }}>
@@ -1891,9 +2653,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                     }
                     style={{
                       borderBottom: `1px solid ${C.border}`,
-                      background: r.is_free
-                        ? "rgba(210,80,50,0.05)"
-                        : "transparent",
+                      background: "transparent",
                       cursor: "pointer",
                       transition: "background 0.15s",
                     }}
@@ -1901,9 +2661,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                       (e.currentTarget.style.background = C.panel)
                     }
                     onMouseLeave={(e) =>
-                      (e.currentTarget.style.background = r.is_free
-                        ? "rgba(210,80,50,0.05)"
-                        : "transparent")
+                      (e.currentTarget.style.background = "transparent")
                     }
                   >
                     <td
@@ -2155,19 +2913,85 @@ export default function VillaSourceBreakdown({ years, months }) {
                   lineHeight: 1,
                 }}
               >
-                {summaryModalMode === "paid"
-                  ? "Paid Bookings"
-                  : summaryModalMode === "free"
-                    ? "Free / Comp Stays"
-                    : "Total Bookings"}
+                {summaryModalTitleOverride ||
+                  (summaryModalMode === "paid"
+                    ? "Paid Bookings"
+                    : summaryModalMode === "free"
+                      ? "Free / Comp Stays"
+                      : summaryModalMode === "finance"
+                        ? "Revenue and Comp Value"
+                        : "Total Bookings")}
               </h2>
               <div style={{ color: C.muted, fontSize: 12 }}>
-                All villas · Source: {sourceFilter} · Year: {year} · Month:{" "}
-                {month}
+                All villas · Source: {sourceFilter} ·{" "}
+                {dateFilterLabel(summaryModalDateFilter)}
+              </div>
+              <div style={{ marginTop: 14 }}>
+                <DateFilterBar
+                  value={summaryModalDateFilter}
+                  onChange={setSummaryModalDateFilter}
+                  years={years}
+                  months={months}
+                />
               </div>
             </div>
 
             <div style={{ padding: 26 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gap: 12,
+                  marginBottom: 16,
+                }}
+              >
+                <KpiTile
+                  icon={DollarSign}
+                  label="Paid Revenue"
+                  value={money(
+                    displayedSummaryModalRows.reduce(
+                      (sum, r) => sum + Number(r.revenue || 0),
+                      0,
+                    ),
+                  )}
+                  sub="Paid rows only"
+                  meta="USD"
+                />
+                <KpiTile
+                  icon={Gift}
+                  label="Comp Value"
+                  value={money(
+                    displayedSummaryModalRows.reduce(
+                      (sum, r) => sum + Number(r.free_value || 0),
+                      0,
+                    ),
+                  )}
+                  sub="Free / comp rows only"
+                  meta="USD"
+                />
+                <KpiTile
+                  icon={BedDouble}
+                  label="Paid Bookings"
+                  value={fmt(
+                    displayedSummaryModalRows.reduce(
+                      (sum, r) => sum + Number(r.paid_bookings || 0),
+                      0,
+                    ),
+                  )}
+                  sub="Revenue booking count"
+                />
+                <KpiTile
+                  icon={Gift}
+                  label="Free / Comp Bookings"
+                  value={fmt(
+                    displayedSummaryModalRows.reduce(
+                      (sum, r) => sum + Number(r.free_bookings || 0),
+                      0,
+                    ),
+                  )}
+                  sub="Non-revenue booking count"
+                />
+              </div>
               <div
                 style={{
                   display: "flex",
@@ -2214,6 +3038,11 @@ export default function VillaSourceBreakdown({ years, months }) {
                   value={summarySortDir}
                   onChange={setSummarySortDir}
                   options={["asc", "desc"]}
+                />
+                <ExportMenu
+                  rows={summaryModalExportRows}
+                  filenameBase={summaryModalFilename}
+                  disabled={!summaryModalExportRows.length}
                 />
               </div>
               <ScrollTableShell maxHeight={680}>
@@ -2269,13 +3098,17 @@ export default function VillaSourceBreakdown({ years, months }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {summaryModalRows.map((r, i) => (
+                    {displayedSummaryModalRows.map((r, i) => (
                       <tr
                         key={`${r.villa_name}-${r.source}-${r.payment_type}-${i}`}
                         onClick={() => {
-                          setSummaryModalOpen(false);
                           setSelectedVilla(r.villa_name);
-                          openModal(r.villa_name, r.source, r.is_free);
+                          openModal(
+                            r.villa_name,
+                            summaryModalRowsOverride ? sourceFilter : r.source,
+                            summaryModalRowsOverride ? null : r.is_free,
+                            true,
+                          );
                         }}
                         style={{
                           borderBottom: `1px solid ${C.border}`,
@@ -2441,6 +3274,25 @@ export default function VillaSourceBreakdown({ years, months }) {
               >
                 <X size={18} />
               </button>
+              {modalReturnToSummary && (
+                <button
+                  type="button"
+                  onClick={() => setModalOpen(false)}
+                  style={{
+                    border: `1px solid ${C.border}`,
+                    background: C.panelAlt,
+                    color: C.accent,
+                    borderRadius: 999,
+                    padding: "7px 11px",
+                    fontSize: 11,
+                    fontWeight: 900,
+                    cursor: "pointer",
+                    marginBottom: 10,
+                  }}
+                >
+                  ← Back to aggregate breakdown
+                </button>
+              )}
 
               <div className="dashboard-eyebrow">Booking drilldown</div>
 
@@ -2460,6 +3312,9 @@ export default function VillaSourceBreakdown({ years, months }) {
                 style={{ color: C.muted, fontSize: 12, margin: "8px 48px 0 0" }}
               >
                 Booking-level records for the selected villa/source/status.
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <PeriodPill filter={modalDateFilter} />
               </div>
 
               {/* context pills */}
@@ -2522,17 +3377,11 @@ export default function VillaSourceBreakdown({ years, months }) {
                   flexWrap: "wrap",
                 }}
               >
-                <Select
-                  label="Year"
-                  value={modalYear}
-                  onChange={setModalYear}
-                  options={years}
-                />
-                <Select
-                  label="Month"
-                  value={modalMonth}
-                  onChange={setModalMonth}
-                  options={months}
+                <DateFilterBar
+                  value={modalDateFilter}
+                  onChange={setModalDateFilter}
+                  years={years}
+                  months={months}
                 />
               </div>
             </div>

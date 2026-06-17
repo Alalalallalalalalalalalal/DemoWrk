@@ -551,35 +551,94 @@ function Select({ label, value, onChange, options }) {
     </label>
   );
 }
+function DateFilterBar({ value, onChange, years, months }) {
+  const update = (patch) => onChange({ ...value, ...patch });
 
-function ModalFilterBar({
-  year,
-  month,
-  onYearChange,
-  onMonthChange,
-  years,
-  months,
-}) {
+  const inputStyle = {
+    padding: "8px 10px",
+    borderRadius: 10,
+    border: `1px solid ${C.border}`,
+    background: C.bg,
+    color: C.text,
+    fontSize: 12,
+  };
+
+  const changeMode = (mode) => {
+    onChange({
+      mode,
+      year: value.year ?? "All",
+      month: value.month ?? "All",
+      date: value.date ?? "",
+      startDate: value.startDate ?? "",
+      endDate: value.endDate ?? "",
+    });
+  };
+
   return (
     <div
       style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}
     >
       <Select
-        label="Year"
-        value={year}
-        onChange={onYearChange}
-        options={years}
+        label="Mode"
+        value={value.mode}
+        onChange={changeMode}
+        options={["ym", "day", "range"]}
       />
-      <Select
-        label="Month"
-        value={month}
-        onChange={onMonthChange}
-        options={months}
-      />
+
+      {value.mode === "ym" && (
+        <>
+          <Select
+            label="Year"
+            value={value.year}
+            onChange={(year) => update({ year })}
+            options={years}
+          />
+          <Select
+            label="Month"
+            value={value.month}
+            onChange={(month) => update({ month })}
+            options={months}
+          />
+        </>
+      )}
+
+      {value.mode === "day" && (
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span className="dashboard-eyebrow">Date</span>
+          <input
+            type="date"
+            value={value.date}
+            onChange={(e) => update({ date: e.target.value })}
+            style={inputStyle}
+          />
+        </label>
+      )}
+
+      {value.mode === "range" && (
+        <>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="dashboard-eyebrow">Start</span>
+            <input
+              type="date"
+              value={value.startDate}
+              onChange={(e) => update({ startDate: e.target.value })}
+              style={inputStyle}
+            />
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="dashboard-eyebrow">End</span>
+            <input
+              type="date"
+              value={value.endDate}
+              onChange={(e) => update({ endDate: e.target.value })}
+              style={inputStyle}
+            />
+          </label>
+        </>
+      )}
     </div>
   );
 }
-
 function TableControls({
   search,
   onSearchChange,
@@ -728,19 +787,44 @@ export default function VisitsRoomsTab({
     ];
   }, []);
 
-  const toFilters = (y, m) => ({
-    year: y === "All" ? null : Number(y),
-    month: m === "All" ? null : months.indexOf(m),
+  const createDateFilter = () => ({
+    mode: "ym", // ym | day | range
+    year: "All",
+    month: "All",
+    date: "",
+    startDate: "",
+    endDate: "",
   });
+
+  const toDateParams = (filter) => {
+    if (filter.mode === "day") {
+      return filter.date ? { date: filter.date } : {};
+    }
+
+    if (filter.mode === "range") {
+      return filter.startDate && filter.endDate
+        ? { start_date: filter.startDate, end_date: filter.endDate }
+        : {};
+    }
+
+    return {
+      year: filter.year === "All" ? null : Number(filter.year),
+      month: filter.month === "All" ? null : months.indexOf(filter.month),
+    };
+  };
+
+  const dateFilterFilePart = (filter) => {
+    if (filter.mode === "day") return filter.date || "all_dates";
+    if (filter.mode === "range") {
+      return filter.startDate && filter.endDate
+        ? `${filter.startDate}_to_${filter.endDate}`
+        : "all_dates";
+    }
+    return `${filter.year}_${filter.month}`;
+  };
 
   // ── Top-level view ────────────────────────────────────────────────────────
   const [topView, setTopView] = useState("overall");
-
-  // ── Tab-level filters ─────────────────────────────────────────────────────
-  const [year, setYear] = useState("All");
-  const [month, setMonth] = useState("All");
-
-  const activeFilters = useMemo(() => toFilters(year, month), [year, month]);
 
   // ── Tab-level data ────────────────────────────────────────────────────────
   const [summaryData, setSummaryData] = useState({});
@@ -751,16 +835,15 @@ export default function VisitsRoomsTab({
   const [monthlyRevenueData, setMonthlyRevenueData] = useState([]);
   const [visitsDataLoading, setVisitsDataLoading] = useState(false);
 
-  const [villaChartYear, setVillaChartYear] = useState("All");
-  const [villaChartMonth, setVillaChartMonth] = useState("All");
-  const [villaTableYear, setVillaTableYear] = useState("All");
-  const [villaTableMonth, setVillaTableMonth] = useState("All");
-  const [selectedVillaChartYear, setSelectedVillaChartYear] = useState("All");
-  const [selectedVillaChartMonth, setSelectedVillaChartMonth] = useState("All");
-  const [bedroomChartYear, setBedroomChartYear] = useState("All");
-  const [bedroomChartMonth, setBedroomChartMonth] = useState("All");
-  const [monthlyChartYear, setMonthlyChartYear] = useState("All");
-  const [monthlyChartMonth, setMonthlyChartMonth] = useState("All");
+  const [summaryFilter, setSummaryFilter] = useState(createDateFilter);
+  const [villaChartFilter, setVillaChartFilter] = useState(createDateFilter);
+  const [villaTableFilter, setVillaTableFilter] = useState(createDateFilter);
+  const [selectedVillaChartFilter, setSelectedVillaChartFilter] =
+    useState(createDateFilter);
+  const [bedroomChartFilter, setBedroomChartFilter] =
+    useState(createDateFilter);
+  const [monthlyChartFilter, setMonthlyChartFilter] =
+    useState(createDateFilter);
 
   const [villaTableSearch, setVillaTableSearch] = useState("");
   const [villaTableSortKey, setVillaTableSortKey] = useState("bookings");
@@ -779,25 +862,29 @@ export default function VisitsRoomsTab({
     useState("check_in_date");
   const [villaBookingSortDir, setVillaBookingSortDir] = useState("desc");
 
+  const summaryFilters = useMemo(
+    () => toDateParams(summaryFilter),
+    [summaryFilter],
+  );
   const villaChartFilters = useMemo(
-    () => toFilters(villaChartYear, villaChartMonth),
-    [villaChartYear, villaChartMonth],
+    () => toDateParams(villaChartFilter),
+    [villaChartFilter],
   );
   const villaTableFilters = useMemo(
-    () => toFilters(villaTableYear, villaTableMonth),
-    [villaTableYear, villaTableMonth],
+    () => toDateParams(villaTableFilter),
+    [villaTableFilter],
   );
   const selectedVillaChartFilters = useMemo(
-    () => toFilters(selectedVillaChartYear, selectedVillaChartMonth),
-    [selectedVillaChartYear, selectedVillaChartMonth],
+    () => toDateParams(selectedVillaChartFilter),
+    [selectedVillaChartFilter],
   );
   const bedroomChartFilters = useMemo(
-    () => toFilters(bedroomChartYear, bedroomChartMonth),
-    [bedroomChartYear, bedroomChartMonth],
+    () => toDateParams(bedroomChartFilter),
+    [bedroomChartFilter],
   );
   const monthlyChartFilters = useMemo(
-    () => toFilters(monthlyChartYear, monthlyChartMonth),
-    [monthlyChartYear, monthlyChartMonth],
+    () => toDateParams(monthlyChartFilter),
+    [monthlyChartFilter],
   );
 
   useEffect(() => {
@@ -806,7 +893,7 @@ export default function VisitsRoomsTab({
     async function loadSummary() {
       setVisitsDataLoading(true);
       try {
-        const data = await analyticsApi.visitsRoomsDashboard(activeFilters);
+        const data = await analyticsApi.visitsRoomsDashboard(summaryFilters);
         if (cancelled) return;
         setSummaryData(data?.summary ?? {});
       } catch (err) {
@@ -819,7 +906,7 @@ export default function VisitsRoomsTab({
     return () => {
       cancelled = true;
     };
-  }, [activeFilters, topView]);
+  }, [summaryFilters, topView]);
 
   useEffect(() => {
     if (topView !== "overall") return;
@@ -969,12 +1056,11 @@ export default function VisitsRoomsTab({
   const [villaModalOpen, setVillaModalOpen] = useState(false);
   const [villaBookings, setVillaBookings] = useState([]);
   const [villaBookingsLoading, setVillaBookingsLoading] = useState(false);
-  const [villaYear, setVillaYear] = useState("All");
-  const [villaMonth, setVillaMonth] = useState("All");
+  const [villaModalFilter, setVillaModalFilter] = useState(createDateFilter);
 
   const villaModalFilters = useMemo(
-    () => toFilters(villaYear, villaMonth),
-    [villaYear, villaMonth],
+    () => toDateParams(villaModalFilter),
+    [villaModalFilter],
   );
 
   useEffect(() => {
@@ -1004,8 +1090,7 @@ export default function VisitsRoomsTab({
   const openVillaModal = (villaName) => {
     if (!villaName) return;
     onVillaSelect(villaName);
-    setVillaYear(year);
-    setVillaMonth(month);
+    setVillaModalFilter(createDateFilter());
     setVillaModalOpen(true);
   };
 
@@ -1014,12 +1099,12 @@ export default function VisitsRoomsTab({
   const [selectedBedroom, setSelectedBedroom] = useState(null);
   const [bedroomBookings, setBedroomBookings] = useState([]);
   const [bedroomBookingsLoading, setBedroomBookingsLoading] = useState(false);
-  const [bedroomYear, setBedroomYear] = useState("All");
-  const [bedroomMonth, setBedroomMonth] = useState("All");
+  const [bedroomModalFilter, setBedroomModalFilter] =
+    useState(createDateFilter);
 
   const bedroomModalFilters = useMemo(
-    () => toFilters(bedroomYear, bedroomMonth),
-    [bedroomYear, bedroomMonth],
+    () => toDateParams(bedroomModalFilter),
+    [bedroomModalFilter],
   );
 
   useEffect(() => {
@@ -1049,8 +1134,7 @@ export default function VisitsRoomsTab({
   const openBedroomModal = (beds) => {
     if (!beds) return;
     setSelectedBedroom(beds);
-    setBedroomYear(year);
-    setBedroomMonth(month);
+    setBedroomModalFilter(createDateFilter());
     setBedroomModalOpen(true);
   };
 
@@ -1059,12 +1143,11 @@ export default function VisitsRoomsTab({
   const [peopleKind, setPeopleKind] = useState("members");
   const [peopleRows, setPeopleRows] = useState([]);
   const [peopleLoading, setPeopleLoading] = useState(false);
-  const [peopleYear, setPeopleYear] = useState("All");
-  const [peopleMonth, setPeopleMonth] = useState("All");
+  const [peopleFilter, setPeopleFilter] = useState(createDateFilter);
 
   const peopleFilters = useMemo(
-    () => toFilters(peopleYear, peopleMonth),
-    [peopleYear, peopleMonth],
+    () => toDateParams(peopleFilter),
+    [peopleFilter],
   );
 
   useEffect(() => {
@@ -1090,8 +1173,7 @@ export default function VisitsRoomsTab({
 
   const openPeopleModal = (kind) => {
     setPeopleKind(kind);
-    setPeopleYear(year);
-    setPeopleMonth(month);
+    setPeopleFilter(createDateFilter());
     setPeopleModalOpen(true);
   };
 
@@ -1131,7 +1213,7 @@ export default function VisitsRoomsTab({
     Revenue: v.revenue ?? "",
   }));
 
-  const villaPerformanceFilename = `villa_performance_by_bedroom_${safeFilePart(villaTableYear)}_${safeFilePart(villaTableMonth)}_${today}`;
+  const villaPerformanceFilename = `villa_performance_by_bedroom_${safeFilePart(dateFilterFilePart(villaTableFilter))}_${today}`;
 
   const peopleExportRows = filteredPeopleRows.map((p) => ({
     Name:
@@ -1155,7 +1237,7 @@ export default function VisitsRoomsTab({
     "Last Out": p.last_check_out ?? "",
   }));
 
-  const peopleFilename = `${peopleKind}_booked_${safeFilePart(peopleYear)}_${safeFilePart(peopleMonth)}_${today}`;
+  const peopleFilename = `${peopleKind}_booked_${safeFilePart(dateFilterFilePart(peopleFilter))}_${today}`;
 
   const bedroomExportRows = filteredBedroomBookings.map((b) => ({
     Bedroom: selectedBedroom ?? "",
@@ -1174,7 +1256,7 @@ export default function VisitsRoomsTab({
     "Confirmation Code": b.conf_code ?? "",
   }));
 
-  const bedroomFilename = `${safeFilePart(selectedBedroom)}_bedroom_bookings_${safeFilePart(bedroomYear)}_${safeFilePart(bedroomMonth)}_${today}`;
+  const bedroomFilename = `${safeFilePart(selectedBedroom)}_bedroom_bookings_${safeFilePart(dateFilterFilePart(bedroomModalFilter))}_${today}`;
 
   const villaBookingRows = filteredVillaBookings.map((b) => ({
     Villa: selectedVillaName ?? "",
@@ -1200,7 +1282,7 @@ export default function VisitsRoomsTab({
       : "",
   }));
 
-  const villaBookingFilename = `${safeFilePart(selectedVillaName)}_bookings_${safeFilePart(villaYear)}_${safeFilePart(villaMonth)}_${today}`;
+  const villaBookingFilename = `${safeFilePart(selectedVillaName)}_bookings_${safeFilePart(dateFilterFilePart(villaModalFilter))}_${today}`;
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1239,23 +1321,6 @@ export default function VisitsRoomsTab({
           }}
         >
           <TopViewToggle value={topView} onChange={setTopView} />
-
-          {topView === "overall" && (
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <Select
-                label="Year"
-                value={year}
-                onChange={setYear}
-                options={years}
-              />
-              <Select
-                label="Month"
-                value={month}
-                onChange={setMonth}
-                options={months}
-              />
-            </div>
-          )}
         </div>
       </div>
 
@@ -1270,6 +1335,15 @@ export default function VisitsRoomsTab({
               Updating visits and rooms data…
             </div>
           )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <DateFilterBar
+              value={summaryFilter}
+              onChange={setSummaryFilter}
+              years={years}
+              months={months}
+            />
+          </div>
 
           {/* KPI band */}
           <section
@@ -1321,11 +1395,9 @@ export default function VisitsRoomsTab({
             title="Bookings by Villa"
             action={<ChartInfo id="bookingsByVilla" />}
           >
-            <ModalFilterBar
-              year={villaChartYear}
-              month={villaChartMonth}
-              onYearChange={setVillaChartYear}
-              onMonthChange={setVillaChartMonth}
+            <DateFilterBar
+              value={villaChartFilter}
+              onChange={setVillaChartFilter}
               years={years}
               months={months}
             />
@@ -1478,11 +1550,9 @@ export default function VisitsRoomsTab({
                   marginBottom: 10,
                 }}
               >
-                <ModalFilterBar
-                  year={villaTableYear}
-                  month={villaTableMonth}
-                  onYearChange={setVillaTableYear}
-                  onMonthChange={setVillaTableMonth}
+                <DateFilterBar
+                  value={villaTableFilter}
+                  onChange={setVillaTableFilter}
                   years={years}
                   months={months}
                 />
@@ -1654,11 +1724,9 @@ export default function VisitsRoomsTab({
                       marginBottom: 12,
                     }}
                   >
-                    <ModalFilterBar
-                      year={selectedVillaChartYear}
-                      month={selectedVillaChartMonth}
-                      onYearChange={setSelectedVillaChartYear}
-                      onMonthChange={setSelectedVillaChartMonth}
+                    <DateFilterBar
+                      value={selectedVillaChartFilter}
+                      onChange={setSelectedVillaChartFilter}
                       years={years}
                       months={months}
                     />
@@ -1786,11 +1854,9 @@ export default function VisitsRoomsTab({
                 paddingBottom: 10,
               }}
             >
-              <ModalFilterBar
-                year={bedroomChartYear}
-                month={bedroomChartMonth}
-                onYearChange={setBedroomChartYear}
-                onMonthChange={setBedroomChartMonth}
+              <DateFilterBar
+                value={bedroomChartFilter}
+                onChange={setBedroomChartFilter}
                 years={years}
                 months={months}
               />
@@ -1903,11 +1969,9 @@ export default function VisitsRoomsTab({
                 paddingBottom: 10,
               }}
             >
-              <ModalFilterBar
-                year={monthlyChartYear}
-                month={monthlyChartMonth}
-                onYearChange={setMonthlyChartYear}
-                onMonthChange={setMonthlyChartMonth}
+              <DateFilterBar
+                value={monthlyChartFilter}
+                onChange={setMonthlyChartFilter}
                 years={years}
                 months={months}
               />
@@ -2047,11 +2111,9 @@ export default function VisitsRoomsTab({
                     : "Total Guests Booked"}
                 </h2>
 
-                <ModalFilterBar
-                  year={peopleYear}
-                  month={peopleMonth}
-                  onYearChange={setPeopleYear}
-                  onMonthChange={setPeopleMonth}
+                <DateFilterBar
+                  value={peopleFilter}
+                  onChange={setPeopleFilter}
                   years={years}
                   months={months}
                 />
@@ -2276,11 +2338,9 @@ export default function VisitsRoomsTab({
                   {selectedBedroom} Bedroom Bookings
                 </h2>
 
-                <ModalFilterBar
-                  year={bedroomYear}
-                  month={bedroomMonth}
-                  onYearChange={setBedroomYear}
-                  onMonthChange={setBedroomMonth}
+                <DateFilterBar
+                  value={bedroomModalFilter}
+                  onChange={setBedroomModalFilter}
                   years={years}
                   months={months}
                 />
@@ -2454,11 +2514,9 @@ export default function VisitsRoomsTab({
                     {money(selectedVilla.revenue)} revenue
                   </div>
                   <div style={{ marginTop: 14 }}>
-                    <ModalFilterBar
-                      year={villaYear}
-                      month={villaMonth}
-                      onYearChange={setVillaYear}
-                      onMonthChange={setVillaMonth}
+                    <DateFilterBar
+                      value={villaModalFilter}
+                      onChange={setVillaModalFilter}
                       years={years}
                       months={months}
                     />
