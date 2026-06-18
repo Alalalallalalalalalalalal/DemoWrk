@@ -1371,10 +1371,10 @@ def villa_stats(
         GROUP BY villa_name, bedroom_count
         ORDER BY bookings DESC, villa_name, bedroom_count NULLS LAST
     """, filter_params(year, month, date, start_date, end_date))
-
 @router.get("/villa-monthly")
 def villa_monthly(
     villa: str = Query(...),
+    group_by: str = Query(default="month", pattern="^(month|year)$"),
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
     date: date | None = Query(default=None),
@@ -1382,6 +1382,21 @@ def villa_monthly(
     end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
+    if group_by == "year":
+        select_clause = """
+          EXTRACT(YEAR FROM check_in_date)::int AS year,
+          EXTRACT(YEAR FROM check_in_date)::int AS sort_key,
+        """
+        group_clause = "year, sort_key"
+        order_clause = "sort_key"
+    else:
+        select_clause = """
+          TO_CHAR(check_in_date, 'Mon') AS month,
+          EXTRACT(MONTH FROM check_in_date)::int AS sort_key,
+        """
+        group_clause = "month, sort_key"
+        order_clause = "sort_key"
+
     return rows(db, f"""
         WITH booking_rows AS (
             SELECT
@@ -1411,13 +1426,12 @@ def villa_monthly(
             GROUP BY f.conf_code
         )
         SELECT
-          TO_CHAR(check_in_date, 'Mon') AS month,
-          EXTRACT(MONTH FROM check_in_date)::int AS month_num,
+          {select_clause}
           COUNT(*) AS bookings,
           COALESCE(SUM(revenue), 0) AS revenue
         FROM booking_rows
-        GROUP BY month, month_num
-        ORDER BY month_num
+        GROUP BY {group_clause}
+        ORDER BY {order_clause}
     """, {"villa": villa, **filter_params(year, month, date, start_date, end_date)})
 
 @router.get("/bookings-by-bedroom")

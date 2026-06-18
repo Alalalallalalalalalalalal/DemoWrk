@@ -951,30 +951,6 @@ export default function VisitsRoomsTab({
   }, [villaTableFilters, topView]);
 
   useEffect(() => {
-    if (!selectedVillaName || topView !== "overall") return;
-    let cancelled = false;
-    async function loadSelectedVillaMonthly() {
-      try {
-        const data = await analyticsApi.visitsRoomsDashboard({
-          villa: selectedVillaName,
-          ...selectedVillaChartFilters,
-        });
-        if (cancelled) return;
-        setVillaMonthlyData(
-          Array.isArray(data?.villa_monthly) ? data.villa_monthly : [],
-        );
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) setVillaMonthlyData([]);
-      }
-    }
-    loadSelectedVillaMonthly();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedVillaName, selectedVillaChartFilters, topView]);
-
-  useEffect(() => {
     if (topView !== "overall") return;
     let cancelled = false;
     async function loadBedroomCharts() {
@@ -1020,6 +996,38 @@ export default function VisitsRoomsTab({
     };
   }, [monthlyChartFilters, topView]);
 
+  const [villaMonthlyGroupBy, setVillaMonthlyGroupBy] = useState("month");
+
+  useEffect(() => {
+    if (!selectedVillaName || topView !== "overall") return;
+    let cancelled = false;
+    async function loadSelectedVillaMonthly() {
+      try {
+        const data = await analyticsApi.visitsRoomsDashboard({
+          villa: selectedVillaName,
+          group_by: villaMonthlyGroupBy,
+          ...selectedVillaChartFilters,
+        });
+        if (cancelled) return;
+        setVillaMonthlyData(
+          Array.isArray(data?.villa_monthly) ? data.villa_monthly : [],
+        );
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) setVillaMonthlyData([]);
+      }
+    }
+    loadSelectedVillaMonthly();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    selectedVillaName,
+    selectedVillaChartFilters,
+    villaMonthlyGroupBy,
+    topView,
+  ]);
+
   const tableVillas = villaTableData;
 
   const filteredTableVillas = useMemo(() => {
@@ -1028,12 +1036,32 @@ export default function VisitsRoomsTab({
   }, [tableVillas, villaTableSearch, villaTableSortKey, villaTableSortDir]);
 
   const chartVillas = villaChartData;
-  const mostVilla = chartVillas[0];
-  const leastVilla = chartVillas.length
-    ? [...chartVillas].sort(
-        (a, b) => Number(a.bookings ?? 0) - Number(b.bookings ?? 0),
-      )[0]
+
+  const villaBookingCount = (v) => Number(v?.bookings ?? 0);
+
+  const bookingCounts = chartVillas.map(villaBookingCount);
+  const positiveBookingCounts = bookingCounts.filter((n) => n > 0);
+
+  const mostBookingValue = bookingCounts.length
+    ? Math.max(...bookingCounts)
     : null;
+
+  const leastBookingValue = positiveBookingCounts.length
+    ? Math.min(...positiveBookingCounts)
+    : null;
+
+  const mostVillaTies =
+    mostBookingValue == null
+      ? []
+      : chartVillas.filter((v) => villaBookingCount(v) === mostBookingValue);
+
+  const leastVillaTies =
+    leastBookingValue == null
+      ? []
+      : chartVillas.filter((v) => villaBookingCount(v) === leastBookingValue);
+
+  const mostVilla = mostVillaTies[0] ?? null;
+  const leastVilla = leastVillaTies[0] ?? null;
 
   const selectedVilla =
     tableVillas.find((v) => v.villa_name === selectedVillaName) ??
@@ -1285,7 +1313,28 @@ export default function VisitsRoomsTab({
   const villaBookingFilename = `${safeFilePart(selectedVillaName)}_bookings_${safeFilePart(dateFilterFilePart(villaModalFilter))}_${today}`;
 
   // ─────────────────────────────────────────────────────────────────────────
+  const [villaChartLimit, setVillaChartLimit] = useState("15");
 
+  const visibleVillaChartData = useMemo(() => {
+    if (villaChartLimit === "All") return chartVillas;
+    return chartVillas.slice(0, Number(villaChartLimit));
+  }, [chartVillas, villaChartLimit]);
+
+  //---------------------
+
+  const [tieModalOpen, setTieModalOpen] = useState(false);
+  const [tieModalTitle, setTieModalTitle] = useState("");
+  const [tieModalRows, setTieModalRows] = useState([]);
+
+  const openTieModal = (title, rows) => {
+    setTieModalTitle(title);
+    setTieModalRows(rows);
+    setTieModalOpen(true);
+  };
+
+  ///--------------
+
+  /// ----------
   return (
     <div className="dashboard-section">
       {/* ── Top section: header + view toggle ──────────────────────────────── */}
@@ -1393,7 +1442,17 @@ export default function VisitsRoomsTab({
           {/* Villa charts */}
           <Card
             title="Bookings by Villa"
-            action={<ChartInfo id="bookingsByVilla" />}
+            action={
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <Select
+                  label="Show"
+                  value={villaChartLimit}
+                  onChange={setVillaChartLimit}
+                  options={["10", "15", "30", "40", "50", "All"]}
+                />
+                <ChartInfo id="bookingsByVilla" />
+              </div>
+            }
           >
             <DateFilterBar
               value={villaChartFilter}
@@ -1404,13 +1463,13 @@ export default function VisitsRoomsTab({
             <div style={{ overflowX: "auto" }}>
               <div
                 style={{
-                  minWidth: Math.max(chartVillas.length * 60, 420),
+                  minWidth: Math.max(visibleVillaChartData.length * 60, 420),
                   height: 320,
                 }}
               >
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
-                    data={chartVillas}
+                    data={visibleVillaChartData}
                     margin={{ top: 8, right: 16, bottom: 90, left: 16 }}
                   >
                     <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
@@ -1458,9 +1517,17 @@ export default function VisitsRoomsTab({
             sub="Click through to ML Insights"
           >
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              {[mostVilla, leastVilla].map((villa, i) => (
+              {[
+                { villa: mostVilla, label: "Most Booked", ties: mostVillaTies },
+                {
+                  villa: leastVilla,
+                  label: "Least Booked",
+                  ties: leastVillaTies,
+                },
+              ].map(({ villa, label, ties }, i) => (
                 <button
-                  key={`${villa?.villa_name}-${i}`}
+                  key={`${label}-${villa?.villa_name ?? i}`}
+                  type="button"
                   onClick={() => {
                     if (villa?.villa_name) onVillaSelect(villa.villa_name);
                   }}
@@ -1474,9 +1541,7 @@ export default function VisitsRoomsTab({
                     cursor: "pointer",
                   }}
                 >
-                  <div className="dashboard-eyebrow">
-                    {i === 0 ? "Most Booked" : "Least Booked"}
-                  </div>
+                  <div className="dashboard-eyebrow">{label}</div>
                   <div
                     style={{
                       fontFamily: "'Cormorant Garamond', serif",
@@ -1490,6 +1555,24 @@ export default function VisitsRoomsTab({
                     {fmt(villa?.bookings)} bookings · {bedroomsLabel(villa)}{" "}
                     bedrooms
                   </div>
+
+                  {ties.length > 1 && (
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openTieModal(`${label} Villas`, ties);
+                      }}
+                      style={{
+                        marginTop: 8,
+                        color: C.accent,
+                        fontSize: 11,
+                        fontWeight: 900,
+                        cursor: "pointer",
+                      }}
+                    >
+                      View all {ties.length} tied villas
+                    </div>
+                  )}
                 </button>
               ))}
             </div>
@@ -1721,6 +1804,23 @@ export default function VisitsRoomsTab({
                     style={{
                       display: "flex",
                       justifyContent: "flex-end",
+                      gap: 10,
+                      marginBottom: 2,
+                    }}
+                  >
+                    <Select
+                      label="Group by"
+                      value={villaMonthlyGroupBy}
+                      onChange={setVillaMonthlyGroupBy}
+                      options={["month", "year"]}
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      gap: 10,
                       marginBottom: 12,
                     }}
                   >
@@ -1731,10 +1831,9 @@ export default function VisitsRoomsTab({
                       months={months}
                     />
                   </div>
-
                   <Card
-                    title={`${selectedVilla.villa_name} — Monthly Bookings`}
-                    sub="Selected villa drill-down"
+                    title={`${selectedVilla.villa_name} — ${villaMonthlyGroupBy === "year" ? "Yearly" : "Monthly"} Bookings`}
+                    sub={`Selected villa drill-down by ${villaMonthlyGroupBy}`}
                     action={<ChartInfo id="villaMonthlyBookings" />}
                   >
                     <div style={{ height: 200 }}>
@@ -1745,11 +1844,16 @@ export default function VisitsRoomsTab({
                         >
                           <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
                           <XAxis
-                            dataKey="month"
+                            dataKey={
+                              villaMonthlyGroupBy === "year" ? "year" : "month"
+                            }
                             stroke={AX}
                             fontSize={11}
                             label={{
-                              value: "Month",
+                              value:
+                                villaMonthlyGroupBy === "year"
+                                  ? "Year"
+                                  : "Month",
                               position: "insideBottom",
                               offset: -10,
                               style: LABEL_STYLE,
@@ -1780,8 +1884,8 @@ export default function VisitsRoomsTab({
                   </Card>
 
                   <Card
-                    title={`${selectedVilla.villa_name} — Rental Revenue`}
-                    sub="Monthly villa revenue"
+                    title={`${selectedVilla.villa_name} — ${villaMonthlyGroupBy === "year" ? "Yearly" : "Monthly"} Rental Revenue`}
+                    sub={`${villaMonthlyGroupBy === "year" ? "Yearly" : "Monthly"} villa revenue`}
                     action={<ChartInfo id="villaMonthlyRevenue" />}
                   >
                     <div style={{ height: 200 }}>
@@ -1792,11 +1896,16 @@ export default function VisitsRoomsTab({
                         >
                           <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
                           <XAxis
-                            dataKey="month"
+                            dataKey={
+                              villaMonthlyGroupBy === "year" ? "year" : "month"
+                            }
                             stroke={AX}
                             fontSize={11}
                             label={{
-                              value: "Month",
+                              value:
+                                villaMonthlyGroupBy === "year"
+                                  ? "Year"
+                                  : "Month",
                               position: "insideBottom",
                               offset: -10,
                               style: LABEL_STYLE,
@@ -2939,6 +3048,126 @@ export default function VisitsRoomsTab({
                     </div>
                   )}
                 </div>
+              </aside>
+            </div>
+          )}
+
+          {/* ── Tied villas modal ─────────────────────────────────────────── */}
+          {tieModalOpen && (
+            <div
+              onClick={() => setTieModalOpen(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(8, 18, 32, 0.48)",
+                zIndex: 1000,
+                display: "flex",
+                justifyContent: "flex-end",
+              }}
+            >
+              <aside
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  width: "min(620px, 96vw)",
+                  height: "100vh",
+                  background: C.bg,
+                  borderLeft: `1px solid ${C.border}`,
+                  overflowY: "auto",
+                  padding: 26,
+                }}
+              >
+                <button onClick={() => setTieModalOpen(false)}>
+                  <X size={18} />
+                </button>
+
+                <div className="dashboard-eyebrow">Tied villas</div>
+                <h2 className="dashboard-card-title">{tieModalTitle}</h2>
+
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 12,
+                  }}
+                >
+                  <thead>
+                    <tr className="dashboard-eyebrow">
+                      {[
+                        "Villa",
+                        "Bedrooms",
+                        "Bookings",
+                        "Nights",
+                        "Revenue",
+                      ].map((h) => (
+                        <th
+                          key={h}
+                          style={{
+                            textAlign: h === "Villa" ? "left" : "right",
+                            padding: 10,
+                          }}
+                        >
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {tieModalRows.map((villa) => (
+                      <tr
+                        key={villa.villa_name}
+                        onClick={() => {
+                          setTieModalOpen(false);
+                          openVillaModal(villa.villa_name);
+                        }}
+                        style={{
+                          borderTop: `1px solid ${C.border}`,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <td style={{ padding: 10, color: C.text }}>
+                          {villa.villa_name}
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            textAlign: "right",
+                            color: C.soft,
+                          }}
+                        >
+                          {villaBedroomLabel(villa)}
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            textAlign: "right",
+                            color: C.soft,
+                          }}
+                        >
+                          {fmt(villa.bookings)}
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            textAlign: "right",
+                            color: C.soft,
+                          }}
+                        >
+                          {fmt(villa.total_nights)}
+                        </td>
+                        <td
+                          style={{
+                            padding: 10,
+                            textAlign: "right",
+                            color: C.soft,
+                          }}
+                        >
+                          {money(villa.revenue)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </aside>
             </div>
           )}
