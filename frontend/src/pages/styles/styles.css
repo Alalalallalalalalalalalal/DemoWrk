@@ -279,7 +279,7 @@
   .dashboard-grid-3 {
     grid-template-columns: 1fr;
   }
-  
+
   .dashboard-grid-equal {
     grid-template-columns: 1fr;
   }
@@ -328,4 +328,57 @@
 
 .info-btn:hover::after {
   display: block;
+}
+
+/* Hero KPI band tooltips — separate, wider rule. The Hero band's six
+   tiles sit in a tight row near the top of the page, narrower than the
+   main cards below, so the default .info-btn::after (220px, anchored to
+   the right of the icon) was overflowing past the tile/page edge and
+   getting clipped. This rule is scoped to .hero-info-btn only, so the
+   main cards keep using the original .info-btn::after unchanged. */
+.hero-info-btn {
+  position: relative;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+.hero-info-btn::after {
+  content: attr(data-tip);
+  display: none;
+  position: absolute;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1B2632;
+  color: #EEE9DF;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: 8px;
+  width: min(260px, calc(100vw - 24px));
+  z-index: 999;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: normal;
+  pointer-events: none;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
+.hero-info-btn:hover::after {
+  display: block;
+}
+
+/* The first and last Hero tiles sit at the very edges of the row, so a
+   centered tooltip can still clip there. Apply this modifier to just
+   those two icons. */
+.hero-info-btn.hero-info-btn--align-left::after {
+  left: 0;
+  transform: none;
+}
+
+.hero-info-btn.hero-info-btn--align-right::after {
+  left: auto;
+  right: 0;
+  transform: none;
 }
