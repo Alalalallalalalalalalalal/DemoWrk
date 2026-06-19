@@ -14,7 +14,7 @@
 //   reversed    -> reversal/write-off line
 //
 // DATA CONTRACT from financeApi.categoryCompBreakdown():
-//   [{ section, category, villaPaymentType, bucket, amount, transactions, uniqueAccounts }]
+//   [{ section, category, PaymentType, bucket, amount, transactions, uniqueAccounts }]
 
 import { useMemo, useState } from "react";
 import { Info, X } from "lucide-react";
@@ -252,7 +252,7 @@ export default function CategoryCompBreakdown({ data, onRowClick }) {
     const bySection = rows.filter((r) => r.section === section);
     if (villaStayFilter === "overall") return bySection;
     const match = villaStayFilter === "paid" ? "Paid" : "Free";
-    return bySection.filter((r) => r.villaPaymentType === match);
+    return bySection.filter((r) => r.PaymentType === match);
   }, [data, section, villaStayFilter]);
 
   const categoryRows = useMemo(() => {

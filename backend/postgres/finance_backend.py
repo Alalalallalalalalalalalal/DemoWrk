@@ -95,7 +95,7 @@ def category_comp_breakdown():
                 ELSE 'Services'
             END AS section,
             COALESCE(NULLIF(TRIM(f.transaction_category), ''), 'Uncategorized') AS category,
-            COALESCE(NULLIF(TRIM(f.villa_payment_type), ''), 'Unknown') AS villa_payment_type,
+            COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown') AS payment_type,
             CASE
                 WHEN f.transaction_flow = 'Reversal' THEN 'reversed'
                 WHEN f.transaction_flow != 'Charge' THEN 'other'
@@ -123,7 +123,7 @@ def category_comp_breakdown():
         {
             "section": r["section"],
             "category": r["category"],
-            "villaPaymentType": r["villa_payment_type"],
+            "PaymentType": r["payment_type"],
             "bucket": r["bucket"],
             "amount": float(r["amount"] or 0),
             "transactions": r["transactions"],
