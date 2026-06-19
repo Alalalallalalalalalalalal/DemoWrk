@@ -138,4 +138,7 @@ export const analyticsApi = {
         ...params,
       }),
     ),
+
+  villaSourceBedroomBreakdown: (params = {}) =>
+    fetchData(withQuery("/analytics/villa-source-bedroom-breakdown", params)),
 };
