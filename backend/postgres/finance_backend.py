@@ -81,34 +81,37 @@ def finance_overview():
         "totalTransactions": int(row[5]   or 0),
     }
 
-
 @router.get("/category-comp-breakdown")
 def category_comp_breakdown():
     AMENITY_CATS = (
-        "F&B","Golf","Spa & Beauty","Tennis","Boutique",
-        "Water Sports","Equipment","Cart Rental","Events"
+        "F&B", "Golf", "Spa & Beauty", "Tennis", "Boutique",
+        "Water Sports", "Equipment", "Cart Rental", "Events",
     )
     sql = text("""
         SELECT
             CASE
-                WHEN transaction_category = 'Villa' THEN 'Villa'
-                WHEN transaction_category = ANY(:amenity_cats) THEN 'Amenities'
+                WHEN f.transaction_category = 'Villa' THEN 'Villa'
+                WHEN f.transaction_category = ANY(:amenity_cats) THEN 'Amenities'
                 ELSE 'Services'
             END AS section,
-            COALESCE(NULLIF(TRIM(transaction_category), ''), 'Uncategorized') AS category,
-            COALESCE(NULLIF(TRIM(villa_payment_type), ''), 'Unknown') AS villa_payment_type,
+            COALESCE(NULLIF(TRIM(f.transaction_category), ''), 'Uncategorized') AS category,
+            COALESCE(NULLIF(TRIM(f.villa_payment_type), ''), 'Unknown') AS villa_payment_type,
             CASE
-                WHEN transaction_flow = 'Reversal' THEN 'reversed'
-                WHEN transaction_flow != 'Charge' THEN 'other'
-                WHEN transaction_category = 'Villa' THEN
-                    CASE WHEN villa_payment_type = 'Free' THEN 'given_away' ELSE 'collected' END
-                ELSE
-                    CASE WHEN payment_type = 'Free' THEN 'given_away' ELSE 'collected' END
+                WHEN f.transaction_flow = 'Reversal' THEN 'reversed'
+                WHEN f.transaction_flow != 'Charge' THEN 'other'
+                WHEN LOWER(
+                    COALESCE(NULLIF(TRIM(f.payment_type), ''), NULLIF(TRIM(bs.payment_type), ''), '')
+                ) ~ '(comp|free|complimentary|gratis|no charge)'
+                    THEN 'given_away'
+                ELSE 'collected'
             END AS bucket,
-            SUM(amount) AS amount,
+            SUM(f.amount) AS amount,
             COUNT(*) AS transactions,
-            COUNT(DISTINCT member_number) AS unique_accounts
-        FROM folios
+            COUNT(DISTINCT f.member_number) AS unique_accounts
+        FROM folios f
+        LEFT JOIN business_source bs ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
+        WHERE f.transaction_category IS NOT NULL
+          AND f.transaction_category <> 'Laundry'
         GROUP BY 1,2,3,4
         ORDER BY 1,2,3,4
     """)
