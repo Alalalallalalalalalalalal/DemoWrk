@@ -2577,13 +2577,18 @@ def villa_source_breakdown(
     Returns per-villa booking counts, nights, and revenue split by source.
     Each row carries:
       - villa_name
-      - source           (raw folio source value; NULL → 'Unknown')
-      - payment_type     (from folios.payment_type or business_source lookup)
-      - is_free          (true when payment_type ILIKE '%comp%' OR '%free%' OR '%complimentary%')
+      - source
+      - payment_type
+      - is_free
       - bookings
       - total_nights
-      - revenue          (0 for free bookings — amount is recorded but flagged)
-      - free_value       (the monetary value even for comp bookings, for reporting)
+      - revenue
+      - free_value
+      - total_value
+      - unique_members
+      - avg_bedrooms          ← NEW
+      - bedroom_distribution  ← NEW  JSON string {"1": 4, "2": 10, ...}
+      - most_common_bedrooms  ← NEW  most-booked bedroom count for this slice
     """
     return rows(db, f"""
         WITH booking_rows AS (
@@ -2598,6 +2603,7 @@ def villa_source_breakdown(
                 )                                                    AS payment_type,
                 MAX(f.member_number)                                 AS member_number,
                 MAX(f.check_out_date - f.check_in_date)              AS nights,
+                MAX(f.bedroom_count)                                 AS bedroom_count,
                 SUM(
                     CASE
                         WHEN f.description ILIKE '%villa%'
@@ -2634,35 +2640,78 @@ def villa_source_breakdown(
                     ELSE FALSE
                 END AS is_free
             FROM booking_rows
+        ),
+        bedroom_dist AS (
+            SELECT
+                villa_name,
+                source,
+                payment_type,
+                is_free,
+                jsonb_object_agg(
+                    COALESCE(bedroom_count::text, 'Unknown'),
+                    cnt
+                )::text AS bedroom_distribution,
+                (
+                    SELECT bedroom_count
+                    FROM (
+                        SELECT bedroom_count, COUNT(*) AS c
+                        FROM tagged t2
+                        WHERE t2.villa_name = t.villa_name
+                          AND t2.source = t.source
+                          AND t2.payment_type = t.payment_type
+                          AND t2.is_free = t.is_free
+                        GROUP BY bedroom_count
+                        ORDER BY c DESC NULLS LAST
+                        LIMIT 1
+                    ) sub
+                ) AS most_common_bedrooms
+            FROM (
+                SELECT
+                    villa_name, source, payment_type, is_free,
+                    bedroom_count, COUNT(*)::int AS cnt
+                FROM tagged
+                GROUP BY villa_name, source, payment_type, is_free, bedroom_count
+            ) t
+            GROUP BY villa_name, source, payment_type, is_free
         )
         SELECT
-            villa_name,
-            source,
-            payment_type,
-            is_free,
+            tg.villa_name,
+            tg.source,
+            tg.payment_type,
+            tg.is_free,
             COUNT(*)::int                                       AS bookings,
-            COALESCE(SUM(nights), 0)::int                      AS total_nights,
+            COALESCE(SUM(tg.nights), 0)::int                   AS total_nights,
             ROUND(
-                SUM(CASE WHEN NOT is_free THEN raw_amount ELSE 0 END)::numeric,
+                SUM(CASE WHEN NOT tg.is_free THEN tg.raw_amount ELSE 0 END)::numeric,
                 2
             )                                                   AS revenue,
-            ROUND(SUM(raw_amount)::numeric, 2)                 AS total_value,
+            ROUND(SUM(tg.raw_amount)::numeric, 2)              AS total_value,
             ROUND(
-                SUM(CASE WHEN is_free THEN raw_amount ELSE 0 END)::numeric,
+                SUM(CASE WHEN tg.is_free THEN tg.raw_amount ELSE 0 END)::numeric,
                 2
             )                                                   AS free_value,
-            COUNT(DISTINCT member_number)::int                  AS unique_members
-        FROM tagged
-        GROUP BY villa_name, source, payment_type, is_free
-        ORDER BY villa_name, is_free, bookings DESC
+            COUNT(DISTINCT tg.member_number)::int               AS unique_members,
+            ROUND(AVG(tg.bedroom_count)::numeric, 1)            AS avg_bedrooms,
+            bd.bedroom_distribution,
+            bd.most_common_bedrooms
+        FROM tagged tg
+        LEFT JOIN bedroom_dist bd
+            ON bd.villa_name    = tg.villa_name
+           AND bd.source        = tg.source
+           AND bd.payment_type  = tg.payment_type
+           AND bd.is_free       = tg.is_free
+        GROUP BY tg.villa_name, tg.source, tg.payment_type, tg.is_free,
+                 bd.bedroom_distribution, bd.most_common_bedrooms
+        ORDER BY tg.villa_name, tg.is_free, bookings DESC
     """, filter_params(year, month, date, start_date, end_date))
-
-
+ 
+ 
 @router.get("/villa-source-bookings")
 def villa_source_bookings(
     villa: str = Query(...),
     source: str | None = Query(default=None),
     is_free: bool | None = Query(default=None),
+    bedrooms: int | None = Query(default=None),       # ← NEW filter
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
     date: date | None = Query(default=None),
@@ -2672,12 +2721,12 @@ def villa_source_bookings(
 ):
     """
     Drilldown: every booking for a specific villa, optionally filtered by
-    source and/or paid/free flag. Returns full folio + member data.
+    source, paid/free flag, and/or bedroom count.
     """
     source_filter = ""
     if source is not None and source != "All":
         source_filter = "AND COALESCE(NULLIF(TRIM(f.source), ''), 'Unknown') = :source_val"
-
+ 
     free_filter = ""
     if is_free is not None:
         free_filter = """
@@ -2713,14 +2762,17 @@ def villa_source_bookings(
                 END
             ) = :is_free_val
         """
-
+ 
+    bedroom_filter = "AND f.bedroom_count = :bedrooms_val" if bedrooms is not None else ""
+ 
     params = {
         "villa": villa,
         "source_val": source,
         "is_free_val": is_free,
+        "bedrooms_val": bedrooms,
         **filter_params(year, month, date, start_date, end_date),
     }
-
+ 
     return rows(db, f"""
         WITH booking_rows AS (
             SELECT
@@ -2761,7 +2813,6 @@ def villa_source_bookings(
                     'Unknown'
                 )                                                        AS payment_type,
                 MAX(f.reservation_status)                               AS reservation_status,
-                -- Revenue: full amount always recorded
                 SUM(
                     CASE
                         WHEN f.description ILIKE '%villa%'
@@ -2831,6 +2882,7 @@ def villa_source_bookings(
               {date_filter_sql("f")}
               {source_filter}
               {free_filter}
+              {bedroom_filter}
             GROUP BY f.conf_code
         )
         SELECT
@@ -2856,11 +2908,11 @@ def villa_source_bookings(
         FROM booking_rows br
         ORDER BY br.check_in_date DESC NULLS LAST
     """, params)
-
-
-@router.get("/villa-sources")
-def villa_sources(
-    villa: str | None = Query(default=None),
+ 
+ 
+# ─── NEW endpoint: bedroom × source aggregate ────────────────────────────────
+@router.get("/villa-source-bedroom-breakdown")
+def villa_source_bedroom_breakdown(
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
     date: date | None = Query(default=None),
@@ -2869,64 +2921,79 @@ def villa_sources(
     db: Session = Depends(get_db),
 ):
     """
-    Returns the distinct sources (and their paid/free classification)
-    available for a given villa (or all villas if villa is None).
-    Useful for populating filter dropdowns.
+    Cross-tab of bedroom_count × source × paid/free.
+    Powers the Bedroom Intelligence card.
+    Each row: bedroom_count, source, is_free, bookings, total_nights,
+              revenue, free_value, unique_members
     """
-    villa_filter = "AND f.villa_name = :villa" if villa else ""
-    params = {"villa": villa, **filter_params(year, month, date, start_date, end_date)}
-
     return rows(db, f"""
-        SELECT DISTINCT
-            COALESCE(NULLIF(TRIM(f.source), ''), 'Unknown')    AS source,
-            COALESCE(
-                NULLIF(TRIM(f.payment_type), ''),
-                NULLIF(TRIM(bs.payment_type), ''),
-                'Unknown'
-            )                                                   AS payment_type,
-            CASE
-                WHEN LOWER(COALESCE(
-                        NULLIF(TRIM(f.payment_type), ''),
-                        NULLIF(TRIM(bs.payment_type), ''),
-                        'Unknown'
-                     )) ILIKE '%comp%'
-                  OR LOWER(COALESCE(
-                        NULLIF(TRIM(f.payment_type), ''),
-                        NULLIF(TRIM(bs.payment_type), ''),
-                        'Unknown'
-                     )) ILIKE '%free%'
-                  OR LOWER(COALESCE(
-                        NULLIF(TRIM(f.payment_type), ''),
-                        NULLIF(TRIM(bs.payment_type), ''),
-                        'Unknown'
-                     )) ILIKE '%complimentary%'
-                  OR LOWER(COALESCE(
-                        NULLIF(TRIM(f.payment_type), ''),
-                        NULLIF(TRIM(bs.payment_type), ''),
-                        'Unknown'
-                     )) ILIKE '%gratis%'
-                  OR LOWER(COALESCE(
-                        NULLIF(TRIM(f.payment_type), ''),
-                        NULLIF(TRIM(bs.payment_type), ''),
-                        'Unknown'
-                     )) ILIKE '%no charge%'
-                THEN TRUE
-                ELSE FALSE
-            END                                                 AS is_free
-        FROM folios f
-        LEFT JOIN business_source bs
-            ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
-        WHERE f.conf_code IS NOT NULL
-          AND f.villa_name IS NOT NULL
-          AND f.check_in_date IS NOT NULL
-          AND f.check_out_date IS NOT NULL
-          AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
-                'cancelled', 'canceled', 'no-show'
-          )
-          {date_filter_sql("f")}
-          {villa_filter}
-        ORDER BY source
-    """, params)
+        WITH booking_rows AS (
+            SELECT
+                f.conf_code,
+                f.bedroom_count,
+                COALESCE(NULLIF(TRIM(MAX(f.source)), ''), 'Unknown') AS source,
+                COALESCE(
+                    NULLIF(TRIM(MAX(f.payment_type)), ''),
+                    NULLIF(TRIM(MAX(bs.payment_type)), ''),
+                    'Unknown'
+                )                                                    AS payment_type,
+                MAX(f.member_number)                                 AS member_number,
+                MAX(f.check_out_date - f.check_in_date)              AS nights,
+                SUM(
+                    CASE
+                        WHEN f.description ILIKE '%villa%'
+                          OR f.description ILIKE '%room%'
+                          OR f.description ILIKE '%rental%'
+                          OR f.description ILIKE '%accommodation%'
+                        THEN COALESCE(f.amount, 0)
+                        ELSE 0
+                    END
+                )                                                    AS raw_amount
+            FROM folios f
+            LEFT JOIN business_source bs
+                ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
+            WHERE f.conf_code IS NOT NULL
+              AND f.villa_name IS NOT NULL
+              AND f.check_in_date IS NOT NULL
+              AND f.check_out_date IS NOT NULL
+              AND f.bedroom_count IS NOT NULL
+              AND COALESCE(LOWER(f.reservation_status), '') NOT IN (
+                    'cancelled', 'canceled', 'no-show'
+              )
+              {date_filter_sql("f")}
+            GROUP BY f.conf_code, f.bedroom_count
+        ),
+        tagged AS (
+            SELECT *,
+                CASE
+                    WHEN LOWER(payment_type) ILIKE '%comp%'
+                      OR LOWER(payment_type) ILIKE '%free%'
+                      OR LOWER(payment_type) ILIKE '%complimentary%'
+                      OR LOWER(payment_type) ILIKE '%gratis%'
+                      OR LOWER(payment_type) ILIKE '%no charge%'
+                    THEN TRUE
+                    ELSE FALSE
+                END AS is_free
+            FROM booking_rows
+        )
+        SELECT
+            bedroom_count,
+            source,
+            is_free,
+            COUNT(*)::int                                         AS bookings,
+            COALESCE(SUM(nights), 0)::int                        AS total_nights,
+            ROUND(
+                SUM(CASE WHEN NOT is_free THEN raw_amount ELSE 0 END)::numeric, 2
+            )                                                     AS revenue,
+            ROUND(
+                SUM(CASE WHEN is_free THEN raw_amount ELSE 0 END)::numeric, 2
+            )                                                     AS free_value,
+            COUNT(DISTINCT member_number)::int                    AS unique_members
+        FROM tagged
+        GROUP BY bedroom_count, source, is_free
+        ORDER BY bedroom_count NULLS LAST, bookings DESC
+    """, filter_params(year, month, date, start_date, end_date))
+ 
     
 
 #Demographics tables

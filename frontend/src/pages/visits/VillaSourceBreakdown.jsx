@@ -1,6 +1,5 @@
 /**
- * VillaSourceBreakdown.jsx
-
+ * VillaSourceBreakdown.jsx  — with bedroom intelligence
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -24,13 +23,14 @@ import {
   BedDouble,
   TrendingUp,
   Filter,
+  LayoutGrid,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { analyticsApi } from "../../api/analytics";
 
-// ─── Design tokens (mirrors VisitsRoomsTab) ───────────────────────────────
+// ─── Design tokens ────────────────────────────────────────────────────────────
 const C = {
   bg: "var(--dashboard-card)",
   panel: "var(--dashboard-panel)",
@@ -60,11 +60,21 @@ const LABEL_STYLE = {
   letterSpacing: "0.04em",
 };
 
-// Paid = deep blue, Free / comp = flame/amber
 const COLOR_PAID = "var(--dashboard-deep-blue)";
 const COLOR_FREE = "var(--dashboard-flame)";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
+// bedroom palette (7 colours cycle)
+const BED_COLORS = [
+  "var(--dashboard-deep-blue)",
+  "var(--dashboard-flame)",
+  "var(--dashboard-truffle)",
+  "#6ab0c8",
+  "#8ac47a",
+  "#c4a04a",
+  "#a47ac4",
+];
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
 const money = (v) =>
   v == null
@@ -86,11 +96,10 @@ const dateFilterLabel = (filter) => {
   if (!filter) return "All available data";
   if (filter.mode === "day")
     return filter.date ? `Specific day: ${filter.date}` : "All available data";
-  if (filter.mode === "range") {
+  if (filter.mode === "range")
     return filter.startDate && filter.endDate
       ? `Date range: ${filter.startDate} to ${filter.endDate}`
       : "All available data";
-  }
   const year = filter.year === "All" ? "All years" : `Year: ${filter.year}`;
   const month =
     filter.month === "All" ? "All months" : `Month: ${filter.month}`;
@@ -196,7 +205,7 @@ const sortRows = (rows, key, dir = "asc") => {
   });
 };
 
-// ─── Sub-components ───────────────────────────────────────────────────────
+// ─── Sub-components ───────────────────────────────────────────────────────────
 function Select({ label, value, onChange, options }) {
   const optLabel = (o) => {
     if (o === "All") return `All ${label}s`;
@@ -244,7 +253,6 @@ function DateFilterBar({ value, onChange, years, months }) {
     color: C.text,
     fontSize: 12,
   };
-
   return (
     <div
       style={{
@@ -260,7 +268,6 @@ function DateFilterBar({ value, onChange, years, months }) {
         onChange={(mode) => update({ mode })}
         options={["ym", "day", "range"]}
       />
-
       {value.mode === "ym" && (
         <>
           <Select
@@ -277,7 +284,6 @@ function DateFilterBar({ value, onChange, years, months }) {
           />
         </>
       )}
-
       {value.mode === "day" && (
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span className="dashboard-eyebrow">Date</span>
@@ -289,7 +295,6 @@ function DateFilterBar({ value, onChange, years, months }) {
           />
         </label>
       )}
-
       {value.mode === "range" && (
         <>
           <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -390,7 +395,6 @@ function ExportMenu({ rows, filenameBase, disabled }) {
   );
 }
 
-// ─── Source-type pill toggle ──────────────────────────────────────────────
 const VIEW_MODES = [
   { key: "overall", label: "Overall", icon: TrendingUp },
   { key: "paid", label: "Paid", icon: DollarSign },
@@ -440,7 +444,6 @@ function ViewToggle({ value, onChange }) {
   );
 }
 
-// ─── KPI tile ─────────────────────────────────────────────────────────────
 function KpiTile({
   icon: Icon,
   label,
@@ -607,6 +610,75 @@ function InlineLegend() {
         </span>
       ))}
     </div>
+  );
+}
+
+// ─── NEW: Bedroom Distribution mini-bar ───────────────────────────────────────
+function BedroomDistBar({ distribution }) {
+  if (!distribution)
+    return <span style={{ color: C.muted, fontSize: 11 }}>—</span>;
+  let parsed = {};
+  try {
+    parsed =
+      typeof distribution === "string"
+        ? JSON.parse(distribution)
+        : distribution;
+  } catch {
+    return null;
+  }
+  const entries = Object.entries(parsed).sort(
+    (a, b) => Number(a[0]) - Number(b[0]),
+  );
+  const total = entries.reduce((s, [, v]) => s + Number(v), 0);
+  if (!total) return null;
+  return (
+    <div
+      style={{
+        display: "flex",
+        height: 10,
+        borderRadius: 999,
+        overflow: "hidden",
+        gap: 1,
+        minWidth: 80,
+      }}
+    >
+      {entries.map(([bed, cnt], i) => (
+        <div
+          key={bed}
+          title={`${bed} bed: ${cnt} (${pct(cnt, total)})`}
+          style={{
+            width: `${(Number(cnt) / total) * 100}%`,
+            background: BED_COLORS[i % BED_COLORS.length],
+            minWidth: 4,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ─── NEW: Bedroom badge ───────────────────────────────────────────────────────
+function BedBadge({ count }) {
+  if (count == null) return null;
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        padding: "2px 7px",
+        borderRadius: 999,
+        fontSize: 10,
+        fontWeight: 800,
+        background: "rgba(30,80,150,0.08)",
+        color: C.accent,
+        border: `1px solid ${C.accent}`,
+        whiteSpace: "nowrap",
+      }}
+    >
+      <BedDouble size={9} />
+      {count} bed
+    </span>
   );
 }
 
@@ -797,8 +869,7 @@ function PortfolioSignals({
             }}
           >
             Based on: {periodText}. Paid revenue uses paid bookings only. Comp
-            value uses free/complimentary stays only. The total above adds the
-            two leading values for comparison.
+            value uses free/complimentary stays only.
           </div>
           <div style={{ marginTop: 16 }}>
             <MiniSplitBar paid={paid} free={comp} />
@@ -811,66 +882,54 @@ function PortfolioSignals({
               marginTop: 16,
             }}
           >
-            <button
-              type="button"
-              onClick={() =>
-                insights?.mostRevenue?.villa_name &&
-                onSelectVilla(insights.mostRevenue.villa_name)
-              }
-              style={{
-                borderTop: `1px solid ${C.border}`,
-                borderLeft: "none",
-                borderRight: "none",
-                borderBottom: "none",
-                paddingTop: 10,
-                background: "transparent",
-                textAlign: "left",
-                cursor: insights?.mostRevenue?.villa_name
-                  ? "pointer"
-                  : "default",
-              }}
-            >
-              <div className="dashboard-eyebrow">Highest Paid Revenue</div>
-              <div style={{ color: C.text, fontWeight: 850 }}>
-                {insights?.mostRevenue?.villa_name ?? "—"}
-              </div>
-              <div style={{ color: C.soft, fontSize: 12 }}>
-                {money(insights?.mostRevenue?.revenue)}
-              </div>
-              <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>
-                Paid bookings only
-              </div>
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                insights?.mostCompValue?.villa_name &&
-                onSelectVilla(insights.mostCompValue.villa_name)
-              }
-              style={{
-                borderTop: `1px solid ${C.border}`,
-                borderLeft: "none",
-                borderRight: "none",
-                borderBottom: "none",
-                paddingTop: 10,
-                background: "transparent",
-                textAlign: "left",
-                cursor: insights?.mostCompValue?.villa_name
-                  ? "pointer"
-                  : "default",
-              }}
-            >
-              <div className="dashboard-eyebrow">Highest Comp Value</div>
-              <div style={{ color: C.text, fontWeight: 850 }}>
-                {insights?.mostCompValue?.villa_name ?? "—"}
-              </div>
-              <div style={{ color: C.soft, fontSize: 12 }}>
-                {money(insights?.mostCompValue?.free_value)}
-              </div>
-              <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>
-                Free / comp stays only
-              </div>
-            </button>
+            {[
+              {
+                label: "Highest Paid Revenue",
+                data: insights?.mostRevenue,
+                valueKey: "revenue",
+                note: "Paid bookings only",
+              },
+              {
+                label: "Highest Comp Value",
+                data: insights?.mostCompValue,
+                valueKey: "free_value",
+                note: "Free / comp stays only",
+              },
+            ].map(({ label, data, valueKey, note }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() =>
+                  data?.villa_name && onSelectVilla(data.villa_name)
+                }
+                style={{
+                  borderTop: `1px solid ${C.border}`,
+                  borderLeft: "none",
+                  borderRight: "none",
+                  borderBottom: "none",
+                  paddingTop: 10,
+                  background: "transparent",
+                  textAlign: "left",
+                  cursor: data?.villa_name ? "pointer" : "default",
+                }}
+              >
+                <div className="dashboard-eyebrow">{label}</div>
+                <div style={{ color: C.text, fontWeight: 850 }}>
+                  {data?.villa_name ?? "—"}
+                </div>
+                <div style={{ color: C.soft, fontSize: 12 }}>
+                  {money(data?.[valueKey])}
+                </div>
+                {data?.most_common_bedrooms != null && (
+                  <div style={{ marginTop: 4 }}>
+                    <BedBadge count={data.most_common_bedrooms} />
+                  </div>
+                )}
+                <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>
+                  {note}
+                </div>
+              </button>
+            ))}
           </div>
         </div>
 
@@ -881,73 +940,714 @@ function PortfolioSignals({
             gap: 10,
           }}
         >
-          <SignalMetric
-            label="Most Booked"
-            villa={insights.mostBooked}
-            value={`${fmt(insights.mostBooked?.total_bookings)} bookings`}
-            split={splitFor(insights.mostBooked)}
-            tiedCount={insights.mostBookedTies?.length || 0}
-            sub="Highest total demand"
-            onViewAll={() =>
-              onOpenTies("Most Booked Villas", insights.mostBookedTies)
-            }
-            onClick={() =>
-              insights.mostBooked?.villa_name &&
-              onSelectVilla(insights.mostBooked.villa_name)
-            }
-          />
-          <SignalMetric
-            label="Least Booked"
-            villa={insights.leastBooked}
-            value={`${fmt(insights.leastBooked?.total_bookings)} bookings`}
-            split={splitFor(insights.leastBooked)}
-            tiedCount={insights.leastBookedTies?.length || 0}
-            sub="Lowest non-zero demand"
-            onViewAll={() =>
-              onOpenTies("Least Booked Villas", insights.leastBookedTies)
-            }
-            onClick={() =>
-              insights.leastBooked?.villa_name &&
-              onSelectVilla(insights.leastBooked.villa_name)
-            }
-          />
-          <SignalMetric
-            label="Most Paid"
-            villa={insights.mostPaid}
-            value={`${fmt(insights.mostPaid?.paid_bookings)} paid`}
-            split={splitFor(insights.mostPaid)}
-            tiedCount={insights.mostPaidTies?.length || 0}
-            sub="Highest paid booking count"
-            onViewAll={() =>
-              onOpenTies("Most Paid Villas", insights.mostPaidTies)
-            }
-            onClick={() =>
-              insights.mostPaid?.villa_name &&
-              onSelectVilla(insights.mostPaid.villa_name)
-            }
-          />
-          <SignalMetric
-            label="Most Free / Comp"
-            villa={insights.mostFree}
-            value={`${fmt(insights.mostFree?.free_bookings)} free/comp`}
-            split={splitFor(insights.mostFree)}
-            tiedCount={insights.mostFreeTies?.length || 0}
-            sub="Highest comp booking count"
-            onViewAll={() =>
-              onOpenTies("Most Free / Comp Villas", insights.mostFreeTies)
-            }
-            onClick={() =>
-              insights.mostFree?.villa_name &&
-              onSelectVilla(insights.mostFree.villa_name)
-            }
-          />
+          {[
+            {
+              label: "Most Booked",
+              villa: insights.mostBooked,
+              value: `${fmt(insights.mostBooked?.total_bookings)} bookings`,
+              ties: insights.mostBookedTies,
+              tiesLabel: "Most Booked Villas",
+              sub: "Highest total demand",
+            },
+            {
+              label: "Least Booked",
+              villa: insights.leastBooked,
+              value: `${fmt(insights.leastBooked?.total_bookings)} bookings`,
+              ties: insights.leastBookedTies,
+              tiesLabel: "Least Booked Villas",
+              sub: "Lowest non-zero demand",
+            },
+            {
+              label: "Most Paid",
+              villa: insights.mostPaid,
+              value: `${fmt(insights.mostPaid?.paid_bookings)} paid`,
+              ties: insights.mostPaidTies,
+              tiesLabel: "Most Paid Villas",
+              sub: "Highest paid booking count",
+            },
+            {
+              label: "Most Free / Comp",
+              villa: insights.mostFree,
+              value: `${fmt(insights.mostFree?.free_bookings)} free/comp`,
+              ties: insights.mostFreeTies,
+              tiesLabel: "Most Free / Comp Villas",
+              sub: "Highest comp booking count",
+            },
+          ].map(({ label, villa, value, ties, tiesLabel, sub }) => (
+            <SignalMetric
+              key={label}
+              label={label}
+              villa={villa}
+              value={value}
+              split={
+                villa ? (
+                  <MiniSplitBar
+                    paid={villa.paid_bookings}
+                    free={villa.free_bookings}
+                  />
+                ) : null
+              }
+              tiedCount={ties?.length || 0}
+              sub={sub}
+              onViewAll={() => onOpenTies(tiesLabel, ties)}
+              onClick={() =>
+                villa?.villa_name && onSelectVilla(villa.villa_name)
+              }
+            />
+          ))}
         </div>
       </div>
     </div>
   );
 }
 
-// ─── Booking timeline card (mirrors villa modal in VisitsRoomsTab) ────────
+// ─── NEW: Bedroom Intelligence Card ──────────────────────────────────────────
+function BedroomIntelligenceCard({
+  bedroomData,
+  sourceFilter,
+  viewMode,
+  dateFilter,
+  years,
+  months,
+  onDateChange,
+}) {
+  const [activeTab, setActiveTab] = useState("paid_free"); // paid_free | source
+
+  const filtered = useMemo(() => {
+    let rows = bedroomData;
+    if (viewMode === "paid") rows = rows.filter((r) => !r.is_free);
+    if (viewMode === "free") rows = rows.filter((r) => r.is_free);
+    if (sourceFilter !== "All")
+      rows = rows.filter((r) => (r.source || "Unknown") === sourceFilter);
+    return rows;
+  }, [bedroomData, viewMode, sourceFilter]);
+
+  // ── Paid vs Free by bedroom ───────────────────────────────────────────────
+  const paidFreeByBed = useMemo(() => {
+    const map = new Map();
+    filtered.forEach((r) => {
+      const bed = r.bedroom_count ?? "Unknown";
+      if (!map.has(bed))
+        map.set(bed, {
+          bedroom_count: bed,
+          paid: 0,
+          free: 0,
+          revenue: 0,
+          free_value: 0,
+          total_nights: 0,
+        });
+      const e = map.get(bed);
+      if (r.is_free) {
+        e.free += Number(r.bookings || 0);
+        e.free_value += Number(r.free_value || 0);
+      } else {
+        e.paid += Number(r.bookings || 0);
+        e.revenue += Number(r.revenue || 0);
+      }
+      e.total_nights += Number(r.total_nights || 0);
+    });
+    return [...map.values()].sort(
+      (a, b) => Number(a.bedroom_count || 99) - Number(b.bedroom_count || 99),
+    );
+  }, [filtered]);
+
+  // ── Source by bedroom ─────────────────────────────────────────────────────
+  const sourceByBed = useMemo(() => {
+    const map = new Map();
+    filtered.forEach((r) => {
+      const bed = r.bedroom_count ?? "Unknown";
+      const src = r.source || "Unknown";
+      const key = `${bed}||${src}`;
+      if (!map.has(key))
+        map.set(key, {
+          bedroom_count: bed,
+          source: src,
+          paid: 0,
+          free: 0,
+          total: 0,
+          revenue: 0,
+          free_value: 0,
+        });
+      const e = map.get(key);
+      if (r.is_free) {
+        e.free += Number(r.bookings || 0);
+        e.free_value += Number(r.free_value || 0);
+      } else {
+        e.paid += Number(r.bookings || 0);
+        e.revenue += Number(r.revenue || 0);
+      }
+      e.total += Number(r.bookings || 0);
+    });
+    return [...map.values()].sort((a, b) => {
+      const bedDiff =
+        Number(a.bedroom_count || 99) - Number(b.bedroom_count || 99);
+      return bedDiff !== 0 ? bedDiff : b.total - a.total;
+    });
+  }, [filtered]);
+
+  // KPIs
+  const totalBookings = paidFreeByBed.reduce((s, r) => s + r.paid + r.free, 0);
+  const totalPaid = paidFreeByBed.reduce((s, r) => s + r.paid, 0);
+  const totalFree = paidFreeByBed.reduce((s, r) => s + r.free, 0);
+  const mostPaidBed = [...paidFreeByBed].sort((a, b) => b.paid - a.paid)[0];
+  const mostFreeBed = [...paidFreeByBed].sort((a, b) => b.free - a.free)[0];
+  const highestCompPct = [...paidFreeByBed].sort((a, b) => {
+    const bPct = b.free / (b.paid + b.free) || 0;
+    const aPct = a.free / (a.paid + a.free) || 0;
+    return bPct - aPct;
+  })[0];
+  const totalRevenue = paidFreeByBed.reduce((s, r) => s + r.revenue, 0);
+  const totalCompVal = paidFreeByBed.reduce((s, r) => s + r.free_value, 0);
+
+  const bedKeys = paidFreeByBed.map((r) => r.bedroom_count);
+
+  const tabBtn = (key, label) => (
+    <button
+      type="button"
+      onClick={() => setActiveTab(key)}
+      style={{
+        padding: "7px 14px",
+        borderRadius: 10,
+        border: "none",
+        background: activeTab === key ? C.accent : "transparent",
+        color: activeTab === key ? "#fff" : C.muted,
+        fontWeight: activeTab === key ? 800 : 500,
+        fontSize: 12,
+        cursor: "pointer",
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="dashboard-card">
+      {/* Header */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "flex-start",
+          marginBottom: 14,
+        }}
+      >
+        <div>
+          <div
+            className="dashboard-eyebrow"
+            style={{ display: "flex", alignItems: "center", gap: 6 }}
+          >
+            <LayoutGrid size={12} /> Bedroom Intelligence
+          </div>
+          <h2 className="dashboard-card-title">
+            Bedroom × Source / Paid–Free Analysis
+          </h2>
+          <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>
+            Which bedroom sizes drive paid vs comp bookings, and which sources
+            book which sizes.
+          </p>
+          <div style={{ marginTop: 8 }}>
+            <PeriodPill filter={dateFilter} />
+          </div>
+        </div>
+        <DateFilterBar
+          value={dateFilter}
+          onChange={onDateChange}
+          years={years}
+          months={months}
+        />
+      </div>
+
+      {/* KPI row */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(150px,1fr))",
+          gap: 10,
+          marginBottom: 18,
+        }}
+      >
+        {[
+          {
+            icon: BedDouble,
+            label: "Most Paid Bedroom",
+            value:
+              mostPaidBed?.bedroom_count != null
+                ? `${mostPaidBed.bedroom_count} bed`
+                : "—",
+            sub: `${fmt(mostPaidBed?.paid)} paid bookings`,
+            meta: "Highest revenue-generating size",
+          },
+          {
+            icon: Gift,
+            label: "Most Comp'd Bedroom",
+            value:
+              mostFreeBed?.bedroom_count != null
+                ? `${mostFreeBed.bedroom_count} bed`
+                : "—",
+            sub: `${fmt(mostFreeBed?.free)} free/comp bookings`,
+            meta: "Most complimentary stays",
+          },
+          {
+            icon: TrendingUp,
+            label: "Highest Comp %",
+            value:
+              highestCompPct?.bedroom_count != null
+                ? `${highestCompPct.bedroom_count} bed`
+                : "—",
+            sub: `${pct(highestCompPct?.free, (highestCompPct?.paid || 0) + (highestCompPct?.free || 0))} comp rate`,
+            meta: "Size with highest free/comp ratio",
+          },
+          {
+            icon: DollarSign,
+            label: "Paid Revenue",
+            value: money(totalRevenue),
+            sub: "Paid stays only",
+            meta: "Across all bedroom sizes",
+          },
+          {
+            icon: Gift,
+            label: "Comp Value",
+            value: money(totalCompVal),
+            sub: "Free/comp stays only",
+            meta: "Tracked separately",
+          },
+          {
+            icon: Users,
+            label: "Total Bookings",
+            value: fmt(totalBookings),
+            sub: `${fmt(totalPaid)} paid · ${fmt(totalFree)} free`,
+            meta: pct(totalFree, totalBookings) + " comp rate",
+          },
+        ].map((t) => (
+          <KpiTile key={t.label} {...t} />
+        ))}
+      </div>
+
+      {/* Tab toggle */}
+      <div
+        style={{
+          display: "inline-flex",
+          gap: 4,
+          background: C.panel,
+          border: `1px solid ${C.border}`,
+          borderRadius: 14,
+          padding: 4,
+          marginBottom: 16,
+        }}
+      >
+        {tabBtn("paid_free", "Paid vs Free by Bedroom")}
+        {tabBtn("source", "Source by Bedroom")}
+      </div>
+
+      {/* ── Tab: Paid vs Free by bedroom ───────────────────────────────── */}
+      {activeTab === "paid_free" && (
+        <div>
+          {/* Chart */}
+          {paidFreeByBed.length > 0 && (
+            <div style={{ overflowX: "auto", marginBottom: 16 }}>
+              <div
+                style={{
+                  minWidth: Math.max(paidFreeByBed.length * 90, 400),
+                  height: 260,
+                }}
+              >
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart
+                    data={paidFreeByBed}
+                    margin={{ top: 12, right: 18, bottom: 60, left: 18 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
+                    <XAxis
+                      dataKey="bedroom_count"
+                      stroke={AX}
+                      fontSize={11}
+                      angle={-30}
+                      textAnchor="end"
+                      interval={0}
+                      height={60}
+                      label={{
+                        value: "Bedrooms",
+                        position: "insideBottom",
+                        offset: -20,
+                        style: LABEL_STYLE,
+                      }}
+                    />
+                    <YAxis
+                      stroke={AX}
+                      fontSize={11}
+                      label={{
+                        value: "Bookings",
+                        angle: -90,
+                        position: "insideLeft",
+                        offset: 10,
+                        dy: 40,
+                        style: LABEL_STYLE,
+                      }}
+                    />
+                    <Tooltip
+                      contentStyle={TIP}
+                      formatter={(value, name) => [
+                        fmt(value),
+                        name === "paid" ? "Paid" : "Free/Comp",
+                      ]}
+                    />
+                    <Bar
+                      dataKey="paid"
+                      name="paid"
+                      fill={COLOR_PAID}
+                      stackId="a"
+                      radius={[0, 0, 0, 0]}
+                    />
+                    <Bar
+                      dataKey="free"
+                      name="free"
+                      fill={COLOR_FREE}
+                      stackId="a"
+                      radius={[6, 6, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div style={{ marginTop: 6 }}>
+                <InlineLegend />
+              </div>
+            </div>
+          )}
+
+          {/* Table */}
+          <ScrollTableShell maxHeight={320}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 12,
+              }}
+            >
+              <thead
+                style={{
+                  position: "sticky",
+                  top: 0,
+                  background: C.bg,
+                  zIndex: 1,
+                }}
+              >
+                <tr className="dashboard-eyebrow">
+                  {[
+                    "Bedrooms",
+                    "Paid Bookings",
+                    "Free / Comp",
+                    "Comp %",
+                    "Split",
+                    "Paid Revenue",
+                    "Comp Value",
+                    "Nights",
+                  ].map((h) => (
+                    <th
+                      key={h}
+                      style={{
+                        textAlign:
+                          h === "Bedrooms" || h === "Split" ? "left" : "right",
+                        padding: "10px",
+                        borderBottom: `1px solid ${C.border}`,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {paidFreeByBed.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={8}
+                      style={{
+                        padding: 20,
+                        textAlign: "center",
+                        color: C.muted,
+                      }}
+                    >
+                      No data for current filters.
+                    </td>
+                  </tr>
+                )}
+                {paidFreeByBed.map((r) => {
+                  const total = r.paid + r.free;
+                  return (
+                    <tr
+                      key={r.bedroom_count}
+                      style={{ borderBottom: `1px solid ${C.border}` }}
+                    >
+                      <td style={{ padding: 10 }}>
+                        <BedBadge count={r.bedroom_count} />
+                      </td>
+                      <td
+                        style={{
+                          padding: 10,
+                          textAlign: "right",
+                          color: C.accent,
+                          fontWeight: 800,
+                        }}
+                      >
+                        {fmt(r.paid)}
+                      </td>
+                      <td
+                        style={{
+                          padding: 10,
+                          textAlign: "right",
+                          color: C.accent3,
+                          fontWeight: 800,
+                        }}
+                      >
+                        {fmt(r.free)}
+                      </td>
+                      <td
+                        style={{
+                          padding: 10,
+                          textAlign: "right",
+                          color: r.free > r.paid ? C.accent3 : C.soft,
+                          fontWeight: r.free > r.paid ? 800 : 400,
+                        }}
+                      >
+                        {pct(r.free, total)}
+                      </td>
+                      <td style={{ padding: 10, minWidth: 140 }}>
+                        <MiniSplitBar paid={r.paid} free={r.free} />
+                      </td>
+                      <td
+                        style={{
+                          padding: 10,
+                          textAlign: "right",
+                          color: C.text,
+                        }}
+                      >
+                        {money(r.revenue)}
+                      </td>
+                      <td
+                        style={{
+                          padding: 10,
+                          textAlign: "right",
+                          color: C.accent3,
+                        }}
+                      >
+                        {money(r.free_value)}
+                      </td>
+                      <td
+                        style={{
+                          padding: 10,
+                          textAlign: "right",
+                          color: C.soft,
+                        }}
+                      >
+                        {fmt(r.total_nights)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              {paidFreeByBed.length > 0 && (
+                <tfoot>
+                  <tr
+                    style={{
+                      background: C.panelAlt,
+                      borderTop: `2px solid ${C.border}`,
+                      fontWeight: 800,
+                    }}
+                  >
+                    <td style={{ padding: 10, color: C.text }}>Totals</td>
+                    <td
+                      style={{ padding: 10, textAlign: "right", color: C.text }}
+                    >
+                      {fmt(totalPaid)}
+                    </td>
+                    <td
+                      style={{ padding: 10, textAlign: "right", color: C.text }}
+                    >
+                      {fmt(totalFree)}
+                    </td>
+                    <td
+                      style={{ padding: 10, textAlign: "right", color: C.text }}
+                    >
+                      {pct(totalFree, totalBookings)}
+                    </td>
+                    <td style={{ padding: 10 }}>
+                      <MiniSplitBar paid={totalPaid} free={totalFree} />
+                    </td>
+                    <td
+                      style={{ padding: 10, textAlign: "right", color: C.text }}
+                    >
+                      {money(totalRevenue)}
+                    </td>
+                    <td
+                      style={{
+                        padding: 10,
+                        textAlign: "right",
+                        color: C.accent3,
+                      }}
+                    >
+                      {money(totalCompVal)}
+                    </td>
+                    <td
+                      style={{ padding: 10, textAlign: "right", color: C.text }}
+                    >
+                      —
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </ScrollTableShell>
+        </div>
+      )}
+
+      {/* ── Tab: Source by bedroom ─────────────────────────────────────── */}
+      {activeTab === "source" && (
+        <ScrollTableShell maxHeight={400}>
+          <table
+            style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}
+          >
+            <thead
+              style={{
+                position: "sticky",
+                top: 0,
+                background: C.bg,
+                zIndex: 1,
+              }}
+            >
+              <tr className="dashboard-eyebrow">
+                {[
+                  "Bedrooms",
+                  "Source",
+                  "Paid",
+                  "Free / Comp",
+                  "Total",
+                  "Comp %",
+                  "Split",
+                  "Revenue",
+                  "Comp Value",
+                ].map((h) => (
+                  <th
+                    key={h}
+                    style={{
+                      textAlign: ["Bedrooms", "Source", "Split"].includes(h)
+                        ? "left"
+                        : "right",
+                      padding: "10px",
+                      borderBottom: `1px solid ${C.border}`,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sourceByBed.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={9}
+                    style={{ padding: 20, textAlign: "center", color: C.muted }}
+                  >
+                    No data for current filters.
+                  </td>
+                </tr>
+              )}
+              {sourceByBed.map((r, i) => {
+                const total = r.paid + r.free;
+                const prevBed = i > 0 ? sourceByBed[i - 1].bedroom_count : null;
+                const showBed = r.bedroom_count !== prevBed;
+                return (
+                  <tr
+                    key={`${r.bedroom_count}-${r.source}`}
+                    style={{
+                      borderBottom: `1px solid ${C.border}`,
+                      background:
+                        showBed && i > 0
+                          ? "rgba(30,80,150,0.03)"
+                          : "transparent",
+                    }}
+                  >
+                    <td style={{ padding: 10 }}>
+                      {showBed ? (
+                        <BedBadge count={r.bedroom_count} />
+                      ) : (
+                        <span style={{ color: C.muted, fontSize: 10 }}>↳</span>
+                      )}
+                    </td>
+                    <td style={{ padding: 10, color: C.text, fontWeight: 600 }}>
+                      {r.source}
+                    </td>
+                    <td
+                      style={{
+                        padding: 10,
+                        textAlign: "right",
+                        color: C.accent,
+                        fontWeight: 800,
+                      }}
+                    >
+                      {fmt(r.paid)}
+                    </td>
+                    <td
+                      style={{
+                        padding: 10,
+                        textAlign: "right",
+                        color: C.accent3,
+                        fontWeight: 800,
+                      }}
+                    >
+                      {fmt(r.free)}
+                    </td>
+                    <td
+                      style={{
+                        padding: 10,
+                        textAlign: "right",
+                        color: C.text,
+                        fontWeight: 800,
+                      }}
+                    >
+                      {fmt(r.total)}
+                    </td>
+                    <td
+                      style={{
+                        padding: 10,
+                        textAlign: "right",
+                        color: r.free > r.paid ? C.accent3 : C.soft,
+                      }}
+                    >
+                      {pct(r.free, total)}
+                    </td>
+                    <td style={{ padding: 10, minWidth: 120 }}>
+                      <MiniSplitBar paid={r.paid} free={r.free} />
+                    </td>
+                    <td
+                      style={{ padding: 10, textAlign: "right", color: C.text }}
+                    >
+                      {money(r.revenue)}
+                    </td>
+                    <td
+                      style={{
+                        padding: 10,
+                        textAlign: "right",
+                        color: C.accent3,
+                      }}
+                    >
+                      {money(r.free_value)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </ScrollTableShell>
+      )}
+    </div>
+  );
+}
+
+// ─── BookingCard ──────────────────────────────────────────────────────────────
 function BookingCard({ booking, index }) {
   const guests = Array.isArray(booking.guests) ? booking.guests : [];
   const primaryName =
@@ -967,7 +1667,6 @@ function BookingCard({ booking, index }) {
         marginBottom: 16,
       }}
     >
-      {/* index dot */}
       <div
         style={{
           width: 34,
@@ -986,7 +1685,6 @@ function BookingCard({ booking, index }) {
       >
         {index + 1}
       </div>
-
       <div
         style={{
           border: `1px solid ${booking.is_free ? C.accent3 : C.border}`,
@@ -998,7 +1696,6 @@ function BookingCard({ booking, index }) {
             : "0 10px 28px rgba(0,0,0,0.04)",
         }}
       >
-        {/* header row */}
         <div
           style={{
             display: "flex",
@@ -1008,11 +1705,17 @@ function BookingCard({ booking, index }) {
           }}
         >
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                flexWrap: "wrap",
+              }}
+            >
               <div style={{ fontSize: 18, fontWeight: 850, color: C.text }}>
                 {primaryName}
               </div>
-              {/* paid / free badge */}
               <span
                 style={{
                   display: "inline-flex",
@@ -1034,6 +1737,10 @@ function BookingCard({ booking, index }) {
                 {booking.is_free ? <Gift size={9} /> : <DollarSign size={9} />}
                 {booking.is_free ? "Free / Comp" : "Paid"}
               </span>
+              {/* bedroom badge */}
+              {booking.bedroom_count != null && (
+                <BedBadge count={booking.bedroom_count} />
+              )}
             </div>
             <div style={{ color: C.soft, fontSize: 12, marginTop: 4 }}>
               Member #{booking.member_number ?? "—"} · Conf{" "}
@@ -1044,14 +1751,12 @@ function BookingCard({ booking, index }) {
               <strong style={{ color: C.soft }}>
                 {booking.source ?? "Unknown"}
               </strong>
-              {" · "}
-              Payment:{" "}
+              {" · "}Payment:{" "}
               <strong style={{ color: C.soft }}>
                 {booking.payment_type ?? "—"}
               </strong>
             </div>
           </div>
-
           <div style={{ textAlign: "right", minWidth: 110 }}>
             <div style={{ fontWeight: 900, color: C.text, fontSize: 18 }}>
               {money(booking.total_amount)}
@@ -1075,7 +1780,7 @@ function BookingCard({ booking, index }) {
           </div>
         </div>
 
-        {/* stay strip */}
+        {/* Stay strip */}
         <div
           style={{
             marginTop: 16,
@@ -1116,7 +1821,7 @@ function BookingCard({ booking, index }) {
           </div>
         </div>
 
-        {/* member details grid */}
+        {/* Grid: contact */}
         <div
           style={{
             display: "grid",
@@ -1149,11 +1854,11 @@ function BookingCard({ booking, index }) {
           ))}
         </div>
 
-        {/* member meta row */}
+        {/* Grid: meta — now includes bedroom_count */}
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(4, 1fr)",
+            gridTemplateColumns: "repeat(5, 1fr)",
             gap: 10,
             marginTop: 10,
           }}
@@ -1162,6 +1867,7 @@ function BookingCard({ booking, index }) {
             ["Member type", booking.member_type ?? "—"],
             ["Account", booking.member_or_guest ?? "—"],
             ["Bedrooms", booking.bedroom_count ?? "—"],
+            ["Guests", booking.persons ?? "—"],
             ["Villa", booking.villa_name ?? "—"],
           ].map(([lbl, val]) => (
             <div
@@ -1183,7 +1889,7 @@ function BookingCard({ booking, index }) {
           ))}
         </div>
 
-        {/* guest manifest */}
+        {/* Guest manifest */}
         {guests.length > 0 && (
           <div style={{ marginTop: 15 }}>
             <div
@@ -1234,11 +1940,10 @@ function BookingCard({ booking, index }) {
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────
+// ─── Main component ───────────────────────────────────────────────────────────
 export default function VillaSourceBreakdown({ years, months }) {
-  // ── Filters ──────────────────────────────────────────────────────────────
   const createDateFilter = () => ({
-    mode: "ym", // ym | day | range
+    mode: "ym",
     year: "All",
     month: "All",
     date: "",
@@ -1248,11 +1953,10 @@ export default function VillaSourceBreakdown({ years, months }) {
 
   const toDateParams = (filter) => {
     if (filter.mode === "day") return filter.date ? { date: filter.date } : {};
-    if (filter.mode === "range") {
+    if (filter.mode === "range")
       return filter.startDate && filter.endDate
         ? { start_date: filter.startDate, end_date: filter.endDate }
         : {};
-    }
     return {
       year: filter.year === "All" ? null : Number(filter.year),
       month: filter.month === "All" ? null : months.indexOf(filter.month),
@@ -1261,15 +1965,14 @@ export default function VillaSourceBreakdown({ years, months }) {
 
   const dateFilterFilePart = (filter) => {
     if (filter.mode === "day") return filter.date || "all_dates";
-    if (filter.mode === "range") {
+    if (filter.mode === "range")
       return filter.startDate && filter.endDate
         ? `${filter.startDate}_to_${filter.endDate}`
         : "all_dates";
-    }
     return `${filter.year}_${filter.month}`;
   };
 
-  const [viewMode, setViewMode] = useState("overall"); // overall | paid | free
+  const [viewMode, setViewMode] = useState("overall");
   const [sourceFilter, setSourceFilter] = useState("All");
   const [villaChartLimit, setVillaChartLimit] = useState("15");
 
@@ -1280,6 +1983,7 @@ export default function VillaSourceBreakdown({ years, months }) {
     useState(createDateFilter);
   const [selectedVillaDateFilter, setSelectedVillaDateFilter] =
     useState(createDateFilter);
+  const [bedroomDateFilter, setBedroomDateFilter] = useState(createDateFilter); // NEW
 
   const kpiFilters = useMemo(
     () => toDateParams(kpiDateFilter),
@@ -1301,13 +2005,17 @@ export default function VillaSourceBreakdown({ years, months }) {
     () => toDateParams(selectedVillaDateFilter),
     [selectedVillaDateFilter],
   );
+  const bedroomFilters = useMemo(
+    () => toDateParams(bedroomDateFilter),
+    [bedroomDateFilter],
+  ); // NEW
 
-  // ── Source-breakdown data ─────────────────────────────────────────────────
   const [kpiRaw, setKpiRaw] = useState([]);
   const [signalsRaw, setSignalsRaw] = useState([]);
   const [chartRaw, setChartRaw] = useState([]);
   const [sourceSummaryRaw, setSourceSummaryRaw] = useState([]);
   const [selectedVillaRaw, setSelectedVillaRaw] = useState([]);
+  const [bedroomRaw, setBedroomRaw] = useState([]); // NEW
   const [loading, setLoading] = useState(false);
   const [allSources, setAllSources] = useState([]);
 
@@ -1334,6 +2042,20 @@ export default function VillaSourceBreakdown({ years, months }) {
     };
   };
 
+  // NEW: load bedroom cross-tab
+  const loadBedroomBreakdown = (filters, setter) => {
+    let cancelled = false;
+    analyticsApi
+      .villaSourceBedroomBreakdown(filters)
+      .then((data) => {
+        if (!cancelled) setter(Array.isArray(data) ? data : []);
+      })
+      .catch(console.error);
+    return () => {
+      cancelled = true;
+    };
+  };
+
   useEffect(() => loadBreakdown(kpiFilters, setKpiRaw, true), [kpiFilters]);
   useEffect(
     () => loadBreakdown(signalsFilters, setSignalsRaw),
@@ -1348,21 +2070,22 @@ export default function VillaSourceBreakdown({ years, months }) {
     () => loadBreakdown(selectedVillaFilters, setSelectedVillaRaw),
     [selectedVillaFilters],
   );
+  useEffect(
+    () => loadBedroomBreakdown(bedroomFilters, setBedroomRaw),
+    [bedroomFilters],
+  ); // NEW
 
-  // ── Aggregate: villa-level summary for bar chart ──────────────────────────
+  // ── Villa chart data ──────────────────────────────────────────────────────
   const villaChartData = useMemo(() => {
-    // Filter by view mode and source
     let rows = chartRaw;
     if (viewMode === "paid") rows = rows.filter((r) => !r.is_free);
     if (viewMode === "free") rows = rows.filter((r) => r.is_free);
     if (sourceFilter !== "All")
       rows = rows.filter((r) => (r.source || "Unknown") === sourceFilter);
-
-    // Roll up to villa level
     const map = new Map();
     rows.forEach((r) => {
       const key = r.villa_name;
-      if (!map.has(key)) {
+      if (!map.has(key))
         map.set(key, {
           villa_name: key,
           paid_bookings: 0,
@@ -1370,29 +2093,24 @@ export default function VillaSourceBreakdown({ years, months }) {
           total_bookings: 0,
           revenue: 0,
           free_value: 0,
-          total_value: 0,
           total_nights: 0,
-          unique_members: 0,
         });
-      }
       const e = map.get(key);
       if (r.is_free) {
         e.free_bookings += Number(r.bookings ?? 0);
-        e.free_value += Number(r.free_value ?? r.total_value ?? 0);
+        e.free_value += Number(r.free_value ?? 0);
       } else {
         e.paid_bookings += Number(r.bookings ?? 0);
         e.revenue += Number(r.revenue ?? 0);
       }
       e.total_bookings += Number(r.bookings ?? 0);
       e.total_nights += Number(r.total_nights ?? 0);
-      e.total_value += Number(r.total_value ?? 0);
     });
     return [...map.values()].sort(
       (a, b) => b.total_bookings - a.total_bookings,
     );
   }, [chartRaw, viewMode, sourceFilter]);
 
-  // ── Source breakdown table (for selected villa) ───────────────────────────
   const [selectedVilla, setSelectedVilla] = useState(null);
 
   const villaSourceRows = useMemo(() => {
@@ -1405,14 +2123,12 @@ export default function VillaSourceBreakdown({ years, months }) {
     return rows;
   }, [selectedVillaRaw, selectedVilla, viewMode, sourceFilter]);
 
-  // ── KPIs (view-mode aware) ────────────────────────────────────────────────
   const kpis = useMemo(() => {
     let rows = kpiRaw;
     if (viewMode === "paid") rows = rows.filter((r) => !r.is_free);
     if (viewMode === "free") rows = rows.filter((r) => r.is_free);
     if (sourceFilter !== "All")
       rows = rows.filter((r) => (r.source || "Unknown") === sourceFilter);
-
     const totalBookings = rows.reduce((s, r) => s + Number(r.bookings ?? 0), 0);
     const totalPaid = rows
       .filter((r) => !r.is_free)
@@ -1430,7 +2146,6 @@ export default function VillaSourceBreakdown({ years, months }) {
       (s, r) => s + Number(r.total_nights ?? 0),
       0,
     );
-
     return {
       totalBookings,
       totalPaid,
@@ -1443,14 +2158,12 @@ export default function VillaSourceBreakdown({ years, months }) {
 
   const villaStackedChartData = useMemo(() => {
     let rows = chartRaw;
-    if (sourceFilter !== "All") {
+    if (sourceFilter !== "All")
       rows = rows.filter((r) => (r.source || "Unknown") === sourceFilter);
-    }
-
     const map = new Map();
     rows.forEach((r) => {
       const key = r.villa_name || "Unknown villa";
-      if (!map.has(key)) {
+      if (!map.has(key))
         map.set(key, {
           villa_name: key,
           paid_bookings: 0,
@@ -1460,7 +2173,6 @@ export default function VillaSourceBreakdown({ years, months }) {
           free_value: 0,
           total_nights: 0,
         });
-      }
       const e = map.get(key);
       if (r.is_free) {
         e.free_bookings += Number(r.bookings ?? 0);
@@ -1472,7 +2184,6 @@ export default function VillaSourceBreakdown({ years, months }) {
       e.total_bookings += Number(r.bookings ?? 0);
       e.total_nights += Number(r.total_nights ?? 0);
     });
-
     return [...map.values()].sort(
       (a, b) => Number(b.total_bookings || 0) - Number(a.total_bookings || 0),
     );
@@ -1487,14 +2198,12 @@ export default function VillaSourceBreakdown({ years, months }) {
     let rows = sourceSummaryRaw;
     if (viewMode === "paid") rows = rows.filter((r) => !r.is_free);
     if (viewMode === "free") rows = rows.filter((r) => r.is_free);
-    if (sourceFilter !== "All") {
+    if (sourceFilter !== "All")
       rows = rows.filter((r) => (r.source || "Unknown") === sourceFilter);
-    }
-
     const map = new Map();
     rows.forEach((r) => {
       const source = r.source || "Unknown";
-      if (!map.has(source)) {
+      if (!map.has(source))
         map.set(source, {
           source,
           villa_count: new Set(),
@@ -1506,7 +2215,6 @@ export default function VillaSourceBreakdown({ years, months }) {
           total_nights: 0,
           unique_members: 0,
         });
-      }
       const e = map.get(source);
       if (r.villa_name) e.villa_count.add(r.villa_name);
       if (r.is_free) {
@@ -1520,7 +2228,6 @@ export default function VillaSourceBreakdown({ years, months }) {
       e.total_nights += Number(r.total_nights ?? 0);
       e.unique_members += Number(r.unique_members ?? 0);
     });
-
     return [...map.values()]
       .map((r) => ({ ...r, villa_count: r.villa_count.size }))
       .sort(
@@ -1535,12 +2242,10 @@ export default function VillaSourceBreakdown({ years, months }) {
       (s, r) => s + Number(r.bookings ?? 0),
       0,
     );
-    const paidBookings = paid.reduce((s, r) => s + Number(r.bookings ?? 0), 0);
-    const freeBookings = free.reduce((s, r) => s + Number(r.bookings ?? 0), 0);
     return {
       totalBookings,
-      paidBookings,
-      freeBookings,
+      paidBookings: paid.reduce((s, r) => s + Number(r.bookings ?? 0), 0),
+      freeBookings: free.reduce((s, r) => s + Number(r.bookings ?? 0), 0),
       revenue: paid.reduce((s, r) => s + Number(r.revenue ?? 0), 0),
       freeValue: free.reduce((s, r) => s + Number(r.free_value ?? 0), 0),
       nights: villaSourceRows.reduce(
@@ -1552,14 +2257,12 @@ export default function VillaSourceBreakdown({ years, months }) {
 
   const sourceInsights = useMemo(() => {
     let rawRows = signalsRaw;
-    if (sourceFilter !== "All") {
+    if (sourceFilter !== "All")
       rawRows = rawRows.filter((r) => (r.source || "Unknown") === sourceFilter);
-    }
-
     const map = new Map();
     rawRows.forEach((r) => {
       const key = r.villa_name || "Unknown villa";
-      if (!map.has(key)) {
+      if (!map.has(key))
         map.set(key, {
           villa_name: key,
           paid_bookings: 0,
@@ -1567,8 +2270,8 @@ export default function VillaSourceBreakdown({ years, months }) {
           total_bookings: 0,
           revenue: 0,
           free_value: 0,
+          most_common_bedrooms: r.most_common_bedrooms,
         });
-      }
       const e = map.get(key);
       if (r.is_free) {
         e.free_bookings += Number(r.bookings ?? 0);
@@ -1579,7 +2282,6 @@ export default function VillaSourceBreakdown({ years, months }) {
       }
       e.total_bookings += Number(r.bookings ?? 0);
     });
-
     const rows = [...map.values()];
     const nonZeroTotal = rows.filter((r) => Number(r.total_bookings || 0) > 0);
     const nonZeroPaid = rows.filter((r) => Number(r.paid_bookings || 0) > 0);
@@ -1614,8 +2316,6 @@ export default function VillaSourceBreakdown({ years, months }) {
       leastBookedTies: tiesFor(nonZeroTotal, "total_bookings", "asc"),
       mostPaidTies: tiesFor(nonZeroPaid, "paid_bookings"),
       mostFreeTies: tiesFor(nonZeroFree, "free_bookings"),
-      mostRevenueTies: tiesFor(nonZeroRevenue, "revenue"),
-      mostCompValueTies: tiesFor(compRows, "free_value"),
     };
   }, [signalsRaw, sourceFilter]);
 
@@ -1625,7 +2325,6 @@ export default function VillaSourceBreakdown({ years, months }) {
     setSummaryModalRowsOverride(null);
     setSummaryModalOpen(true);
   };
-
   const openTiedVillaBreakdown = (title, rows = []) => {
     setSummaryModalMode("overall");
     setSummaryModalTitleOverride(title);
@@ -1633,11 +2332,12 @@ export default function VillaSourceBreakdown({ years, months }) {
     setSummaryModalOpen(true);
   };
 
-  // ── Drilldown modal ───────────────────────────────────────────────────────
+  // Drilldown modal
   const [modalOpen, setModalOpen] = useState(false);
   const [modalVilla, setModalVilla] = useState(null);
   const [modalSource, setModalSource] = useState(null);
-  const [modalIsFree, setModalIsFree] = useState(null); // null|true|false
+  const [modalIsFree, setModalIsFree] = useState(null);
+  const [modalBedrooms, setModalBedrooms] = useState(null); // NEW
   const [modalBookings, setModalBookings] = useState([]);
   const [modalLoading, setModalLoading] = useState(false);
   const [modalDateFilter, setModalDateFilter] = useState(createDateFilter);
@@ -1662,7 +2362,6 @@ export default function VillaSourceBreakdown({ years, months }) {
     () => toDateParams(modalDateFilter),
     [modalDateFilter],
   );
-
   const summaryModalFilters = useMemo(
     () => toDateParams(summaryModalDateFilter),
     [summaryModalDateFilter],
@@ -1673,7 +2372,6 @@ export default function VillaSourceBreakdown({ years, months }) {
     return loadBreakdown(summaryModalFilters, setSummaryModalRaw);
   }, [summaryModalOpen, summaryModalFilters]);
 
-  // Fetch drilldown when modal is open
   useEffect(() => {
     if (!modalOpen || !modalVilla) return;
     let cancelled = false;
@@ -1684,6 +2382,7 @@ export default function VillaSourceBreakdown({ years, months }) {
         ? { source: modalSource }
         : {}),
       ...(modalIsFree !== null ? { is_free: modalIsFree } : {}),
+      ...(modalBedrooms !== null ? { bedrooms: modalBedrooms } : {}), // NEW
     };
     analyticsApi
       .villaSourceBookings(modalVilla, params)
@@ -1697,17 +2396,26 @@ export default function VillaSourceBreakdown({ years, months }) {
     return () => {
       cancelled = true;
     };
-  }, [modalOpen, modalVilla, modalSource, modalIsFree, modalFilters]);
+  }, [
+    modalOpen,
+    modalVilla,
+    modalSource,
+    modalIsFree,
+    modalBedrooms,
+    modalFilters,
+  ]);
 
   const openModal = (
     villa,
     source = null,
     isFree = null,
     returnToSummary = false,
+    bedrooms = null,
   ) => {
     setModalVilla(villa);
     setModalSource(source);
     setModalIsFree(isFree);
+    setModalBedrooms(bedrooms);
     setModalReturnToSummary(returnToSummary);
     setModalDateFilter(createDateFilter());
     setModalSearch("");
@@ -1723,7 +2431,6 @@ export default function VillaSourceBreakdown({ years, months }) {
     let rows = summaryModalRaw;
     if (summaryModalMode === "paid") rows = rows.filter((r) => !r.is_free);
     if (summaryModalMode === "free") rows = rows.filter((r) => r.is_free);
-    // finance mode intentionally includes both paid revenue and free/comp value rows.
     if (sourceFilter !== "All")
       rows = rows.filter((r) => (r.source || "Unknown") === sourceFilter);
     const mapped = rows.map((r) => ({
@@ -1738,6 +2445,8 @@ export default function VillaSourceBreakdown({ years, months }) {
       revenue: r.is_free ? 0 : Number(r.revenue ?? 0),
       free_value: r.is_free ? Number(r.free_value ?? r.total_value ?? 0) : 0,
       unique_members: Number(r.unique_members ?? 0),
+      avg_bedrooms: r.avg_bedrooms != null ? Number(r.avg_bedrooms) : null, // NEW
+      most_common_bedrooms: r.most_common_bedrooms ?? null, // NEW
       is_free: r.is_free,
     }));
     return sortRows(
@@ -1768,6 +2477,8 @@ export default function VillaSourceBreakdown({ years, months }) {
       revenue: Number(r.revenue ?? 0),
       free_value: Number(r.free_value ?? 0),
       unique_members: Number(r.unique_members ?? 0),
+      avg_bedrooms: null,
+      most_common_bedrooms: null,
       is_free: null,
     }));
     return sortRows(
@@ -1783,7 +2494,7 @@ export default function VillaSourceBreakdown({ years, months }) {
     summarySortDir,
   ]);
 
-  // ── Export rows ───────────────────────────────────────────────────────────
+  // Export rows
   const today = new Date().toISOString().split("T")[0];
 
   const modalExportRows = filteredModalBookings.map((b) => ({
@@ -1800,6 +2511,7 @@ export default function VillaSourceBreakdown({ years, months }) {
     Source: b.source ?? "",
     "Payment Type": b.payment_type ?? "",
     "Paid / Free": b.is_free ? "Free/Comp" : "Paid",
+    Bedrooms: b.bedroom_count ?? "", // NEW
     "Total Amount": b.total_amount ?? "",
     "Check In": b.check_in_date ?? "",
     "Check Out": b.check_out_date ?? "",
@@ -1809,7 +2521,7 @@ export default function VillaSourceBreakdown({ years, months }) {
     "Reservation Status": b.reservation_status ?? "",
   }));
 
-  const modalFilename = `${safeFilePart(modalVilla)}_source_${safeFilePart(modalSource)}_${safeFilePart(modalIsFree === true ? "free" : modalIsFree === false ? "paid" : "all")}_${safeFilePart(dateFilterFilePart(modalDateFilter))}_${today}`;
+  const modalFilename = `${safeFilePart(modalVilla)}_source_${safeFilePart(modalSource)}_${safeFilePart(modalIsFree === true ? "free" : modalIsFree === false ? "paid" : "all")}${modalBedrooms ? `_${modalBedrooms}bed` : ""}_${safeFilePart(dateFilterFilePart(modalDateFilter))}_${today}`;
 
   const breakdownExportRows = villaSourceRows.map((r) => ({
     Villa: r.villa_name ?? "",
@@ -1822,6 +2534,8 @@ export default function VillaSourceBreakdown({ years, months }) {
     "Free Value": r.free_value ?? "",
     "Total Value": r.total_value ?? "",
     "Unique Members": r.unique_members ?? "",
+    "Avg Bedrooms": r.avg_bedrooms ?? "", // NEW
+    "Most Common Bedrooms": r.most_common_bedrooms ?? "", // NEW
   }));
 
   const breakdownFilename = `source_breakdown_${safeFilePart(selectedVilla)}_${safeFilePart(dateFilterFilePart(selectedVillaDateFilter))}_${today}`;
@@ -1876,6 +2590,8 @@ export default function VillaSourceBreakdown({ years, months }) {
       Revenue: r.revenue,
       "Comp Value": r.free_value,
       Members: r.unique_members,
+      "Avg Bedrooms": r.avg_bedrooms ?? "", // NEW
+      "Most Common Bedrooms": r.most_common_bedrooms ?? "", // NEW
     })),
     {
       period: dateFilterLabel(summaryModalDateFilter),
@@ -1888,7 +2604,7 @@ export default function VillaSourceBreakdown({ years, months }) {
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="dashboard-section">
-      {/* ── Section header ──────────────────────────────────────────────── */}
+      {/* Section header */}
       <div
         className="dashboard-card"
         style={{
@@ -1901,7 +2617,7 @@ export default function VillaSourceBreakdown({ years, months }) {
         }}
       >
         <div>
-          <div className="dashboard-eyebrow">Visits & Rooms</div>
+          <div className="dashboard-eyebrow">Visits &amp; Rooms</div>
           <h2 className="dashboard-card-title" style={{ marginBottom: 0 }}>
             Bookings by Business Source
           </h2>
@@ -1914,10 +2630,9 @@ export default function VillaSourceBreakdown({ years, months }) {
             }}
           >
             Source-level villa performance by paid bookings, free/comp bookings,
-            revenue, comp value, room nights, and member counts.
+            revenue, comp value, room nights, bedroom size, and member counts.
           </p>
         </div>
-
         <div
           style={{
             display: "flex",
@@ -1932,7 +2647,7 @@ export default function VillaSourceBreakdown({ years, months }) {
         </div>
       </div>
 
-      {/* ── View toggle + source filter ──────────────────────────────────── */}
+      {/* View toggle + source filter */}
       <div
         className="dashboard-card"
         style={{
@@ -1950,7 +2665,6 @@ export default function VillaSourceBreakdown({ years, months }) {
             setSelectedVilla(null);
           }}
         />
-
         <div
           style={{
             height: 32,
@@ -1959,7 +2673,6 @@ export default function VillaSourceBreakdown({ years, months }) {
             margin: "0 4px",
           }}
         />
-
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Filter size={13} color={C.muted} />
           <span className="dashboard-eyebrow">Source</span>
@@ -1983,7 +2696,6 @@ export default function VillaSourceBreakdown({ years, months }) {
             ))}
           </select>
         </label>
-
         {sourceFilter !== "All" && (
           <button
             type="button"
@@ -2005,13 +2717,12 @@ export default function VillaSourceBreakdown({ years, months }) {
             Clear source
           </button>
         )}
-
         {loading && (
           <span style={{ color: C.muted, fontSize: 12 }}>Loading…</span>
         )}
       </div>
 
-      {/* ── KPI band ─────────────────────────────────────────────────────── */}
+      {/* KPI band */}
       <div
         style={{
           display: "flex",
@@ -2064,7 +2775,7 @@ export default function VillaSourceBreakdown({ years, months }) {
         />
         <KpiTile
           icon={Gift}
-          label="Free / Comp Stays"
+          label="Free / Comp"
           value={fmt(kpis.totalFree)}
           sub="Non-revenue bookings"
           meta={`${pct(kpis.totalFree, kpis.totalBookings)} of total bookings`}
@@ -2100,7 +2811,7 @@ export default function VillaSourceBreakdown({ years, months }) {
         />
       </div>
 
-      {/* ── Portfolio signals ───────────────────────────────────────────── */}
+      {/* Portfolio signals */}
       <div
         style={{
           display: "flex",
@@ -2125,7 +2836,18 @@ export default function VillaSourceBreakdown({ years, months }) {
         onOpenTies={openTiedVillaBreakdown}
       />
 
-      {/* ── Business source summary ──────────────────────────────────────── */}
+      {/* ── BEDROOM INTELLIGENCE CARD (NEW) ──────────────────────────────── */}
+      <BedroomIntelligenceCard
+        bedroomData={bedroomRaw}
+        sourceFilter={sourceFilter}
+        viewMode={viewMode}
+        dateFilter={bedroomDateFilter}
+        years={years}
+        months={months}
+        onDateChange={setBedroomDateFilter}
+      />
+
+      {/* Business source summary */}
       <div className="dashboard-card">
         <div
           style={{
@@ -2140,8 +2862,7 @@ export default function VillaSourceBreakdown({ years, months }) {
             <div className="dashboard-eyebrow">Business Source Summary</div>
             <h2 className="dashboard-card-title">Source Performance</h2>
             <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>
-              This table has its own date filter. Click a source once to filter;
-              click it again to clear.
+              Click a source once to filter; click again to clear.
             </p>
             <div style={{ marginTop: 8 }}>
               <PeriodPill filter={sourceSummaryDateFilter} />
@@ -2309,7 +3030,7 @@ export default function VillaSourceBreakdown({ years, months }) {
         </ScrollTableShell>
       </div>
 
-      {/* ── Stacked bar chart: paid vs free per villa ─────────────────────── */}
+      {/* Stacked bar chart */}
       <div className="dashboard-card">
         <div
           style={{
@@ -2348,20 +3069,8 @@ export default function VillaSourceBreakdown({ years, months }) {
               onChange={setVillaChartLimit}
               options={["10", "15", "30", "40", "50", "All"]}
             />
-            <div
-              style={{
-                fontSize: 11,
-                color: C.muted,
-                textAlign: "right",
-                maxWidth: 260,
-              }}
-            >
-              Click a bar to select a villa. The selected source filter remains
-              applied.
-            </div>
           </div>
         </div>
-
         <div style={{ overflowX: "auto" }}>
           <div
             style={{
@@ -2460,7 +3169,7 @@ export default function VillaSourceBreakdown({ years, months }) {
         </div>
       </div>
 
-      {/* ── Source breakdown table for selected villa ─────────────────────── */}
+      {/* Source breakdown for selected villa */}
       {selectedVilla && (
         <div className="dashboard-card">
           <div
@@ -2527,7 +3236,7 @@ export default function VillaSourceBreakdown({ years, months }) {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(165px,1fr))",
               gap: 12,
               marginBottom: 14,
             }}
@@ -2607,6 +3316,8 @@ export default function VillaSourceBreakdown({ years, months }) {
                     "Payment Type",
                     "Type",
                     "Bookings",
+                    "Avg Beds",
+                    "Bed Dist.",
                     "Nights",
                     "Revenue",
                     "Comp Value",
@@ -2615,10 +3326,13 @@ export default function VillaSourceBreakdown({ years, months }) {
                     <th
                       key={h}
                       style={{
-                        textAlign:
-                          h === "Source" || h === "Payment Type"
-                            ? "left"
-                            : "right",
+                        textAlign: [
+                          "Source",
+                          "Payment Type",
+                          "Bed Dist.",
+                        ].includes(h)
+                          ? "left"
+                          : "right",
                         padding: "10px 10px",
                         borderBottom: `1px solid ${C.border}`,
                         fontWeight: 600,
@@ -2634,7 +3348,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                 {villaSourceRows.length === 0 && (
                   <tr>
                     <td
-                      colSpan={8}
+                      colSpan={10}
                       style={{
                         padding: 20,
                         textAlign: "center",
@@ -2710,6 +3424,20 @@ export default function VillaSourceBreakdown({ years, months }) {
                     >
                       {fmt(r.bookings)}
                     </td>
+                    {/* NEW: avg bedrooms */}
+                    <td
+                      style={{
+                        padding: "10px 10px",
+                        textAlign: "right",
+                        color: C.soft,
+                      }}
+                    >
+                      {r.avg_bedrooms != null ? num(r.avg_bedrooms) : "—"}
+                    </td>
+                    {/* NEW: bedroom distribution bar */}
+                    <td style={{ padding: "10px 10px", minWidth: 100 }}>
+                      <BedroomDistBar distribution={r.bedroom_distribution} />
+                    </td>
                     <td
                       style={{
                         padding: "10px 10px",
@@ -2751,8 +3479,6 @@ export default function VillaSourceBreakdown({ years, months }) {
                   </tr>
                 ))}
               </tbody>
-
-              {/* Totals footer */}
               {villaSourceRows.length > 0 &&
                 (() => {
                   const paid = villaSourceRows.filter((r) => !r.is_free);
@@ -2786,6 +3512,16 @@ export default function VillaSourceBreakdown({ years, months }) {
                             ),
                           )}
                         </td>
+                        <td
+                          style={{
+                            padding: "10px 10px",
+                            textAlign: "right",
+                            color: C.muted,
+                          }}
+                        >
+                          —
+                        </td>
+                        <td style={{ padding: "10px 10px" }}></td>
                         <td
                           style={{
                             padding: "10px 10px",
@@ -2846,7 +3582,7 @@ export default function VillaSourceBreakdown({ years, months }) {
         </div>
       )}
 
-      {/* ── Aggregate breakdown modal ───────────────────────────────────── */}
+      {/* Aggregate breakdown modal */}
       {summaryModalOpen && (
         <div
           onClick={() => setSummaryModalOpen(false)}
@@ -2863,7 +3599,7 @@ export default function VillaSourceBreakdown({ years, months }) {
           <aside
             onClick={(e) => e.stopPropagation()}
             style={{
-              width: "min(980px, 96vw)",
+              width: "min(1020px, 96vw)",
               height: "100vh",
               background: C.bg,
               borderLeft: `1px solid ${C.border}`,
@@ -2950,7 +3686,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                   label="Paid Revenue"
                   value={money(
                     displayedSummaryModalRows.reduce(
-                      (sum, r) => sum + Number(r.revenue || 0),
+                      (s, r) => s + Number(r.revenue || 0),
                       0,
                     ),
                   )}
@@ -2962,7 +3698,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                   label="Comp Value"
                   value={money(
                     displayedSummaryModalRows.reduce(
-                      (sum, r) => sum + Number(r.free_value || 0),
+                      (s, r) => s + Number(r.free_value || 0),
                       0,
                     ),
                   )}
@@ -2974,7 +3710,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                   label="Paid Bookings"
                   value={fmt(
                     displayedSummaryModalRows.reduce(
-                      (sum, r) => sum + Number(r.paid_bookings || 0),
+                      (s, r) => s + Number(r.paid_bookings || 0),
                       0,
                     ),
                   )}
@@ -2985,7 +3721,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                   label="Free / Comp Bookings"
                   value={fmt(
                     displayedSummaryModalRows.reduce(
-                      (sum, r) => sum + Number(r.free_bookings || 0),
+                      (s, r) => s + Number(r.free_bookings || 0),
                       0,
                     ),
                   )}
@@ -3004,7 +3740,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                 <input
                   value={summarySearch}
                   onChange={(e) => setSummarySearch(e.target.value)}
-                  placeholder="Search villa, source, payment type..."
+                  placeholder="Search villa, source, payment type…"
                   style={{
                     flex: "1 1 260px",
                     padding: "9px 11px",
@@ -3031,6 +3767,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                     "revenue",
                     "free_value",
                     "unique_members",
+                    "avg_bedrooms",
                   ]}
                 />
                 <Select
@@ -3049,7 +3786,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                 <table
                   style={{
                     width: "100%",
-                    minWidth: 980,
+                    minWidth: 1080,
                     borderCollapse: "collapse",
                     fontSize: 12,
                   }}
@@ -3075,6 +3812,8 @@ export default function VillaSourceBreakdown({ years, months }) {
                         "Revenue",
                         "Comp Value",
                         "Members",
+                        "Avg Beds",
+                        "Top Bed",
                       ].map((h) => (
                         <th
                           key={h}
@@ -3206,6 +3945,23 @@ export default function VillaSourceBreakdown({ years, months }) {
                         >
                           {fmt(r.unique_members)}
                         </td>
+                        {/* NEW bedroom columns */}
+                        <td
+                          style={{
+                            padding: 10,
+                            textAlign: "right",
+                            color: C.soft,
+                          }}
+                        >
+                          {r.avg_bedrooms != null ? num(r.avg_bedrooms) : "—"}
+                        </td>
+                        <td style={{ padding: 10, textAlign: "right" }}>
+                          {r.most_common_bedrooms != null ? (
+                            <BedBadge count={r.most_common_bedrooms} />
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -3216,7 +3972,7 @@ export default function VillaSourceBreakdown({ years, months }) {
         </div>
       )}
 
-      {/* ── Drilldown modal ──────────────────────────────────────────────── */}
+      {/* Drilldown modal */}
       {modalOpen && (
         <div
           onClick={() => setModalOpen(false)}
@@ -3243,7 +3999,6 @@ export default function VillaSourceBreakdown({ years, months }) {
               flexDirection: "column",
             }}
           >
-            {/* Sticky header */}
             <div
               style={{
                 position: "sticky",
@@ -3293,9 +4048,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                   ← Back to aggregate breakdown
                 </button>
               )}
-
               <div className="dashboard-eyebrow">Booking drilldown</div>
-
               <h2
                 style={{
                   fontFamily: "'Cormorant Garamond', serif",
@@ -3307,7 +4060,6 @@ export default function VillaSourceBreakdown({ years, months }) {
               >
                 {modalVilla}
               </h2>
-
               <div
                 style={{ color: C.muted, fontSize: 12, margin: "8px 48px 0 0" }}
               >
@@ -3317,7 +4069,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                 <PeriodPill filter={modalDateFilter} />
               </div>
 
-              {/* context pills */}
+              {/* Context pills */}
               <div
                 style={{
                   display: "flex",
@@ -3366,9 +4118,28 @@ export default function VillaSourceBreakdown({ years, months }) {
                     {modalIsFree ? "Free / Comp only" : "Paid only"}
                   </span>
                 )}
+                {/* NEW: bedroom filter badge */}
+                {modalBedrooms !== null && (
+                  <span
+                    style={{
+                      padding: "4px 12px",
+                      borderRadius: 999,
+                      fontSize: 11,
+                      fontWeight: 700,
+                      background: "rgba(30,80,150,0.08)",
+                      border: `1px solid ${C.accent}`,
+                      color: C.accent,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
+                    }}
+                  >
+                    <BedDouble size={10} />
+                    {modalBedrooms} bedroom only
+                  </span>
+                )}
               </div>
 
-              {/* Modal-level filters */}
               <div
                 style={{
                   marginTop: 14,
@@ -3386,9 +4157,7 @@ export default function VillaSourceBreakdown({ years, months }) {
               </div>
             </div>
 
-            {/* Scrollable body */}
             <div style={{ padding: 26, flex: 1 }}>
-              {/* Controls row */}
               <div
                 style={{
                   display: "flex",
@@ -3414,6 +4183,35 @@ export default function VillaSourceBreakdown({ years, months }) {
                     outline: "none",
                   }}
                 />
+                {/* NEW: bedroom filter */}
+                <label
+                  style={{ display: "flex", alignItems: "center", gap: 8 }}
+                >
+                  <span className="dashboard-eyebrow">Bedrooms</span>
+                  <select
+                    value={modalBedrooms ?? ""}
+                    onChange={(e) =>
+                      setModalBedrooms(
+                        e.target.value === "" ? null : Number(e.target.value),
+                      )
+                    }
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      border: `1px solid ${C.border}`,
+                      background: C.bg,
+                      color: C.text,
+                      fontSize: 12,
+                    }}
+                  >
+                    <option value="">All</option>
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                      <option key={n} value={n}>
+                        {n} bed
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <Select
                   label="Sort"
                   value={modalSortKey}
@@ -3426,6 +4224,7 @@ export default function VillaSourceBreakdown({ years, months }) {
                     "nights",
                     "source",
                     "payment_type",
+                    "bedroom_count",
                   ]}
                 />
                 <Select
@@ -3435,8 +4234,6 @@ export default function VillaSourceBreakdown({ years, months }) {
                   options={["asc", "desc"]}
                 />
               </div>
-
-              {/* Count + export */}
               <div
                 style={{
                   display: "flex",
@@ -3466,7 +4263,6 @@ export default function VillaSourceBreakdown({ years, months }) {
                 />
               </div>
 
-              {/* Booking timeline */}
               {modalLoading ? (
                 <div
                   style={{
@@ -3493,7 +4289,6 @@ export default function VillaSourceBreakdown({ years, months }) {
                 </div>
               ) : (
                 <div style={{ position: "relative" }}>
-                  {/* timeline rail */}
                   <div
                     style={{
                       position: "absolute",

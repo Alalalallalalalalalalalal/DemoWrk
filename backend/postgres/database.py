@@ -21,25 +21,20 @@ DATABASE_URL = (
     f"{DB_CONFIG['database']}"
 )
 
-# Create SQLAlchemy engine
-engine = create_engine(DATABASE_URL)
-
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
+# database.py
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=5,
+    max_overflow=0,
+    pool_pre_ping=True,
+    pool_recycle=300,
 )
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
-def test_db():
+def get_db():
+    db = SessionLocal()
     try:
-        with engine.connect() as conn:
-            result = conn.execute(
-                text("SELECT 'PostgreSQL connected'")
-            ).scalar()
+        yield db
+    finally:
+        db.close()
 
-            print(result)
-            return result
-
-    except Exception as e:
-        print("Database connection failed:")
-        print(e)
