@@ -1491,23 +1491,27 @@ def demographics_summary(
             db,
             f"""
             SELECT
-                CASE
-                    WHEN m.age < 18
-                        THEN 'Under 18'
-                    WHEN m.age BETWEEN 18 AND 25
-                        THEN '18-25'
-                    WHEN m.age BETWEEN 26 AND 35
-                        THEN '26-35'
-                    WHEN m.age BETWEEN 36 AND 50
-                        THEN '36-50'
-                    WHEN m.age BETWEEN 51 AND 65
-                        THEN '51-65'
-                    ELSE '66+'
-                END AS age_group,
+                age_group,
                 COUNT(*)::int AS total
-            FROM members m
-            WHERE m.age IS NOT NULL
-              {member_filter}
+            FROM (
+                SELECT
+                    CASE
+                        WHEN m.age < 18
+                            THEN 'Under 18'
+                        WHEN m.age BETWEEN 18 AND 25
+                            THEN '18-25'
+                        WHEN m.age BETWEEN 26 AND 35
+                            THEN '26-35'
+                        WHEN m.age BETWEEN 36 AND 50
+                            THEN '36-50'
+                        WHEN m.age BETWEEN 51 AND 65
+                            THEN '51-65'
+                        ELSE '66+'
+                    END AS age_group
+                FROM members m
+                WHERE m.age IS NOT NULL
+                {member_filter}
+            ) AS grouped_members
             GROUP BY age_group
             ORDER BY
                 CASE age_group
@@ -1617,27 +1621,184 @@ def demographics_summary(
             params,
         ),
 
+        "newVsRepeatVisitors": rows(
+            db,
+            """
+            WITH booking_accounts AS (
+                SELECT
+                    r.member_number,
+
+                    EXTRACT(
+                        YEAR FROM r.check_in_date
+                    )::int AS year,
+
+                    MIN(
+                        r.check_in_date::date
+                    ) AS first_booking_date,
+
+                    COUNT(
+                        DISTINCT r.check_in_date::date
+                    )::int AS bookings_in_year
+
+                FROM rooms r
+
+                WHERE r.member_number IS NOT NULL
+                AND r.check_in_date IS NOT NULL
+
+                GROUP BY
+                    r.member_number,
+                    EXTRACT(YEAR FROM r.check_in_date)
+            ),
+
+            classified_bookings AS (
+                SELECT
+                    ba.member_number,
+                    ba.year,
+                    ba.first_booking_date,
+                    ba.bookings_in_year,
+
+                    TRIM(m.member_or_guest)
+                        AS account_category,
+
+                    CASE
+                        WHEN m.since_date IS NULL
+                            THEN 'New'
+
+                        WHEN m.since_date::date
+                            < ba.first_booking_date
+                            THEN 'Repeat'
+
+                        ELSE 'New'
+                    END AS account_status
+
+                FROM booking_accounts ba
+
+                JOIN members m
+                ON m.member_number = ba.member_number
+
+                WHERE TRIM(m.member_or_guest)
+                    IN ('Member', 'Guest')
+            ),
+
+            accounts_without_bookings AS (
+                SELECT
+                    m.member_number,
+
+                    EXTRACT(
+                        YEAR FROM m.since_date
+                    )::int AS year,
+
+                    NULL::date AS first_booking_date,
+                    0::int AS bookings_in_year,
+
+                    TRIM(m.member_or_guest)
+                        AS account_category,
+
+                    'New'::text AS account_status
+
+                FROM members m
+
+                WHERE m.since_date IS NOT NULL
+
+                AND TRIM(m.member_or_guest)
+                    IN ('Member', 'Guest')
+
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM rooms r
+                    WHERE r.member_number =
+                            m.member_number
+                        AND r.check_in_date IS NOT NULL
+                )
+            ),
+
+            combined_accounts AS (
+                SELECT
+                    member_number,
+                    year,
+                    first_booking_date,
+                    bookings_in_year,
+                    account_category,
+                    account_status
+                FROM classified_bookings
+
+                UNION ALL
+
+                SELECT
+                    member_number,
+                    year,
+                    first_booking_date,
+                    bookings_in_year,
+                    account_category,
+                    account_status
+                FROM accounts_without_bookings
+            )
+
+            SELECT
+                year,
+
+                COUNT(*) FILTER (
+                    WHERE account_status = 'New'
+                )::int AS total_new,
+
+                COUNT(*) FILTER (
+                    WHERE account_status = 'Repeat'
+                )::int AS total_repeat,
+
+                COUNT(*) FILTER (
+                    WHERE account_status = 'New'
+                    AND account_category = 'Member'
+                )::int AS new_members,
+
+                COUNT(*) FILTER (
+                    WHERE account_status = 'Repeat'
+                    AND account_category = 'Member'
+                )::int AS repeat_members,
+
+                COUNT(*) FILTER (
+                    WHERE account_status = 'New'
+                    AND account_category = 'Guest'
+                )::int AS new_guests,
+
+                COUNT(*) FILTER (
+                    WHERE account_status = 'Repeat'
+                    AND account_category = 'Guest'
+                )::int AS repeat_guests,
+
+                COUNT(*)::int AS total_accounts
+
+            FROM combined_accounts
+
+            GROUP BY year
+            ORDER BY year
+            """,
+        ),
+
         "dependentsByAgeGroup": rows(
             db,
             f"""
             SELECT
-                CASE
-                    WHEN d.age < 18
-                        THEN 'Under 18'
-                    WHEN d.age BETWEEN 18 AND 25
-                        THEN '18-25'
-                    WHEN d.age BETWEEN 26 AND 35
-                        THEN '26-35'
-                    WHEN d.age BETWEEN 36 AND 50
-                        THEN '36-50'
-                    ELSE '51+'
-                END AS age_group,
+                age_group,
                 COUNT(*)::int AS total
-            FROM dependents d
-            JOIN members m
-              ON m.member_number = d.member_number
-            WHERE d.age IS NOT NULL
-              {member_filter}
+            FROM (
+                SELECT
+                    CASE
+                        WHEN d.age < 18
+                            THEN 'Under 18'
+                        WHEN d.age BETWEEN 18 AND 25
+                            THEN '18-25'
+                        WHEN d.age BETWEEN 26 AND 35
+                            THEN '26-35'
+                        WHEN d.age BETWEEN 36 AND 50
+                            THEN '36-50'
+                        ELSE '51+'
+                    END AS age_group
+                FROM dependents d
+                JOIN members m
+                ON m.member_number = d.member_number
+                WHERE d.age IS NOT NULL
+                {member_filter}
+            ) AS grouped_dependents
             GROUP BY age_group
             ORDER BY
                 CASE age_group
@@ -3134,10 +3295,13 @@ def demographic_account_details(
         return [dict(row) for row in result]
     if normalized_dimension == "account_type":
         result = db.execute(
-            text("""
+            text(f"""
                 SELECT
                     m.member_number,
-                    m.member_full_name,
+                    COALESCE(
+                        NULLIF(TRIM(m.member_full_name), ''),
+                        NULLIF(TRIM(m.member_name), '')
+                    ) AS member_full_name,
                     m.member_name,
                     m.member_or_guest,
                     m.member_type,
@@ -3166,21 +3330,25 @@ def demographic_account_details(
                         country
                     FROM member_addresses
                     WHERE member_number =
-                          m.member_number
+                        m.member_number
                     ORDER BY
                         city NULLS LAST,
                         address_line1 NULLS LAST
                     LIMIT 1
                 ) ma ON TRUE
+
                 WHERE LOWER(TRIM(m.member_type)) =
-                      LOWER(:value)
-                  AND (
-                      :category IS NULL
-                      OR LOWER(
-                          TRIM(m.member_or_guest)
-                      ) = LOWER(:category)
-                  )
+                    LOWER(:value)
+
+                AND (
+                    :category IS NULL
+                    OR LOWER(
+                        TRIM(m.member_or_guest)
+                    ) = LOWER(:category)
+                )
+
                 {date_filter}
+
                 ORDER BY
                     m.member_full_name NULLS LAST,
                     m.member_name NULLS LAST,
@@ -3189,8 +3357,16 @@ def demographic_account_details(
             {
                 "value": normalized_value,
                 "category": normalized_category,
+                **filter_params(
+                    year=year,
+                    month=month,
+                    date=date,
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
             },
         ).mappings().all()
+
         return [dict(row) for row in result]
 
     result = db.execute(
@@ -3226,20 +3402,20 @@ def demographic_account_details(
                     country
                 FROM member_addresses
                 WHERE member_number =
-                      m.member_number
+                    m.member_number
                 ORDER BY
                     city NULLS LAST,
                     address_line1 NULLS LAST
                 LIMIT 1
             ) ma ON TRUE
             WHERE LOWER(TRIM(m.status)) =
-                  LOWER(:value)
-              AND (
-                  :category IS NULL
-                  OR LOWER(
-                      TRIM(m.member_or_guest)
-                  ) = LOWER(:category)
-              )
+                LOWER(:value)
+            AND (
+                :category IS NULL
+                OR LOWER(
+                    TRIM(m.member_or_guest)
+                ) = LOWER(:category)
+            )
             {date_filter}
             ORDER BY
                 m.member_full_name NULLS LAST,
@@ -3252,3 +3428,257 @@ def demographic_account_details(
         },
     ).mappings().all()
     return [dict(row) for row in result]
+    
+@router.get("/new-vs-repeat-visitors/details")
+def get_new_vs_repeat_visitor_details(
+    year: int,
+    visitor_status: str,
+    db: Session = Depends(get_db),
+):
+    normalized_status = (
+        visitor_status
+        .strip()
+        .lower()
+    )
+
+    if normalized_status not in {
+        "new",
+        "repeat",
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "visitor_status must be "
+                "either New or Repeat"
+            ),
+        )
+
+    selected_status = (
+        "New"
+        if normalized_status == "new"
+        else "Repeat"
+    )
+
+    result = db.execute(
+        text("""
+            WITH booking_accounts AS (
+                SELECT
+                    r.member_number,
+
+                    EXTRACT(
+                        YEAR FROM r.check_in_date
+                    )::int AS year,
+
+                    MIN(
+                        r.check_in_date::date
+                    ) AS first_booking_date,
+
+                    MAX(
+                        r.check_in_date::date
+                    ) AS last_booking_date,
+
+                    COUNT(
+                        DISTINCT
+                        r.check_in_date::date
+                    )::int AS bookings_in_year
+
+                FROM rooms r
+
+                WHERE r.member_number IS NOT NULL
+                  AND r.check_in_date IS NOT NULL
+
+                GROUP BY
+                    r.member_number,
+                    EXTRACT(
+                        YEAR FROM r.check_in_date
+                    )
+            ),
+
+            classified_bookings AS (
+                SELECT
+                    ba.member_number,
+                    ba.year,
+                    ba.first_booking_date,
+                    ba.last_booking_date,
+                    ba.bookings_in_year,
+
+                    COALESCE(
+                        NULLIF(
+                            TRIM(
+                                m.member_full_name
+                            ),
+                            ''
+                        ),
+                        NULLIF(
+                            TRIM(
+                                m.member_name
+                            ),
+                            ''
+                        ),
+                        'Unknown'
+                    ) AS member_full_name,
+
+                    TRIM(
+                        m.member_or_guest
+                    ) AS member_or_guest,
+
+                    m.member_type,
+                    m.status,
+                    m.since_date,
+                    m.age,
+                    m.gender,
+                    m.email,
+
+                    CASE
+                        WHEN m.since_date IS NULL
+                            THEN 'New'
+
+                        WHEN m.since_date::date
+                             < ba.first_booking_date
+                            THEN 'Repeat'
+
+                        ELSE 'New'
+                    END AS account_status
+
+                FROM booking_accounts ba
+
+                JOIN members m
+                  ON m.member_number =
+                     ba.member_number
+
+                WHERE TRIM(
+                    m.member_or_guest
+                ) IN ('Member', 'Guest')
+            ),
+
+            accounts_without_bookings AS (
+                SELECT
+                    m.member_number,
+
+                    EXTRACT(
+                        YEAR FROM m.since_date
+                    )::int AS year,
+
+                    NULL::date
+                        AS first_booking_date,
+
+                    NULL::date
+                        AS last_booking_date,
+
+                    0::int
+                        AS bookings_in_year,
+
+                    COALESCE(
+                        NULLIF(
+                            TRIM(
+                                m.member_full_name
+                            ),
+                            ''
+                        ),
+                        NULLIF(
+                            TRIM(
+                                m.member_name
+                            ),
+                            ''
+                        ),
+                        'Unknown'
+                    ) AS member_full_name,
+
+                    TRIM(
+                        m.member_or_guest
+                    ) AS member_or_guest,
+
+                    m.member_type,
+                    m.status,
+                    m.since_date,
+                    m.age,
+                    m.gender,
+                    m.email,
+
+                    'New'::text
+                        AS account_status
+
+                FROM members m
+
+                WHERE m.since_date IS NOT NULL
+
+                  AND TRIM(
+                      m.member_or_guest
+                  ) IN ('Member', 'Guest')
+
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM rooms r
+                      WHERE r.member_number =
+                            m.member_number
+                        AND r.check_in_date
+                            IS NOT NULL
+                  )
+            ),
+
+            combined_accounts AS (
+                SELECT *
+                FROM classified_bookings
+
+                UNION ALL
+
+                SELECT *
+                FROM accounts_without_bookings
+            )
+
+            SELECT
+                ca.year,
+                ca.member_number,
+                ca.member_full_name,
+                ca.member_or_guest,
+                ca.member_type,
+                ca.status,
+                ca.since_date,
+                ca.age,
+                ca.gender,
+                ca.email,
+                ca.bookings_in_year,
+                ca.first_booking_date,
+                ca.last_booking_date,
+                ca.account_status
+                    AS visitor_status,
+
+                ma.city,
+                ma.state,
+                ma.postal_code,
+                ma.country
+
+            FROM combined_accounts ca
+
+            LEFT JOIN LATERAL (
+                SELECT
+                    a.city,
+                    a.state,
+                    a.postal_code,
+                    a.country
+                FROM member_addresses a
+                WHERE a.member_number =
+                      ca.member_number
+                LIMIT 1
+            ) ma ON TRUE
+
+            WHERE ca.year = :year
+              AND ca.account_status =
+                  :selected_status
+
+            ORDER BY
+                ca.member_or_guest,
+                ca.bookings_in_year DESC,
+                ca.member_full_name
+        """),
+        {
+            "year": year,
+            "selected_status":
+                selected_status,
+        },
+    ).mappings().all()
+
+    return [
+        dict(row)
+        for row in result
+    ]

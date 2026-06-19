@@ -97,6 +97,7 @@ const COLUMNS = [
 ];
 
 export default function StateAccountsModal({
+  isOpen,
   state = null,
   title = "",
   eyebrow = "Account details",
@@ -146,7 +147,7 @@ export default function StateAccountsModal({
    * the drawer from scrolling.
    */
   useEffect(() => {
-    if (!state && !title) {
+    if (!isOpen) {
       return undefined;
     }
 
@@ -175,7 +176,7 @@ export default function StateAccountsModal({
         handleEscape,
       );
     };
-  }, [state, title, onClose]);
+  }, [isOpen, onClose]);
 
   /*
    * Close the export menu when clicking elsewhere.
@@ -214,9 +215,13 @@ export default function StateAccountsModal({
    * drawer/table is opened.
    */
   useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
     setSearch("");
     setExportMenuOpen(false);
-  }, [state, title]);
+  }, [isOpen, state, title]);
 
   /*
    * Adjustable right-side drawer width.
@@ -605,7 +610,7 @@ export default function StateAccountsModal({
       "none";
   };
 
-  if (!state && !title) {
+  if (!isOpen) {
     return null;
   }
 

@@ -89,6 +89,169 @@ function Card({ title, sub, children }) {
     );
 }
 
+function ClickableVisitorDot({
+    cx,
+    cy,
+    payload,
+    fill,
+    visitorStatus,
+    onPointClick,
+    }) {
+    if (
+        cx == null ||
+        cy == null ||
+        payload?.year == null
+    ) {
+        return null;
+    }
+
+    const handleClick = (event) => {
+        event?.stopPropagation?.();
+
+        onPointClick(
+        payload.year,
+        visitorStatus,
+        );
+    };
+
+    return (
+        <circle
+        cx={cx}
+        cy={cy}
+        r={4}
+        fill={fill}
+        stroke="var(--dashboard-card)"
+        strokeWidth={2}
+        role="button"
+        tabIndex={0}
+        aria-label={`View ${visitorStatus} visitors for ${payload.year}`}
+        style={{
+            cursor: "pointer",
+        }}
+        onClick={handleClick}
+        onKeyDown={(event) => {
+            if (
+            event.key === "Enter" ||
+            event.key === " "
+            ) {
+            event.preventDefault();
+            handleClick(event);
+            }
+        }}
+        />
+    );
+}
+
+function NewRepeatTooltip({
+    active,
+    payload,
+    label,
+    }) {
+    if (
+        !active ||
+        !payload?.length
+    ) {
+        return null;
+    }
+
+    const row = payload[0]?.payload;
+
+    if (!row) {
+        return null;
+    }
+
+    return (
+        <div style={TIP}>
+        <div
+            style={{
+            fontWeight: 700,
+            marginBottom: 6,
+            }}
+        >
+            {label}
+        </div>
+
+        <div>
+            New Visitors:{" "}
+            <strong>
+            {row.total_new ?? 0}
+            </strong>
+        </div>
+
+        <div
+            style={{
+            paddingLeft: 8,
+            fontSize: 11,
+            opacity: 0.8,
+            }}
+        >
+            Members: {row.new_members ?? 0}
+            {" · "}
+            Guests: {row.new_guests ?? 0}
+        </div>
+
+        <div
+            style={{
+            marginTop: 6,
+            }}
+        >
+            Repeat Visitors:{" "}
+            <strong>
+            {row.total_repeat ?? 0}
+            </strong>
+        </div>
+
+        <div
+            style={{
+            paddingLeft: 8,
+            fontSize: 11,
+            opacity: 0.8,
+            }}
+        >
+            Members: {row.repeat_members ?? 0}
+            {" · "}
+            Guests: {row.repeat_guests ?? 0}
+        </div>
+
+        <div
+            style={{
+            marginTop: 8,
+            fontSize: 10,
+            opacity: 0.7,
+            }}
+        >
+            Click a dot to view records
+        </div>
+        </div>
+    );
+}
+
+function formatDashboardDate(value) {
+    if (!value) {
+        return "—";
+    }
+
+    const dateText =
+        String(value).slice(0, 10);
+
+    const date = new Date(
+        `${dateText}T00:00:00`,
+    );
+
+    if (Number.isNaN(date.getTime())) {
+        return String(value);
+    }
+
+    return date.toLocaleDateString(
+        "en-US",
+        {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        },
+    );
+}
+
 /* ─── Demographics tab ──────────────────────────────────────── */
 
 export default function DemographicsTab({
@@ -100,6 +263,7 @@ export default function DemographicsTab({
     membersByStatus = [],
     membersByMaritalStatus = [],
     newMembersPerYear = [],
+    newVsRepeatVisitors = [],
     totalDependents = null,
     dependentsByAgeGroup = [],
     dependentsPerHousehold = [],
@@ -140,10 +304,7 @@ export default function DemographicsTab({
     const [accountDetails, setAccountDetails] = useState([]);
     const [accountDetailsLoading, setAccountDetailsLoading,] = useState(false);
 
-    const [
-    accountDetailsError,
-    setAccountDetailsError,
-    ] = useState("");
+    const [accountDetailsError, setAccountDetailsError,] = useState("");
 
     const countryChartRef = useRef(null);
 
@@ -442,9 +603,32 @@ export default function DemographicsTab({
             block: "center",
         });
     };
+    const handleVisitorPointClick = (
+        year,
+        visitorStatus,
+        ) => {
+        openAccountDrawer({
+            title:
+            `${visitorStatus} Visitors — ${year}`,
+
+            eyebrow:
+            "Visitor details",
+
+            emptyMessage:
+            `No ${visitorStatus.toLowerCase()} visitors were found for ${year}.`,
+
+            exportKey:
+            `${visitorStatus.toLowerCase()}-visitors-${year}`,
+
+            request: () =>
+            analyticsApi.newVsRepeatVisitorDetails(
+                Number(year),
+                visitorStatus,
+            ),
+        });
+        };
     return (
         <>
-        
         <div className="dashboard-section">
             {/* ─── KPI band ──────────────────────────────────────── */}
             <section
@@ -918,6 +1102,112 @@ export default function DemographicsTab({
             </Card>
             </div>
 
+            <div>
+                <Card
+                    title="New vs Repeat Visitors"
+                    sub="First-time visitors compared with returning visitors by year"
+                    >
+                    <div className="dashboard-chart dashboard-chart-200">
+                        <ResponsiveContainer>
+                        <LineChart
+                            data={newVsRepeatVisitors}
+                            margin={{
+                            top: 5,
+                            right: 12,
+                            bottom: 5,
+                            left: 0,
+                            }}
+                        >
+                            <CartesianGrid
+                            strokeDasharray="3 3"
+                            stroke={GRID}
+                            />
+
+                            <XAxis
+                            dataKey="year"
+                            stroke={AX}
+                            fontSize={11}
+                            allowDecimals={false}
+                            />
+
+                            <YAxis
+                            stroke={AX}
+                            fontSize={11}
+                            allowDecimals={false}
+                            />
+
+                            <Tooltip
+                            content={<NewRepeatTooltip />}
+                            />
+
+                            <Legend
+                            wrapperStyle={{
+                                fontSize: 11,
+                                paddingTop: 6,
+                            }}
+                            />
+
+                            <Line
+                            type="monotone"
+                            dataKey="total_new"
+                            name="New Visitors"
+                            stroke="#FFB162"
+                            strokeWidth={2.5}
+                            dot={(props) => (
+                                <ClickableVisitorDot
+                                {...props}
+                                fill="#FFB162"
+                                visitorStatus="New"
+                                onPointClick={
+                                    handleVisitorPointClick
+                                }
+                                />
+                            )}
+                            activeDot={(props) => (
+                                <ClickableVisitorDot
+                                {...props}
+                                fill="#FFB162"
+                                visitorStatus="New"
+                                onPointClick={
+                                    handleVisitorPointClick
+                                }
+                                />
+                            )}
+                            />
+
+                            <Line
+                            type="monotone"
+                            dataKey="total_repeat"
+                            name="Repeat Visitors"
+                            stroke="var(--dashboard-truffle)"
+                            strokeWidth={2.5}
+                            dot={(props) => (
+                                <ClickableVisitorDot
+                                {...props}
+                                fill="var(--dashboard-truffle)"
+                                visitorStatus="Repeat"
+                                onPointClick={
+                                    handleVisitorPointClick
+                                }
+                                />
+                            )}
+                            activeDot={(props) => (
+                                <ClickableVisitorDot
+                                {...props}
+                                fill="var(--dashboard-truffle)"
+                                visitorStatus="Repeat"
+                                onPointClick={
+                                    handleVisitorPointClick
+                                }
+                                />
+                            )}
+                            />
+                        </LineChart>
+                        </ResponsiveContainer>
+                    </div>
+                    </Card>
+            </div>
+
             {/* ─── Geographic distribution ───────────────────────── */}
             <SectionLabel>
             Geographic Distribution
@@ -1138,6 +1428,7 @@ export default function DemographicsTab({
 
         {/* State-account drawer */}
         <StateAccountsModal
+            isOpen={Boolean(accountDrawer)}
             state={accountDrawer?.state ?? null}
             title={accountDrawer?.title ?? ""}
             eyebrow={
@@ -1155,7 +1446,6 @@ export default function DemographicsTab({
             loading={accountDetailsLoading}
             error={accountDetailsError}
             onClose={closeAccountDrawer}
-
             dateFilter={drawerDateFilter}
             onDateFilterChange={
                 handleDrawerDateChange
@@ -1163,6 +1453,8 @@ export default function DemographicsTab({
             years={years}
             months={MONTHS}
             />
+
+            
         </>
     );
 }

@@ -57,6 +57,14 @@ export const analyticsApi = {
       ),
     ),
 
+  newVsRepeatVisitorDetails: (year, visitorStatus,) =>
+    fetchData(
+      withQuery(
+        `/analytics/new-vs-repeat-visitors/details`,
+        {year, visitor_status: visitorStatus,},
+      ),
+    ),
+
   demographicAccountDetails: ({ dimension, value, category, ...params }) => {
     const query = new URLSearchParams({
       dimension,
