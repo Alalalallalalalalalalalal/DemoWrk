@@ -28,6 +28,55 @@ const AX = "#9A8E84";
 const GRID = "#DDD6CA";
 const TIP = TOOLTIP_STYLE;
 
+const MONTHS = [
+  "All",
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const toDateParams = (filter) => {
+  if (filter.mode === "day") {
+    return filter.date
+      ? {
+          date: filter.date,
+        }
+      : {};
+  }
+
+  if (filter.mode === "range") {
+    return filter.startDate &&
+      filter.endDate
+      ? {
+          start_date: filter.startDate,
+          end_date: filter.endDate,
+        }
+      : {};
+  }
+
+  return {
+    year:
+      filter.year === "All"
+        ? null
+        : Number(filter.year),
+
+    month:
+      filter.month === "All"
+        ? null
+        : MONTHS.indexOf(filter.month),
+  };
+};
+
+
 /* ─── Local card wrapper ────────────────────────────────────── */
 
 function Card({ title, sub, children }) {
@@ -56,6 +105,33 @@ export default function DemographicsTab({
     dependentsPerHousehold = [],
     dependentsPerMember = [],
 }) {
+    const years = useMemo(() => {
+        const currentYear =
+            new Date().getFullYear();
+
+        return [
+            "All",
+            ...Array.from(
+            {
+                length:
+                currentYear - 2018 + 1,
+            },
+            (_, index) =>
+                currentYear - index,
+            ),
+        ];
+    }, []);
+
+    const [drawerDateFilter, setDrawerDateFilter] =
+        useState({
+            mode: "ym",
+            year: "All",
+            month: "All",
+            date: "",
+            startDate: "",
+            endDate: "",
+        });
+
     /* Account-type toggle */
     const [accountTypeView, setAccountTypeView] = useState("Member");
 
@@ -116,45 +192,98 @@ export default function DemographicsTab({
         return "—";
     })();
 
-    const openAccountDrawer = async ({
-        title,
-        eyebrow,
-        emptyMessage,
-        exportKey,
-        state = null,
-        request,
-        }) => {
-        setAccountDrawer({
-            state,
-            title,
-            eyebrow,
-            emptyMessage,
-            exportKey,
-        });
+    const loadDrawerAccounts = async (
+        drawer,
+        dateParams = {},
+    ) => {
+        if (!drawer?.request) return;
 
         setAccountDetails([]);
         setAccountDetailsError("");
         setAccountDetailsLoading(true);
 
         try {
-            const data = await request();
+            const data = await drawer.request(
+                dateParams,
+            );
 
             setAccountDetails(
-            Array.isArray(data) ? data : [],
+                Array.isArray(data) ? data : [],
             );
         } catch (error) {
             console.error(
-            `Unable to load ${title}:`,
-            error,
+                `Unable to load ${drawer.title}:`,
+                error,
             );
 
             setAccountDetailsError(
-            `${title} could not be loaded.`,
+                `${drawer.title} could not be loaded.`,
             );
         } finally {
             setAccountDetailsLoading(false);
         }
+    };
+
+    const openAccountDrawer = ({
+        title,
+        eyebrow,
+        emptyMessage,
+        exportKey,
+        state = null,
+        request,
+    }) => {
+        const drawer = {
+            state,
+            title,
+            eyebrow,
+            emptyMessage,
+            exportKey,
+            request,
         };
+
+        setAccountDrawer(drawer);
+
+        const defaultFilter = {
+            mode: "ym",
+            year: "All",
+            month: "All",
+            date: "",
+            startDate: "",
+            endDate: "",
+        };
+
+        setDrawerDateFilter(defaultFilter);
+
+        loadDrawerAccounts(drawer, {});
+    };
+
+    const handleDrawerDateChange = (
+        nextFilter,
+        ) => {
+        setDrawerDateFilter(nextFilter);
+
+        if (
+            nextFilter.mode === "range" &&
+            (
+            !nextFilter.startDate ||
+            !nextFilter.endDate
+            )
+        ) {
+            return;
+        }
+
+        if (
+            nextFilter.mode === "day" &&
+            !nextFilter.date
+        ) {
+            return;
+        }
+
+        loadDrawerAccounts(
+            accountDrawer,
+            toDateParams(nextFilter),
+        );
+    };
 
     /* ─── State drawer interaction ────────────────────────────── */
 
@@ -172,10 +301,11 @@ export default function DemographicsTab({
             `No member households were found in ${householdGroup}.`,
             exportKey:
             `households-${householdGroup}`,
-            request: () =>
+            request: (dateParams = {}) =>
             analyticsApi.demographicAccountDetails({
                 dimension: "household",
                 value: householdGroup,
+                ...dateParams,
             }),
         });
         };
@@ -196,11 +326,12 @@ export default function DemographicsTab({
             `No ${category.toLowerCase()} accounts were found with the status ${status}.`,
             exportKey:
             `${category}-${status}`,
-            request: () =>
+            request: (dateParams = {}) =>
             analyticsApi.demographicAccountDetails({
                 dimension: "status",
                 value: status,
                 category,
+                ...dateParams,
             }),
         });
     };
@@ -222,91 +353,60 @@ export default function DemographicsTab({
             `No ${category.toLowerCase()} accounts were found for ${memberType}.`,
             exportKey:
             `${category}-${memberType}`,
-            request: () =>
+            request: (dateParams = {}) =>
             analyticsApi.demographicAccountDetails({
                 dimension: "account_type",
                 value: memberType,
                 category,
+                ...dateParams,
             }),
         });
         };
 
-    const handleStateClick = async (state) => {
-        setAccountDrawer({
+    const handleStateClick = (state) => {
+        openAccountDrawer({
             state,
-            title: `Accounts in ${state.name} (${state.code})`,
+            title:
+            `Accounts in ${state.name} (${state.code})`,
             eyebrow: "State account details",
             emptyMessage:
             `No accounts were found in ${state.name}.`,
-            exportKey: `accounts-${state.code}`,
-        });
+            exportKey:
+            `accounts-${state.code}`,
 
-        setAccountDetails([]);
-        setAccountDetailsError("");
-        setAccountDetailsLoading(true);
-
-        try {
-            const data =
-            await analyticsApi.stateAccounts(
+            request: (dateParams = {}) =>
+            analyticsApi.stateAccounts(
                 state.code,
-            );
-
-            setAccountDetails(
-            Array.isArray(data) ? data : [],
-            );
-        } catch (error) {
-            console.error(
-            "Unable to load state accounts:",
-            error,
-            );
-
-            setAccountDetailsError(
-            `Account information for ${state.name} could not be loaded.`,
-            );
-        } finally {
-            setAccountDetailsLoading(false);
-        }
+                dateParams,
+            ),
+        });
         };
-    const handleAccountCategoryClick = async (category,) => {
+
+    const handleAccountCategoryClick = (
+        category,
+        ) => {
         const pluralLabel =
             category === "Member"
-            ? "Members" : "Guests";
+            ? "Members"
+            : "Guests";
 
-            setAccountDrawer({
-                state: null,
-                title: `All ${pluralLabel}`,
-                eyebrow: "Account category details",
-                emptyMessage:
-                `No ${pluralLabel.toLowerCase()} were found.`,
-                exportKey: `all-${pluralLabel.toLowerCase()}`,
-            });
+        openAccountDrawer({
+            state: null,
+            title: `All ${pluralLabel}`,
+            eyebrow:
+            "Account category details",
+            emptyMessage:
+            `No ${pluralLabel.toLowerCase()} were found.`,
+            exportKey:
+            `all-${pluralLabel.toLowerCase()}`,
 
-            setAccountDetails([]);
-            setAccountDetailsError("");
-            setAccountDetailsLoading(true);
-
-            try {
-                const data =
-                await analyticsApi.accountCategoryDetails(
-                    category,
-                );
-
-                setAccountDetails(
-                Array.isArray(data) ? data : [],
-                );
-            } catch (error) {
-                console.error(
-                `Unable to load ${pluralLabel}:`,
-                error,
-                );
-
-                setAccountDetailsError(
-                `${pluralLabel} could not be loaded.`,
-                );
-            } finally {
-                setAccountDetailsLoading(false);
-            }
-            };
+            request: (dateParams = {}) =>
+            analyticsApi.accountCategoryDetails(
+                category,
+                dateParams,
+            ),
+        });
+        };
 
     const handleCountryClick = (entry) => {
         const row = entry?.payload ?? entry;
@@ -320,10 +420,11 @@ export default function DemographicsTab({
             emptyMessage:
             `No accounts were found in ${country}.`,
             exportKey: `accounts-${country}`,
-            request: () =>
+            request: (dateParams = {}) =>
             analyticsApi.demographicAccountDetails({
                 dimension: "country",
                 value: country,
+                ...dateParams,
             }),
         });
     };
@@ -343,6 +444,7 @@ export default function DemographicsTab({
     };
     return (
         <>
+        
         <div className="dashboard-section">
             {/* ─── KPI band ──────────────────────────────────────── */}
             <section
@@ -1053,6 +1155,13 @@ export default function DemographicsTab({
             loading={accountDetailsLoading}
             error={accountDetailsError}
             onClose={closeAccountDrawer}
+
+            dateFilter={drawerDateFilter}
+            onDateFilterChange={
+                handleDrawerDateChange
+            }
+            years={years}
+            months={MONTHS}
             />
         </>
     );

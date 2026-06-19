@@ -14,6 +14,7 @@ import SourceRevenueTable from "./SourceRevenueTable";
 import { MemberGuestRevenueTable, VillaRevenueTable } from "./FinanceTables";
 import AmenityRevenueTable from "./AmenityRevenueTable";
 import RevenueBreakdownDrawer from "./RevenueBreakdownDrawer";
+import CategoryCompBreakdown from "./CategoryCompBreakdown";
 
 const C = {
   text:   "var(--dashboard-abyssal)",
@@ -93,10 +94,11 @@ export default function FinanceTab() {
   const [memberGuest,    setMemberGuest]    = useState([]);
   const [villaRevenue,   setVillaRevenue]   = useState([]);
   const [amenityRevenue, setAmenityRevenue] = useState([]);
+  const [categoryBreakdown, setCategoryBreakdown] = useState([]);
 
   // ── loading / error per section ────────────────────────────────
   const [loadingMap, setLoadingMap] = useState({
-    overview: true, source: true, memberGuest: true, villa: true, amenity: true,
+    overview: true, category: true, source: true, memberGuest: true, villa: true, amenity: true,
   });
   const [errorMap, setErrorMap] = useState({});
 
@@ -120,6 +122,11 @@ export default function FinanceTab() {
       .then(setOverview)
       .catch((e) => setErr("overview", e.message))
       .finally(() => setLoad("overview", false));
+
+    financeApi.categoryCompBreakdown()
+      .then(setCategoryBreakdown)
+      .catch((e) => setErr("category", e.message))
+      .finally(() => setLoad("category", false));
 
     // Source breakdown
     financeApi.sourceBreakdown()
@@ -207,6 +214,21 @@ export default function FinanceTab() {
         <InlineError message={errorMap.overview} />
       ) : (
         <FinanceOverview data={overview} onCardClick={handleOverviewCardClick} />
+      )}
+
+      {/* ── 1.5 Category Comp Breakdown ──────────────────────────────── */}
+      <SectionLabel>Collected .vs. Given Away</SectionLabel>
+      
+      {loadingMap.category ? (
+        <Skeleton height={360} />
+      ) : errorMap.category ? (
+        <InlineError message={errorMap.category} />
+      ) : (
+        <CategoryCompBreakdown
+          data={categoryBreakdown}
+          onRowClick={({ drillType, drillValue }) => 
+          openDrawer({ drillType, drillValue })
+        }/>
       )}
 
       {/* ── 2. Revenue by Source ──────────────────────────────── */}

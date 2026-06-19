@@ -1283,6 +1283,76 @@ def date_filter_sql(alias="f", column="check_in_date"):
       )
     """
 
+def demographic_date_filter_sql(
+    alias: str = "m",
+    column: str = "since_date",
+):
+    """
+    Filters demographic records using a single date column.
+
+    Default:
+        members.since_date
+
+    Supported filters:
+        year
+        month
+        exact date
+        custom start/end range
+    """
+    date_column = f"{alias}.{column}"
+
+    return f"""
+      AND (
+        (
+          :date IS NULL
+          AND :start_date IS NULL
+          AND :end_date IS NULL
+          AND :year IS NULL
+          AND :month IS NULL
+        )
+
+        OR (
+          :date IS NOT NULL
+          AND {date_column}::date = :date
+        )
+
+        OR (
+          :date IS NULL
+          AND :start_date IS NOT NULL
+          AND :end_date IS NOT NULL
+          AND {date_column}::date
+              BETWEEN :start_date AND :end_date
+        )
+
+        OR (
+          :date IS NULL
+          AND :start_date IS NULL
+          AND :end_date IS NULL
+          AND :year IS NOT NULL
+          AND :month IS NULL
+          AND EXTRACT(YEAR FROM {date_column})::int = :year
+        )
+
+        OR (
+          :date IS NULL
+          AND :start_date IS NULL
+          AND :end_date IS NULL
+          AND :year IS NULL
+          AND :month IS NOT NULL
+          AND EXTRACT(MONTH FROM {date_column})::int = :month
+        )
+
+        OR (
+          :date IS NULL
+          AND :start_date IS NULL
+          AND :end_date IS NULL
+          AND :year IS NOT NULL
+          AND :month IS NOT NULL
+          AND EXTRACT(YEAR FROM {date_column})::int = :year
+          AND EXTRACT(MONTH FROM {date_column})::int = :month
+        )
+      )
+    """
 
 def filter_params(
     year: int | None = None,
@@ -1297,6 +1367,376 @@ def filter_params(
         "date": date,
         "start_date": start_date,
         "end_date": end_date,
+    }
+
+@router.get("/demographics-summary")
+def demographics_summary(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    if month is not None and not 1 <= month <= 12:
+        raise HTTPException(
+            status_code=400,
+            detail="month must be between 1 and 12",
+        )
+
+    if (
+        start_date is not None
+        and end_date is not None
+        and start_date > end_date
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="start_date cannot be after end_date",
+        )
+
+    if (
+        (start_date is None) !=
+        (end_date is None)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "start_date and end_date "
+                "must be supplied together"
+            ),
+        )
+
+    params = filter_params(
+        year=year,
+        month=month,
+        date=date,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    member_filter = demographic_date_filter_sql(
+        alias="m",
+        column="since_date",
+    )
+
+    return {
+        "membersByCountry": rows(
+            db,
+            f"""
+            SELECT
+                TRIM(a.country) AS country,
+                COUNT(
+                    DISTINCT m.member_number
+                )::int AS total
+            FROM members m
+            JOIN member_addresses a
+              ON a.member_number = m.member_number
+            WHERE a.country IS NOT NULL
+              AND TRIM(a.country) <> ''
+              {member_filter}
+            GROUP BY TRIM(a.country)
+            ORDER BY total DESC
+            """,
+            params,
+        ),
+
+        "membersByState": rows(
+            db,
+            f"""
+            SELECT
+                UPPER(TRIM(a.state)) AS state,
+                COUNT(
+                    DISTINCT m.member_number
+                )::int AS total
+            FROM members m
+            JOIN member_addresses a
+              ON a.member_number = m.member_number
+            WHERE UPPER(TRIM(a.state)) IN (
+                'AL', 'AK', 'AZ', 'AR', 'CA',
+                'CO', 'CT', 'DE', 'FL', 'GA',
+                'HI', 'ID', 'IL', 'IN', 'IA',
+                'KS', 'KY', 'LA', 'ME', 'MD',
+                'MA', 'MI', 'MN', 'MS', 'MO',
+                'MT', 'NE', 'NV', 'NH', 'NJ',
+                'NM', 'NY', 'NC', 'ND', 'OH',
+                'OK', 'OR', 'PA', 'RI', 'SC',
+                'SD', 'TN', 'TX', 'UT', 'VT',
+                'VA', 'WA', 'WV', 'WI', 'WY',
+                'DC'
+            )
+              {member_filter}
+            GROUP BY UPPER(TRIM(a.state))
+            ORDER BY total DESC
+            """,
+            params,
+        ),
+
+        "membersByGender": rows(
+            db,
+            f"""
+            SELECT
+                TRIM(m.gender) AS gender,
+                COUNT(*)::int AS total
+            FROM members m
+            WHERE m.gender IS NOT NULL
+              AND TRIM(m.gender) <> ''
+              {member_filter}
+            GROUP BY TRIM(m.gender)
+            ORDER BY total DESC
+            """,
+            params,
+        ),
+
+        "membersByAgeGroup": rows(
+            db,
+            f"""
+            SELECT
+                CASE
+                    WHEN m.age < 18
+                        THEN 'Under 18'
+                    WHEN m.age BETWEEN 18 AND 25
+                        THEN '18-25'
+                    WHEN m.age BETWEEN 26 AND 35
+                        THEN '26-35'
+                    WHEN m.age BETWEEN 36 AND 50
+                        THEN '36-50'
+                    WHEN m.age BETWEEN 51 AND 65
+                        THEN '51-65'
+                    ELSE '66+'
+                END AS age_group,
+                COUNT(*)::int AS total
+            FROM members m
+            WHERE m.age IS NOT NULL
+              {member_filter}
+            GROUP BY age_group
+            ORDER BY
+                CASE age_group
+                    WHEN 'Under 18' THEN 1
+                    WHEN '18-25' THEN 2
+                    WHEN '26-35' THEN 3
+                    WHEN '36-50' THEN 4
+                    WHEN '51-65' THEN 5
+                    ELSE 6
+                END
+            """,
+            params,
+        ),
+
+        "accountsByType": rows(
+            db,
+            f"""
+            SELECT
+                TRIM(m.member_type) AS member_type,
+                TRIM(m.member_or_guest)
+                    AS account_category,
+                COUNT(*)::int AS total
+            FROM members m
+            WHERE m.member_type IS NOT NULL
+              AND TRIM(m.member_type) <> ''
+              AND TRIM(m.member_or_guest)
+                  IN ('Member', 'Guest')
+              {member_filter}
+            GROUP BY
+                TRIM(m.member_type),
+                TRIM(m.member_or_guest)
+            ORDER BY total DESC
+            """,
+            params,
+        ),
+
+        "membersByStatus": rows(
+            db,
+            f"""
+            SELECT
+                TRIM(m.status) AS status,
+
+                COUNT(*) FILTER (
+                    WHERE TRIM(m.member_or_guest) = 'Member'
+                )::int AS members,
+
+                COUNT(*) FILTER (
+                    WHERE TRIM(m.member_or_guest) = 'Guest'
+                )::int AS guests,
+
+                COUNT(*)::int AS total
+            FROM members m
+            WHERE m.status IS NOT NULL
+              AND TRIM(m.status) <> ''
+              {member_filter}
+            GROUP BY TRIM(m.status)
+            ORDER BY total DESC
+            """,
+            params,
+        ),
+
+        "membersByMaritalStatus": rows(
+            db,
+            f"""
+            SELECT
+                TRIM(m.marital_status)
+                    AS marital_status,
+                COUNT(*)::int AS total
+            FROM members m
+            WHERE m.marital_status IS NOT NULL
+              AND TRIM(m.marital_status) <> ''
+              {member_filter}
+            GROUP BY TRIM(m.marital_status)
+            ORDER BY total DESC
+            """,
+            params,
+        ),
+
+        "newMembersPerYear": rows(
+            db,
+            f"""
+            SELECT
+                EXTRACT(
+                    YEAR FROM m.since_date
+                )::int AS year,
+
+                COUNT(*) FILTER (
+                    WHERE TRIM(m.member_or_guest) = 'Member'
+                )::int AS members,
+
+                COUNT(*) FILTER (
+                    WHERE TRIM(m.member_or_guest) = 'Guest'
+                )::int AS guests,
+
+                COUNT(*)::int AS total
+            FROM members m
+            WHERE m.since_date IS NOT NULL
+              AND EXTRACT(
+                    YEAR FROM m.since_date
+                  ) >= 2018
+              AND TRIM(m.member_or_guest)
+                  IN ('Member', 'Guest')
+              {member_filter}
+            GROUP BY year
+            ORDER BY year
+            """,
+            params,
+        ),
+
+        "dependentsByAgeGroup": rows(
+            db,
+            f"""
+            SELECT
+                CASE
+                    WHEN d.age < 18
+                        THEN 'Under 18'
+                    WHEN d.age BETWEEN 18 AND 25
+                        THEN '18-25'
+                    WHEN d.age BETWEEN 26 AND 35
+                        THEN '26-35'
+                    WHEN d.age BETWEEN 36 AND 50
+                        THEN '36-50'
+                    ELSE '51+'
+                END AS age_group,
+                COUNT(*)::int AS total
+            FROM dependents d
+            JOIN members m
+              ON m.member_number = d.member_number
+            WHERE d.age IS NOT NULL
+              {member_filter}
+            GROUP BY age_group
+            ORDER BY
+                CASE age_group
+                    WHEN 'Under 18' THEN 1
+                    WHEN '18-25' THEN 2
+                    WHEN '26-35' THEN 3
+                    WHEN '36-50' THEN 4
+                    ELSE 5
+                END
+            """,
+            params,
+        ),
+
+        "dependentsPerMember": rows(
+            db,
+            f"""
+            SELECT
+                m.member_number,
+                COUNT(
+                    d.dependent_number
+                )::int AS total_dependents
+            FROM members m
+            JOIN dependents d
+              ON d.member_number = m.member_number
+            WHERE 1 = 1
+              {member_filter}
+            GROUP BY m.member_number
+            ORDER BY total_dependents DESC
+            LIMIT 20
+            """,
+            params,
+        ),
+
+        "dependentsPerHousehold": rows(
+            db,
+            f"""
+            WITH household_counts AS (
+                SELECT
+                    m.member_number,
+                    COUNT(
+                        d.dependent_number
+                    )::int AS dependent_count
+                FROM members m
+                LEFT JOIN dependents d
+                  ON d.member_number = m.member_number
+                WHERE LOWER(
+                    TRIM(m.member_or_guest)
+                ) = 'member'
+                  {member_filter}
+                GROUP BY m.member_number
+            ),
+            grouped_households AS (
+                SELECT
+                    CASE
+                        WHEN dependent_count = 0
+                            THEN '0 Dependents'
+                        WHEN dependent_count = 1
+                            THEN '1 Dependent'
+                        WHEN dependent_count = 2
+                            THEN '2 Dependents'
+                        WHEN dependent_count = 3
+                            THEN '3 Dependents'
+                        ELSE '4+ Dependents'
+                    END AS household_group,
+
+                    CASE
+                        WHEN dependent_count = 0 THEN 1
+                        WHEN dependent_count = 1 THEN 2
+                        WHEN dependent_count = 2 THEN 3
+                        WHEN dependent_count = 3 THEN 4
+                        ELSE 5
+                    END AS sort_order
+                FROM household_counts
+            )
+            SELECT
+                household_group,
+                COUNT(*)::int AS total_households
+            FROM grouped_households
+            GROUP BY household_group, sort_order
+            ORDER BY sort_order
+            """,
+            params,
+        ),
+
+        "totalDependents": one(
+            db,
+            f"""
+            SELECT
+                COUNT(
+                    d.dependent_number
+                )::int AS total_dependents
+            FROM dependents d
+            JOIN members m
+              ON m.member_number = d.member_number
+            WHERE 1 = 1
+              {member_filter}
+            """,
+            params,
+        ),
     }
 
 def valid_booking_sql(alias="f"):
@@ -2413,6 +2853,11 @@ US_STATE_CODES = {
 @router.get("/state-accounts/{state_code}")
 def state_accounts(
     state_code: str,
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     normalized_state = state_code.strip().upper()
@@ -2423,8 +2868,13 @@ def state_accounts(
             detail="Invalid US state abbreviation",
         )
 
+    date_filter = demographic_date_filter_sql(
+        alias="m",
+        column="since_date",
+    )
+
     result = db.execute(
-        text("""
+        text(f"""
             SELECT DISTINCT ON (m.member_number)
                 m.member_number,
                 m.member_full_name,
@@ -2448,12 +2898,22 @@ def state_accounts(
             INNER JOIN member_addresses ma
                 ON ma.member_number = m.member_number
             WHERE UPPER(TRIM(ma.state)) = :state_code
+            {date_filter}
             ORDER BY
                 m.member_number,
                 ma.city NULLS LAST,
                 ma.address_line1 NULLS LAST
         """),
-        {"state_code": normalized_state},
+        {
+            "state_code": normalized_state,
+            **filter_params(
+                year=year,
+                month=month,
+                date=date,
+                start_date=start_date,
+                end_date=end_date,
+            ),
+        },
     ).mappings().all()
 
     return [dict(row) for row in result]
@@ -2461,6 +2921,11 @@ def state_accounts(
 @router.get("/account-category/{category}")
 def account_category_details(
     category: str,
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     normalized_category = category.strip().lower()
@@ -2477,9 +2942,13 @@ def account_category_details(
         )
 
     category_value = allowed_categories[normalized_category]
+    date_filter = demographic_date_filter_sql(
+        alias="m",
+        column="since_date",
+    )
 
     result = db.execute(
-        text("""
+        text(f"""
             SELECT
                 m.member_number,
                 m.member_full_name,
@@ -2519,6 +2988,7 @@ def account_category_details(
 
             WHERE LOWER(TRIM(m.member_or_guest)) =
                 LOWER(:category)
+            {date_filter}
 
             ORDER BY
                 m.member_full_name NULLS LAST,
@@ -2527,6 +2997,13 @@ def account_category_details(
         """),
         {
             "category": category_value,
+            **filter_params(
+                year=year,
+                month=month,
+                date=date,
+                start_date=start_date,
+                end_date=end_date,
+            ),
         },
     ).mappings().all()
 
@@ -2537,6 +3014,11 @@ def demographic_account_details(
     dimension: str = Query(...),
     value: str = Query(...),
     category: str | None = Query(None),
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     normalized_dimension = dimension.strip().lower()
@@ -2545,6 +3027,11 @@ def demographic_account_details(
         category.strip()
         if category
         else None
+    )
+
+    date_filter = demographic_date_filter_sql(
+        alias="m",
+        column="since_date",
     )
 
     allowed_dimensions = {
@@ -2565,7 +3052,7 @@ def demographic_account_details(
 
     if normalized_dimension == "household":
         result = db.execute(
-            text("""
+            text(f"""
                 WITH household_counts AS (
                     SELECT
                         m.member_number,
@@ -2641,6 +3128,7 @@ def demographic_account_details(
 
                 WHERE hg.household_group =
                       :household_group
+                {date_filter}
 
                 ORDER BY
                     hg.dependent_count DESC,
@@ -2651,6 +3139,13 @@ def demographic_account_details(
             {
                 "household_group":
                     normalized_value,
+                **filter_params(
+                    year=year,
+                    month=month,
+                    date=date,
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
             },
         ).mappings().all()
 
@@ -2658,7 +3153,7 @@ def demographic_account_details(
 
     if normalized_dimension == "country":
         result = db.execute(
-            text("""
+            text(f"""
                 SELECT DISTINCT ON (
                     m.member_number
                 )
@@ -2686,6 +3181,7 @@ def demographic_account_details(
                        m.member_number
                 WHERE LOWER(TRIM(ma.country)) =
                       LOWER(:value)
+                {date_filter}
                 ORDER BY
                     m.member_number,
                     ma.city NULLS LAST,
@@ -2693,6 +3189,13 @@ def demographic_account_details(
             """),
             {
                 "value": normalized_value,
+                **filter_params(
+                    year=year,
+                    month=month,
+                    date=date,
+                    start_date=start_date,
+                    end_date=end_date,
+                ),
             },
         ).mappings().all()
         return [dict(row) for row in result]
@@ -2744,6 +3247,7 @@ def demographic_account_details(
                           TRIM(m.member_or_guest)
                       ) = LOWER(:category)
                   )
+                {date_filter}
                 ORDER BY
                     m.member_full_name NULLS LAST,
                     m.member_name NULLS LAST,
@@ -2803,6 +3307,7 @@ def demographic_account_details(
                       TRIM(m.member_or_guest)
                   ) = LOWER(:category)
               )
+            {date_filter}
             ORDER BY
                 m.member_full_name NULLS LAST,
                 m.member_name NULLS LAST,

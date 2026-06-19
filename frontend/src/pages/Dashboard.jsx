@@ -6,7 +6,7 @@
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { Component, useEffect, useState } from "react";
+import { Component, useEffect, useState, useMemo } from "react";
 import {
   BarChart,
   Bar,
@@ -446,20 +446,12 @@ export default function Dashboard() {
             membersByAgeGroup={membersByAgeGroup}
             accountsByType={accountsByType}
             membersByStatus={membersByStatus}
-            membersByMaritalStatus={
-              membersByMaritalStatus
-            }
+            membersByMaritalStatus={membersByMaritalStatus}
             newMembersPerYear={newMembersPerYear}
             totalDependents={totalDependents}
-            dependentsByAgeGroup={
-              dependentsByAgeGroup
-            }
-            dependentsPerHousehold={
-              dependentsPerHousehold
-            }
-            dependentsPerMember={
-              dependentsPerMember
-            }
+            dependentsByAgeGroup={dependentsByAgeGroup}
+            dependentsPerHousehold={dependentsPerHousehold}
+            dependentsPerMember={dependentsPerMember}
           />
         )}
 

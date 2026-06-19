@@ -34,6 +34,7 @@ export const financeApi = {
   memberVsGuest: () => fetchData("/finance/member-vs-guest"),
   villaRevenue: () => fetchData("/finance/villa-revenue"),
   amenityRevenue: () => fetchData("/finance/amenity-revenue"),
+  categoryCompBreakdown: () => fetchData("/finance/category-comp-breakdown"),
 
   drilldown: (type, value, limit = 200) =>
     fetchData(withQuery("/finance/drilldown", { type, value, limit })),
