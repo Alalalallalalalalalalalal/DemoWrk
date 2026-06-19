@@ -38,24 +38,43 @@ export const analyticsApi = {
   dashboardSummary: () => fetchData("/analytics/dashboard-summary"),
 
   // Demographics detail endpoints
-  stateAccounts: (stateCode) =>
-    fetchData(`/analytics/state-accounts/${encodeURIComponent(stateCode)}`),
+  demographicsSummary: (params = {}) =>
+    fetchData(withQuery("/analytics/demographics-summary", params,),),
 
-  accountCategoryDetails: (category) =>
-    fetchData(`/analytics/account-category/${encodeURIComponent(category)}`),
+  stateAccounts: (stateCode, params = {}) =>
+    fetchData(
+      withQuery(
+        `/analytics/state-accounts/${encodeURIComponent(stateCode)}`,
+        params,
+      ),
+    ),
 
-  demographicAccountDetails: ({ dimension, value, category }) => {
-    const params = new URLSearchParams({
+  accountCategoryDetails: (category, params = {}) =>
+    fetchData(
+      withQuery(
+        `/analytics/account-category/${encodeURIComponent(category)}`,
+        params,
+      ),
+    ),
+
+  demographicAccountDetails: ({ dimension, value, category, ...params }) => {
+    const query = new URLSearchParams({
       dimension,
       value,
     });
 
     if (category) {
-      params.set("category", category);
+      query.set("category", category);
     }
 
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        query.set(key, value);
+      }
+    });
+
     return fetchData(
-      `/analytics/demographics/account-details?${params.toString()}`,
+      `/analytics/demographics/account-details?${query.toString()}`,
     );
   },
 
