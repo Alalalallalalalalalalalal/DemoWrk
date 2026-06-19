@@ -81,6 +81,56 @@ def finance_overview():
         "totalTransactions": int(row[5]   or 0),
     }
 
+@router.get("/category-comp-breakdown")
+def category_comp_breakdown():
+    AMENITY_CATS = (
+        "F&B", "Golf", "Spa & Beauty", "Tennis", "Boutique",
+        "Water Sports", "Equipment", "Cart Rental", "Events",
+    )
+    sql = text("""
+        SELECT
+            CASE
+                WHEN f.transaction_category = 'Villa' THEN 'Villa'
+                WHEN f.transaction_category = ANY(:amenity_cats) THEN 'Amenities'
+                ELSE 'Services'
+            END AS section,
+            COALESCE(NULLIF(TRIM(f.transaction_category), ''), 'Uncategorized') AS category,
+            COALESCE(NULLIF(TRIM(f.villa_payment_type), ''), 'Unknown') AS villa_payment_type,
+            CASE
+                WHEN f.transaction_flow = 'Reversal' THEN 'reversed'
+                WHEN f.transaction_flow != 'Charge' THEN 'other'
+                WHEN LOWER(
+                    COALESCE(NULLIF(TRIM(f.payment_type), ''), NULLIF(TRIM(bs.payment_type), ''), '')
+                ) ~ '(comp|free|complimentary|gratis|no charge)'
+                    THEN 'given_away'
+                ELSE 'collected'
+            END AS bucket,
+            SUM(f.amount) AS amount,
+            COUNT(*) AS transactions,
+            COUNT(DISTINCT f.member_number) AS unique_accounts
+        FROM folios f
+        LEFT JOIN business_source bs ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
+        WHERE f.transaction_category IS NOT NULL
+          AND f.transaction_category <> 'Laundry'
+        GROUP BY 1,2,3,4
+        ORDER BY 1,2,3,4
+    """)
+
+    with engine.connect() as conn:
+        rows = conn.execute(sql, {"amenity_cats": list(AMENITY_CATS)}).mappings().all()
+
+    return [
+        {
+            "section": r["section"],
+            "category": r["category"],
+            "villaPaymentType": r["villa_payment_type"],
+            "bucket": r["bucket"],
+            "amount": float(r["amount"] or 0),
+            "transactions": r["transactions"],
+            "uniqueAccounts": r["unique_accounts"],
+        }
+        for r in rows
+    ]
 
 # ══════════════════════════════════════════════════════════════════
 # 2. REVENUE BY SOURCE
@@ -378,6 +428,9 @@ def finance_drilldown(
             f"LOWER(f.description) LIKE '%{kw}%'" for kw in kws
         )
         where_clauses.append(f"AND ({like_clauses})")
+    elif type == "category":
+        where_clauses.append("AND transaction_category = :val")
+        params["val"] = value
 
     # ── optional date filters ─────────────────────────────────────
     if year:
