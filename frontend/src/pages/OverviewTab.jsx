@@ -464,12 +464,12 @@ export default function OverviewTab({
     const totalVillaNights = villaStats.reduce((a, b) => a + (b.total_nights || 0), 0);
 
     const heroKpis = [
-        { label: "Villa Revenue", value: heroVillaRevenue > 0 ? money(heroVillaRevenue) : "—", sub: `${heroSummary?.total_room_nights ?? "—"} room nights`, color: C.flame, tip: "In US dollars ($USD). The villa rental charge only — not amenities like food, golf, or spa. Any charge that was later cancelled or corrected has already been removed, so this is the real amount actually paid across every reservation. This figure is always shown unfiltered, regardless of any toggle elsewhere on the page." },
-        { label: "Outstanding", value: totalAmountDue?.total_amount_due != null ? `$${(Number(totalAmountDue.total_amount_due) / 1_000_000).toFixed(2)}M` : "—", sub: "Total dues owed", color: C.rust, tip: "In US dollars ($USD), shown in millions. The total of every unpaid balance currently owed, added up across all accounts and all billing periods." },
-        { label: "Room Nights", value: heroSummary?.total_room_nights?.toLocaleString() ?? "—", sub: `Avg ${heroSummary?.avg_length_of_stay?.toFixed(1) ?? "—"} nights/stay`, color: C.navyText, tip: "The total number of nights guests have stayed, added up across every reservation (e.g. one 7-night stay counts as 7). Not a dollar figure." },
-        { label: "Rev / Booking", value: (heroSummary && ((heroSummary.total_members_booked ?? 0) + (heroSummary.total_guests_booked ?? 0)) > 0) ? money(heroVillaRevenue / ((heroSummary.total_members_booked ?? 0) + (heroSummary.total_guests_booked ?? 0))) : "—", sub: "Villa rental average", color: C.navyText, tip: "In US dollars ($USD). Villa Revenue (above) divided by the total number of bookings — the average amount a single booking brings in from the villa rental charge alone, not counting amenities." },
-        { label: "Peak Month", value: peakMonth?.month ?? "—", sub: peakMonth ? money(peakMonth.revenue) : "—", color: C.flame, tip: "The single calendar month with the highest combined revenue (villa + amenities, in US dollars). Updates if you change the Overall/Paid/Free toggle on the \"Revenue by month\" card further down the page." },
-        { label: "Active Accounts", value: membersByStatus.find(s => s.status === "Active")?.total?.toLocaleString() ?? "—", sub: `of ${totalAccounts.toLocaleString()} total`, color: C.navyText, tip: "The number of member and guest accounts currently marked Active (not Inactive, Cancelled, etc.), out of every account on file. A count of accounts, not a dollar figure." },
+        { label: "Villa Revenue ($USD)", value: heroVillaRevenue > 0 ? money(heroVillaRevenue) : "—", sub: `${heroSummary?.total_room_nights ?? "—"} room nights`, color: C.flame, tip: "The villa rental charge only, not amenities like food, golf or spa. Any charge that was later cancelled or corrected has already been removed, so this is the real amount actually paid across every reservation. This figure is always shown unfiltered, regardless of any toggle elsewhere on the page." },
+        { label: "Outstanding ($USD)", value: totalAmountDue?.total_amount_due != null ? `$${(Number(totalAmountDue.total_amount_due) / 1_000_000).toFixed(2)}M` : "—", sub: "Total dues owed", color: C.rust, tip: "Shown in millions. The total of every unpaid balance currently owed, added up across all accounts and all billing periods." },
+        { label: "Room Nights", value: heroSummary?.total_room_nights?.toLocaleString() ?? "—", sub: `Avg ${heroSummary?.avg_length_of_stay?.toFixed(1) ?? "—"} nights/stay`, color: C.navyText, tip: "The total number of nights members and guests have stayed, added up across every reservation (e.g. one 7-night stay counts as 7)." },
+        { label: "Rev / Booking ($USD)", value: (heroSummary && ((heroSummary.total_members_booked ?? 0) + (heroSummary.total_guests_booked ?? 0)) > 0) ? money(heroVillaRevenue / ((heroSummary.total_members_booked ?? 0) + (heroSummary.total_guests_booked ?? 0))) : "—", sub: "Villa rental average", color: C.navyText, tip: "Villa Revenue divided by the total number of bookings - the average amount a single booking brings in from the villa rental charge alone, not counting amenities." },
+        { label: "Peak Month", value: peakMonth?.month ?? "—", sub: peakMonth ? money(peakMonth.revenue) : "—", color: C.flame, tip: "The single calendar month with the highest combined revenue - villa + amenities ($USD). Updates if you change the Overall/Paid/Free toggle on the \"Revenue by month\" card further down the page." },
+        { label: "Active Accounts", value: membersByStatus.find(s => s.status === "Active")?.total?.toLocaleString() ?? "—", sub: `of ${totalAccounts.toLocaleString()} total`, color: C.navyText, tip: "The number of member and guest accounts currently marked Active (not Inactive, Cancelled, etc.), out of every account on file. A count of accounts." },
     ];
 
     return (
@@ -501,7 +501,7 @@ export default function OverviewTab({
 
                 {/* Members — no filter (member data not villa-tagged) */}
                 <div style={block}>
-                    <CardHeader label="Members at a glance" tip="Counts every member and guest account on file, broken down by active/inactive status, country, and state. No dollar figures here — this is account counts only, not bookings or spend." />
+                    <CardHeader label="Members at a glance" tip="Counts every member and guest account on file, broken down by active/inactive status, country, and state. This is account counts only, not bookings or spend." />
                     <StatRow label="Active members" value={membersByStatus.find(s => s.status === "Active")?.members?.toLocaleString() ?? "—"} />
                     <StatRow label="Active guests" value={membersByStatus.find(s => s.status === "Active")?.guests?.toLocaleString() ?? "—"} />
                     <StatRow label="Inactive accounts" value={membersByStatus.find(s => s.status === "Inactive")?.total?.toLocaleString() ?? "—"} />
@@ -516,7 +516,7 @@ export default function OverviewTab({
                 <div style={block}>
                     <CardHeaderF
                         label="Bookings at a glance"
-                        tip="Counts whole villa reservations (not individual charges). Paid/Free here describes how the BOOKING itself was classified at intake — a 'Free' villa stay may still include real paid spend on amenities elsewhere on the dashboard. Cancelled and no-show bookings are excluded."
+                        tip="Counts whole villa reservations (not individual charges). Paid/Free here describes how the BOOKING itself was classified at intake. Cancelled and no-show bookings are excluded."
                         filter={bookingsFilter}
                         onFilterChange={setBookingsFilter}
                     />
@@ -533,8 +533,8 @@ export default function OverviewTab({
                 {/* Finance — filtered */}
                 <div style={block}>
                     <CardHeaderF
-                        label="Finance at a glance ($US)"
-                        tip="All dollar figures are in US dollars ($USD). This card counts individual CHARGES across every booking, not whole bookings. Paid means money was actually charged for that item, after cancelling out any matching refund or correction. Free means the charge was reversed or comped down to $0 — it does not mean the booking itself was free. A small number of unusual refunds that don't match a known charge are left out of these totals entirely so they don't distort the numbers."
+                        label="Finance at a glance ($USD)"
+                        tip="This card counts individual CHARGES across every booking, not whole bookings. Paid means money was actually charged for that item, after cancelling out any matching refund or correction. Free means the charge was reversed or comped down to $0 - it does not mean the booking itself was free. A small number of unusual refunds that don't match a known charge are left out of these totals entirely so they don't distort the numbers."
                         filter={financeFilter}
                         onFilterChange={setFinanceFilter}
                     />
@@ -557,7 +557,7 @@ export default function OverviewTab({
 
                     {/* Account status — no filter */}
                     <div style={block}>
-                        <CardHeader label="Account status" tip="Counts every account on file by whether it's currently Active or Inactive, split into members and guests. This is a simple headcount — no dollar amounts." />
+                        <CardHeader label="Account status" tip="Counts every account on file by whether it's currently Active or Inactive, split into members and guests. This is a simple headcount - no dollar amounts." />
                         <div style={{ padding: "14px 16px 10px", display: "flex", flexDirection: "column", gap: 12 }}>
                             {membersByStatus.map((s) => {
                                 const tot = membersByStatus.reduce((a, b) => a + (b.total || 0), 0);
@@ -594,8 +594,8 @@ export default function OverviewTab({
                     {/* Member vs Guest revenue — filtered */}
                     <div style={block}>
                         <CardHeaderF
-                            label="Member vs guest revenue ($US)"
-                            tip="All amounts are in US dollars ($USD). Splits revenue between Member accounts and Guest accounts. Like Finance at a glance, this counts individual charges (villa rental + amenities combined), and Paid/Free reflects whether each specific charge was actually paid, after netting out any matching refund or correction — not whether the booking itself was comped."
+                            label="Member vs guest revenue ($USD)"
+                            tip="Splits revenue between Member accounts and Guest accounts. This counts individual charges (villa rental + amenities combined). Paid/Free reflects whether each specific charge was actually paid, after netting out any matching refund or correction - not whether the booking itself was comped."
                             filter={memberGuestFilter}
                             onFilterChange={setMemberGuestFilter}
                         />
@@ -679,8 +679,8 @@ export default function OverviewTab({
                 {/* Monthly revenue — filtered, stacked Villa vs Amenity */}
                 <div style={block}>
                     <CardHeaderF
-                        label="Revenue by month ($US)"
-                        tip="All amounts are in US dollars ($USD). Each month's bar is the actual money charged that month, split into villa rental (navy) and amenity spend like food, golf, and wine (orange) — only real charges count, not the cancelled/comped portion. The Paid/Free toggle filters by how the underlying booking was classified at intake, then shows that booking's real spend, whichever amount it was actually charged."
+                        label="Revenue by month ($USD)"
+                        tip="Each month's bar is the actual money charged that month, split into villa rental (navy) and amenity spend like food, golf, and wine (orange) - only real charges count, not the cancelled/comped portion. The Paid/Free toggle filters by how the underlying booking was classified at intake, then shows that booking's real spend."
                         filter={monthlyFilter}
                         onFilterChange={setMonthlyFilter}
                     />
@@ -742,8 +742,8 @@ export default function OverviewTab({
                 {/* Villa revenue table — filtered */}
                 <div style={block}>
                     <CardHeaderF
-                        label="Top villas by revenue"
-                        tip="All amounts are in US dollars ($USD). Despite the card name, this ranks villas by AMENITY spend only — food, golf, spa, wine, equipment, etc. — NOT the villa rental charge itself. It only counts charges that were actually paid (comped/reversed amenity charges are excluded, since they amount to $0). The Paid/Free toggle filters by whether the guest's villa STAY was paid or comped — a comped stay can still show real amenity revenue here, since the guest may have paid for extras even though the villa itself was free."
+                        label="Top villas by revenue ($USD)"
+                        tip="Ranks villas by AMENITY spend only - food, golf, spa, wine, equipment, etc. - NOT the villa rental charge itself. It only counts charges that were actually paid (comped/reversed amenity charges are excluded, since they amount to $0). The Paid/Free toggle filters by whether the guest's villa STAY was paid or comped - a comped stay can still show real amenity revenue here, since the guest may have paid for extras even though the villa itself was free."
                         filter={villaRevFilter}
                         onFilterChange={(val) => { setVillaRevFilter(val); setVillaRevVisibleCount(10); }}
                     />
@@ -803,7 +803,7 @@ export default function OverviewTab({
                 <div style={block}>
                     <CardHeaderF
                         label="Top villas by bookings"
-                        tip="Ranks villas by how many separate reservations they've had — a simple count of bookings, not a dollar amount. A villa can appear here with bookings that have no amenity spend at all, which is why its count may not match the same villa's appearance on 'Top villas by revenue.' Paid/Free describes how each booking was classified at intake."
+                        tip="Ranks villas by how many separate reservations they've had - a count of bookings, not a dollar amount. A villa can appear here with bookings that have no amenity spend at all, which is why its count may not match the same villa's appearance on 'Top villas by revenue.' Paid/Free describes how each booking was classified at intake."
                         filter={villaBookingsFilter}
                         onFilterChange={(val) => { setVillaBookingsFilter(val); setVillaBookingsVisibleCount(10); }}
                     />
