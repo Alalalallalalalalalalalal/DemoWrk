@@ -108,6 +108,9 @@ export const analyticsApi = {
   visitsRoomsDashboard: (params = {}) =>
     fetchData(withQuery("/analytics/visits-rooms-dashboard", params)),
 
+  // frontend/src/api/analytics.js
+  villaMonthly: (villa, params = {}) =>
+    fetchData(withQuery("/analytics/villa-monthly", { villa, ...params })),
   villaBookings: (villaName, params = {}) =>
     fetchData(
       withQuery("/analytics/villa-bookings", { villa: villaName, ...params }),

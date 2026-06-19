@@ -998,20 +998,22 @@ export default function VisitsRoomsTab({
 
   const [villaMonthlyGroupBy, setVillaMonthlyGroupBy] = useState("month");
 
+  const villaMonthlyFilters =
+    villaMonthlyGroupBy === "year"
+      ? { ...selectedVillaChartFilters, year: null, month: null }
+      : selectedVillaChartFilters;
+
   useEffect(() => {
     if (!selectedVillaName || topView !== "overall") return;
     let cancelled = false;
     async function loadSelectedVillaMonthly() {
       try {
-        const data = await analyticsApi.visitsRoomsDashboard({
-          villa: selectedVillaName,
+        const data = await analyticsApi.villaMonthly(selectedVillaName, {
           group_by: villaMonthlyGroupBy,
-          ...selectedVillaChartFilters,
+          ...villaMonthlyFilters,
         });
         if (cancelled) return;
-        setVillaMonthlyData(
-          Array.isArray(data?.villa_monthly) ? data.villa_monthly : [],
-        );
+        setVillaMonthlyData(Array.isArray(data) ? data : []);
       } catch (err) {
         console.error(err);
         if (!cancelled) setVillaMonthlyData([]);
@@ -1890,7 +1892,7 @@ export default function VisitsRoomsTab({
                   >
                     <div style={{ height: 200 }}>
                       <ResponsiveContainer>
-                        <BarChart
+                        <LineChart
                           data={villaMonthlyData}
                           margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
                         >
@@ -1924,12 +1926,13 @@ export default function VisitsRoomsTab({
                             }}
                           />
                           <Tooltip contentStyle={TIP} />
-                          <Bar
+                          <Line
+                            type="monotone"
                             dataKey="revenue"
-                            fill="var(--dashboard-truffle)"
-                            radius={[6, 6, 0, 0]}
+                            stroke="var(--dashboard-truffle)"
+                            strokeWidth={2.5}
                           />
-                        </BarChart>
+                        </LineChart>
                       </ResponsiveContainer>
                     </div>
                   </Card>
