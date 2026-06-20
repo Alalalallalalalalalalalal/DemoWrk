@@ -124,7 +124,7 @@ function ClickableVisitorDot({
         strokeWidth={2}
         role="button"
         tabIndex={0}
-        aria-label={`View ${visitorStatus} visitors for ${payload.year}`}
+        aria-label={`View ${visitorStatus} Accounts for ${payload.year}`}
         style={{
             cursor: "pointer",
         }}
@@ -222,6 +222,11 @@ export default function DemographicsTab({
 
     const [accountDetailsError, setAccountDetailsError,] = useState("");
 
+    /* New vs Repeat Accounts chart - interactive legend */
+    const [activeVisitorLines, setActiveVisitorLines] = useState({
+        total_new: true,
+        total_repeat: true,
+    });
     const countryChartRef = useRef(null);
 
     /* ─── Derived account data ────────────────────────────────── */
@@ -519,19 +524,29 @@ export default function DemographicsTab({
             block: "center",
         });
     };
+
+    const handleLegendClick = ({ dataKey }) => {
+        if (!dataKey) return;
+
+        setActiveVisitorLines((previous) => ({
+            ...previous,
+            [dataKey]: !previous[dataKey],
+        }));
+    };
+
     const handleVisitorPointClick = (
         year,
         visitorStatus,
         ) => {
         openAccountDrawer({
             title:
-            `${visitorStatus} Visitors — ${year}`,
+            `${visitorStatus} Accounts — ${year}`,
 
             eyebrow:
-            "Visitor details",
+            "Account details",
 
             emptyMessage:
-            `No ${visitorStatus.toLowerCase()} visitors were found for ${year}.`,
+            `No ${visitorStatus.toLowerCase()} Accounts were found for ${year}.`,
 
             exportKey:
             `${visitorStatus.toLowerCase()}-visitors-${year}`,
@@ -1096,7 +1111,7 @@ export default function DemographicsTab({
             <div>
                 <Card
                     title="New vs Repeat Guests & Members"
-                    sub="First-time visitors compared with returning visitors by year"
+                    sub="First-time accounts compared with returning visitors by year"
                     >
                     <div className="dashboard-chart dashboard-chart-200">
                         <ResponsiveContainer>
@@ -1122,9 +1137,11 @@ export default function DemographicsTab({
                             />
 
                             <YAxis
-                            stroke={AX}
-                            fontSize={11}
-                            allowDecimals={false}
+                                stroke={AX}
+                                fontSize={11}
+                                allowDecimals={false}
+                                includeHidden
+                                domain={[0, "auto"]}
                             />
 
                             <Tooltip
@@ -1160,7 +1177,7 @@ export default function DemographicsTab({
                                         Year: {label}
                                         </div>
 
-                                        {/* New visitors */}
+                                        {/* New Accounts */}
                                         <div
                                         style={{
                                             display: "grid",
@@ -1183,7 +1200,7 @@ export default function DemographicsTab({
                                         <span>{format(row.new_guests)}</span>
                                         </div>
 
-                                        {/* Repeat visitors */}
+                                        {/* Repeat Accounts */}
                                         <div
                                         style={{
                                             display: "grid",
@@ -1203,6 +1220,7 @@ export default function DemographicsTab({
 
                                         <span>Guests</span>
                                         <span>{format(row.repeat_guests)}</span>
+                                        <span style={{ color: "#2563eb", fontStyle: "italic" }}>click points to view accounts</span>
                                         </div>
                                     </div>
                                     );
@@ -1210,68 +1228,109 @@ export default function DemographicsTab({
                                 />
 
                             <Legend
-                            wrapperStyle={{
-                                fontSize: 11,
-                                paddingTop: 6,
-                            }}
-                            />
+                                onClick={handleLegendClick}
+                                wrapperStyle={{
+                                    fontSize: 11,
+                                    paddingTop: 6,
+                                    cursor: "pointer",
+                                }}
+                                formatter={(value, entry) => {
+                                    const isVisible =
+                                    activeVisitorLines[
+                                        entry.dataKey
+                                    ];
+
+                                    return (
+                                    <span
+                                        style={{
+                                        color: isVisible
+                                            ? "var(--dashboard-abyssal)"
+                                            : "#dc1010",
+                                        opacity: isVisible ? 1 : 0.45,
+                                        textDecoration: isVisible
+                                            ? "none"
+                                            : "line-through",
+                                        cursor: "pointer",
+                                        }}
+                                    >
+                                        {value}
+                                    </span>
+                                    );
+                                }}
+                                />
 
                             <Line
-                            type="monotone"
-                            dataKey="total_new"
-                            name="New Visitors"
-                            stroke="#FFB162"
-                            strokeWidth={2.5}
-                            dot={(props) => (
-                                <ClickableVisitorDot
-                                {...props}
-                                fill="#FFB162"
-                                visitorStatus="New"
-                                onPointClick={handleVisitorPointClick}
+                                type="monotone"
+                                dataKey="total_new"
+                                name="New Accounts"
+                                stroke="#FFB162"
+                                strokeWidth={2.5}
+                                hide={!activeVisitorLines.total_new}
+                                dot={(props) => (
+                                    <ClickableVisitorDot
+                                    {...props}
+                                    fill="#FFB162"
+                                    visitorStatus="New"
+                                    onPointClick={
+                                        handleVisitorPointClick
+                                    }
+                                    />
+                                )}
+                                activeDot={(props) => (
+                                    <ClickableVisitorDot
+                                    {...props}
+                                    fill="#FFB162"
+                                    visitorStatus="New"
+                                    onPointClick={
+                                        handleVisitorPointClick
+                                    }
+                                    />
+                                )}
                                 />
-                            )}
-                            activeDot={(props) => (
-                                <ClickableVisitorDot
-                                {...props}
-                                fill="#FFB162"
-                                visitorStatus="New"
-                                onPointClick={
-                                    handleVisitorPointClick
-                                }
-                                />
-                            )}
-                            />
 
-                            <Line
-                            type="monotone"
-                            dataKey="total_repeat"
-                            name="Repeat Visitors"
-                            stroke="var(--dashboard-truffle)"
-                            strokeWidth={2.5}
-                            dot={(props) => (
-                                <ClickableVisitorDot
-                                {...props}
-                                fill="var(--dashboard-truffle)"
-                                visitorStatus="Repeat"
-                                onPointClick={
-                                    handleVisitorPointClick
+                                <Line
+                                type="monotone"
+                                dataKey="total_repeat"
+                                name="Repeat Accounts"
+                                stroke="var(--dashboard-truffle)"
+                                strokeWidth={2.5}
+                                hide={
+                                    !activeVisitorLines.total_repeat
                                 }
+                                dot={(props) => (
+                                    <ClickableVisitorDot
+                                    {...props}
+                                    fill="var(--dashboard-truffle)"
+                                    visitorStatus="Repeat"
+                                    onPointClick={
+                                        handleVisitorPointClick
+                                    }
+                                    />
+                                )}
+                                activeDot={(props) => (
+                                    <ClickableVisitorDot
+                                    {...props}
+                                    fill="var(--dashboard-truffle)"
+                                    visitorStatus="Repeat"
+                                    onPointClick={
+                                        handleVisitorPointClick
+                                    }
+                                    />
+                                )}
                                 />
-                            )}
-                            activeDot={(props) => (
-                                <ClickableVisitorDot
-                                {...props}
-                                fill="var(--dashboard-truffle)"
-                                visitorStatus="Repeat"
-                                onPointClick={
-                                    handleVisitorPointClick
-                                }
-                                />
-                            )}
-                            />
                         </LineChart>
                         </ResponsiveContainer>
                     </div>
+                    <div style={{ textAlign: "center" }}>
+                    <span
+                    style={{
+                    color: "#6b7280",
+                    fontStyle: "italic",
+                    fontSize: "12px",
+                    }}
+                    >
+                        click legend to focus
+                    </span></div>
                     </Card>
             </div>
 

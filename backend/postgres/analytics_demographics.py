@@ -1018,7 +1018,6 @@ def demographic_account_details(
 
     return [dict(row) for row in result]
 
-
 @router.get("/new-vs-repeat-visitors/details")
 def get_new_vs_repeat_visitor_details(
     year: int,
@@ -1051,97 +1050,12 @@ def get_new_vs_repeat_visitor_details(
 
     result = db.execute(
         text("""
-            WITH booking_accounts AS (
-                SELECT
-                    r.member_number,
-
-                    EXTRACT(
-                        YEAR FROM r.check_in_date
-                    )::int AS year,
-
-                    MIN(
-                        r.check_in_date::date
-                    ) AS first_booking_date,
-
-                    MAX(
-                        r.check_in_date::date
-                    ) AS last_booking_date,
-
-                    COUNT(
-                        DISTINCT
-                        r.check_in_date::date
-                    )::int AS bookings_in_year
-
-                FROM rooms r
-
-                WHERE r.member_number IS NOT NULL
-                  AND r.check_in_date IS NOT NULL
-
-                GROUP BY
-                    r.member_number,
-                    EXTRACT(
-                        YEAR FROM r.check_in_date
-                    )
-            ),
-
-            classified_bookings AS (
-                SELECT
-                    ba.member_number,
-                    ba.year,
-                    ba.first_booking_date,
-                    ba.last_booking_date,
-                    ba.bookings_in_year,
-
-                    COALESCE(
-                        NULLIF(
-                            TRIM(
-                                m.member_full_name
-                            ),
-                            ''
-                        ),
-                        NULLIF(
-                            TRIM(
-                                m.member_name
-                            ),
-                            ''
-                        ),
-                        'Unknown'
-                    ) AS member_full_name,
-
-                    TRIM(
-                        m.member_or_guest
-                    ) AS member_or_guest,
-
-                    m.member_type,
-                    m.status,
-                    m.since_date,
-                    m.age,
-                    m.gender,
-                    m.email,
-
-                    CASE
-                        WHEN m.since_date IS NULL
-                            THEN 'New'
-
-                        WHEN m.since_date::date
-                             < ba.first_booking_date
-                            THEN 'Repeat'
-
-                        ELSE 'New'
-                    END AS account_status
-
-                FROM booking_accounts ba
-
-                JOIN members m
-                  ON m.member_number =
-                     ba.member_number
-
-                WHERE TRIM(
-                    m.member_or_guest
-                ) IN ('Member', 'Guest')
-            ),
-
-            accounts_without_bookings AS (
+            WITH new_accounts AS (
+                /*
+                 * Every account is New in the year
+                 * of its since_date, whether it has
+                 * bookings or not.
+                 */
                 SELECT
                     m.member_number,
 
@@ -1149,34 +1063,20 @@ def get_new_vs_repeat_visitor_details(
                         YEAR FROM m.since_date
                     )::int AS year,
 
-                    NULL::date
-                        AS first_booking_date,
-
-                    NULL::date
-                        AS last_booking_date,
-
-                    0::int
-                        AS bookings_in_year,
-
                     COALESCE(
                         NULLIF(
-                            TRIM(
-                                m.member_full_name
-                            ),
+                            TRIM(m.member_full_name),
                             ''
                         ),
                         NULLIF(
-                            TRIM(
-                                m.member_name
-                            ),
+                            TRIM(m.member_name),
                             ''
                         ),
                         'Unknown'
                     ) AS member_full_name,
 
-                    TRIM(
-                        m.member_or_guest
-                    ) AS member_or_guest,
+                    TRIM(m.member_or_guest)
+                        AS member_or_guest,
 
                     m.member_type,
                     m.status,
@@ -1184,6 +1084,14 @@ def get_new_vs_repeat_visitor_details(
                     m.age,
                     m.gender,
                     m.email,
+
+                    0::int AS bookings_in_year,
+
+                    NULL::date
+                        AS first_booking_date,
+
+                    NULL::date
+                        AS last_booking_date,
 
                     'New'::text
                         AS account_status
@@ -1195,25 +1103,105 @@ def get_new_vs_repeat_visitor_details(
                   AND TRIM(
                       m.member_or_guest
                   ) IN ('Member', 'Guest')
+            ),
 
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM rooms r
-                      WHERE r.member_number =
-                            m.member_number
-                        AND r.check_in_date
-                            IS NOT NULL
-                  )
+            repeat_accounts AS (
+                /*
+                 * An account is Repeat in any booking
+                 * year after its since_date year.
+                 */
+                SELECT
+                    m.member_number,
+
+                    EXTRACT(
+                        YEAR FROM r.check_in_date
+                    )::int AS year,
+
+                    COALESCE(
+                        NULLIF(
+                            TRIM(m.member_full_name),
+                            ''
+                        ),
+                        NULLIF(
+                            TRIM(m.member_name),
+                            ''
+                        ),
+                        'Unknown'
+                    ) AS member_full_name,
+
+                    TRIM(m.member_or_guest)
+                        AS member_or_guest,
+
+                    m.member_type,
+                    m.status,
+                    m.since_date,
+                    m.age,
+                    m.gender,
+                    m.email,
+
+                    COUNT(
+                        DISTINCT
+                        r.check_in_date::date
+                    )::int AS bookings_in_year,
+
+                    MIN(
+                        r.check_in_date::date
+                    ) AS first_booking_date,
+
+                    MAX(
+                        r.check_in_date::date
+                    ) AS last_booking_date,
+
+                    'Repeat'::text
+                        AS account_status
+
+                FROM rooms r
+
+                INNER JOIN members m
+                    ON m.member_number =
+                       r.member_number
+
+                WHERE r.member_number IS NOT NULL
+
+                  AND r.check_in_date IS NOT NULL
+
+                  AND m.since_date IS NOT NULL
+
+                  AND TRIM(
+                      m.member_or_guest
+                  ) IN ('Member', 'Guest')
+
+                  AND EXTRACT(
+                        YEAR FROM r.check_in_date
+                      ) >
+                      EXTRACT(
+                        YEAR FROM m.since_date
+                      )
+
+                GROUP BY
+                    m.member_number,
+                    m.member_full_name,
+                    m.member_name,
+                    m.member_or_guest,
+                    m.member_type,
+                    m.status,
+                    m.since_date,
+                    m.age,
+                    m.gender,
+                    m.email,
+                    EXTRACT(
+                        YEAR FROM r.check_in_date
+                    )
             ),
 
             combined_accounts AS (
                 SELECT *
-                FROM classified_bookings
+                FROM new_accounts
 
                 UNION ALL
 
                 SELECT *
-                FROM accounts_without_bookings
+                FROM repeat_accounts
             )
 
             SELECT
@@ -1230,6 +1218,7 @@ def get_new_vs_repeat_visitor_details(
                 ca.bookings_in_year,
                 ca.first_booking_date,
                 ca.last_booking_date,
+
                 ca.account_status
                     AS visitor_status,
 
@@ -1249,17 +1238,21 @@ def get_new_vs_repeat_visitor_details(
                 FROM member_addresses a
                 WHERE a.member_number =
                       ca.member_number
+                ORDER BY
+                    a.city NULLS LAST,
+                    a.postal_code NULLS LAST
                 LIMIT 1
             ) ma ON TRUE
 
             WHERE ca.year = :year
+
               AND ca.account_status =
                   :selected_status
 
             ORDER BY
                 ca.member_or_guest,
-                ca.bookings_in_year DESC,
-                ca.member_full_name
+                ca.member_full_name,
+                ca.member_number
         """),
         {
             "year": year,
