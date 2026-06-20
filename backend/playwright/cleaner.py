@@ -25,6 +25,8 @@ PLAYWRIGHT_FOLDER = BASE_DIR
 JOURNAL_FOLDER = os.path.join(PLAYWRIGHT_FOLDER, "journal")
 FOLIO_REPORT_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "folio_report.csv")
 BUSINESS_SOURCE_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "business_source.csv")
+FREE_RATE_DETAILS_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "rate_details_free.csv")
+PAID_RATE_DETAILS_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "rate_details_paid.csv")
 
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST"),
@@ -207,6 +209,41 @@ CREATE TABLE IF NOT EXISTS business_source (
     updated_at            TIMESTAMP DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS rate_details (
+    rate_detail_key     VARCHAR(64) PRIMARY KEY,
+
+    -- Reservation/person context (same shape as folios)
+    conf_code            VARCHAR(100),
+    reservation_id        VARCHAR(100),
+    member_number         VARCHAR(50),
+    guest_name            VARCHAR(255),
+    room_number           VARCHAR(50),
+    villa_name            VARCHAR(255),
+    bedroom_count         INTEGER,
+    source                VARCHAR(255),
+    payment_type          VARCHAR(100),
+    check_in_date         DATE,
+    check_out_date        DATE,
+    reservation_status    VARCHAR(100),
+
+    -- Per-night rate breakdown, scraped from the reservationRateDetail popup.
+    -- original_amount is NOT a reliable "rack rate" on its own — it's only
+    -- populated when a manual override happened (see rate_details_with_discount
+    -- view below for the derived rack_rate / discount_given logic).
+    rate_date             DATE,
+    rate_name             VARCHAR(255),
+    original_amount       NUMERIC(12, 2),
+    modified_amount       NUMERIC(12, 2),
+    addon_amount          NUMERIC(12, 2),
+    discounted_amount     NUMERIC(12, 2),
+    total_amount          NUMERIC(12, 2),
+    status                VARCHAR(50),
+    total_rental          NUMERIC(12, 2),
+
+    created_at            TIMESTAMP DEFAULT NOW(),
+    updated_at            TIMESTAMP DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS reservation_guests (
     guest_key              VARCHAR(64) PRIMARY KEY,
     conf_code              VARCHAR(100),
@@ -259,9 +296,36 @@ CREATE TABLE IF NOT EXISTS interests (
 );
 """
 
+# Derived rack-rate / discount-given logic, kept as a view rather than
+# precomputed columns so the formula can be refined later (e.g. if more
+# edge cases like seasonal-rate corrections turn up) without re-scraping
+# or re-loading data — just CREATE OR REPLACE the view.
+#
+#   rack_rate = original_amount if it's been overridden away from 0,
+#               else modified_amount + addon_amount (the as-entered rate
+#               when no rate-plan override ever happened)
+#   discount_given = rack_rate - total_amount
+#       positive -> comped/discounted away from the reference rate
+#       negative -> rate was corrected/increased after original_amount
+#                   was first set (e.g. season change mid-booking)
+RATE_DETAILS_VIEW_DDL = """
+CREATE OR REPLACE VIEW rate_details_with_discount AS
+SELECT
+    rd.*,
+    CASE WHEN rd.original_amount > 0
+         THEN rd.original_amount
+         ELSE COALESCE(rd.modified_amount, 0) + COALESCE(rd.addon_amount, 0)
+    END AS rack_rate,
+    (CASE WHEN rd.original_amount > 0
+          THEN rd.original_amount
+          ELSE COALESCE(rd.modified_amount, 0) + COALESCE(rd.addon_amount, 0)
+     END) - COALESCE(rd.total_amount, 0) AS discount_given
+FROM rate_details rd;
+"""
+
 DROP_ALL = """
 DROP TABLE IF EXISTS interests, services, statements, recent_activity,
-    reservation_guests, business_source, folios, rooms, dependent_phones, dependent_addresses, dependents,
+    reservation_guests, business_source, rate_details, folios, rooms, dependent_phones, dependent_addresses, dependents,
     member_phones, member_addresses, members CASCADE;
 """
 
@@ -561,6 +625,7 @@ def create_tables(conn, recreate=False):
             cur.execute(DROP_ALL)
         log.info("Creating tables if not exist...")
         cur.execute(DDL)
+        cur.execute(RATE_DETAILS_VIEW_DDL)
 
         # Folios/reservation guests may include guest/member numbers that are not
         # present in members yet, so these tables intentionally do not enforce
@@ -1246,6 +1311,90 @@ def load_folios(conn, filepath=FOLIO_REPORT_FILE, dry_run=False):
     return 0
 
 
+def normalize_rate_detail_row(row, source_file=None):
+    """
+    Normalize one row from rate_details_free.csv / rate_details_paid.csv
+    to the rate_details table shape. original_amount is left as scraped
+    (0 when no override happened) — see rate_details_with_discount for
+    the derived rack_rate/discount_given logic, no cleanup needed here.
+    """
+    conf_code      = clean_str(get_first(row, "Conf. Code"), 100)
+    reservation_id = clean_str(get_first(row, "Reservation ID"), 100)
+    rate_date      = clean_date(get_first(row, "Date"))
+    rate_name      = clean_str(get_first(row, "Rate Name"), 255)
+    original_amount   = clean_amount(get_first(row, "Original Amount"))
+    modified_amount   = clean_amount(get_first(row, "Modified Amount"))
+    addon_amount      = clean_amount(get_first(row, "Addon Amount"))
+    discounted_amount = clean_amount(get_first(row, "Discounted Amount"))
+    total_amount      = clean_amount(get_first(row, "Total Amount"))
+
+    return {
+        "rate_detail_key": make_folio_key(
+            source_file, conf_code, reservation_id, rate_date, rate_name,
+            original_amount, modified_amount, addon_amount,
+            discounted_amount, total_amount,
+        ),
+        "conf_code": conf_code,
+        "reservation_id": reservation_id,
+        "member_number": clean_str(get_first(row, "Member #"), 50),
+        "guest_name": clean_name(get_first(row, "Guest Name")),
+        "room_number": clean_str(get_first(row, "Room #"), 50),
+        "villa_name": clean_str(get_first(row, "Villa Name"), 255),
+        "bedroom_count": clean_int(get_first(row, "Bedroom Count")),
+        "source": clean_str(get_first(row, "Source"), 255),
+        "payment_type": clean_str(get_first(row, "Payment Type"), 100),
+        "check_in_date": clean_date(get_first(row, "Check-In Date")),
+        "check_out_date": clean_date(get_first(row, "Check-Out Date")),
+        "reservation_status": clean_category(get_first(row, "Reservation Status"), 100),
+        "rate_date": rate_date,
+        "rate_name": rate_name,
+        "original_amount": original_amount,
+        "modified_amount": modified_amount,
+        "addon_amount": addon_amount,
+        "discounted_amount": discounted_amount,
+        "total_amount": total_amount,
+        "status": clean_str(get_first(row, "Status"), 50),
+        "total_rental": clean_amount(get_first(row, "Total Rental")),
+    }
+
+
+def load_rate_detail_file(conn, filepath, dry_run=False):
+    """Load one of rate_details_free.csv / rate_details_paid.csv into rate_details."""
+    if not os.path.exists(filepath):
+        log.warning(f"Rate details file not found: {filepath}")
+        return 0
+
+    try:
+        df = pd.read_csv(filepath)
+    except Exception as e:
+        log.warning(f"  Could not read rate details file {filepath}: {e}")
+        return 0
+
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+
+    rows = []
+    for _, row in df.iterrows():
+        out = normalize_rate_detail_row(row, filepath)
+        if not any([out["conf_code"], out["rate_date"]]):
+            continue
+        rows.append(out)
+
+    if rows:
+        count = upsert(conn, "rate_details", rows, "rate_detail_key", dry_run)
+        log.info(f"  rate_details from {os.path.basename(filepath)}: {count} rows")
+        return count
+    return 0
+
+
+def load_rate_details(conn, dry_run=False):
+    """Load both Free and Paid rate detail CSVs into the one rate_details table."""
+    total = 0
+    total += load_rate_detail_file(conn, FREE_RATE_DETAILS_FILE, dry_run)
+    total += load_rate_detail_file(conn, PAID_RATE_DETAILS_FILE, dry_run)
+    log.info(f"rate_details: {total} rows")
+    return total
+
+
 # ─────────────────────────────────────────────
 # PER-MEMBER LOADER  — one commit per member
 # ─────────────────────────────────────────────
@@ -1359,6 +1508,8 @@ def main():
                         help="Only load folios/reservation guests, skip member profile data")
     parser.add_argument("--business-source-only", action="store_true",
                         help="Only load reports/business_source.csv and update folios.payment_type")
+    parser.add_argument("--rate-details-only", action="store_true",
+                        help="Only load rate_details_free.csv and rate_details_paid.csv into rate_details")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -1371,6 +1522,7 @@ def main():
     print(f"Sample rate:  {args.sample_rate}")
     print(f"Folios only:  {args.folios_only}")
     print(f"Business source only: {args.business_source_only}")
+    print(f"Rate details only: {args.rate_details_only}")
     print()
 
     try:
@@ -1392,6 +1544,22 @@ def main():
         except Exception as e:
             conn.rollback()
             log.error(f"Failed loading business_source: {e}")
+        conn.close()
+        print()
+        print("=" * 60)
+        print("ETL Complete")
+        print("=" * 60)
+        return
+
+    if args.rate_details_only:
+        log.info("Skipping member/profile/folio transaction load because --rate-details-only was used.")
+        try:
+            load_rate_details(conn, dry_run=args.dry_run)
+            if not args.dry_run:
+                conn.commit()
+        except Exception as e:
+            conn.rollback()
+            log.error(f"Failed loading rate_details: {e}")
         conn.close()
         print()
         print("=" * 60)
@@ -1440,6 +1608,7 @@ def main():
         if args.sample_rate >= 1.0 or args.folios_only:
             load_folios(conn, FOLIO_REPORT_FILE, dry_run=args.dry_run)
             load_business_source(conn, BUSINESS_SOURCE_FILE, dry_run=args.dry_run)
+            load_rate_details(conn, dry_run=args.dry_run)
             if not args.dry_run:
                 conn.commit()
         else:
