@@ -238,7 +238,14 @@ export function SectionLabel({ children }) {
 }
 
 /* ─── PieLegendCard ──────────────────────────────────────────── */
-export function PieLegendCard({ title, description, data, dataKey, nameKey, colorMap = {} }) {
+export function PieLegendCard({
+  title,
+  description,
+  data,
+  dataKey,
+  nameKey,
+  colorMap = {},
+}) {
   const getColor = (item, index) => {
     const rawValue = String(item?.[nameKey] ?? "").trim();
     const normalizedValue = rawValue.toLowerCase();
@@ -249,6 +256,7 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey, colo
       COLORS[index % COLORS.length]
     );
   };
+
   return (
     <div style={styles.card}>
       <div
@@ -256,16 +264,29 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey, colo
           ...styles.cardHeader,
           display: "flex",
           alignItems: "center",
+          justifyContent: "center",
           gap: 6,
         }}
       >
         <p style={{ ...styles.cardTitle, margin: 0 }}>{title}</p>
         <InfoTip text={description} />
       </div>
+
       <div
-        style={{ display: "flex", alignItems: "center", gap: 16, height: 260 }}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          width: "100%",
+        }}
       >
-        <div style={{ flex: "0 0 160px", height: "100%" }}>
+        {/* Pie chart */}
+        <div
+          style={{
+            width: "100%",
+            height: 190,
+          }}
+        >
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
@@ -285,26 +306,30 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey, colo
                   />
                 ))}
               </Pie>
+
               <Tooltip contentStyle={TOOLTIP_STYLE} />
             </PieChart>
           </ResponsiveContainer>
         </div>
+
+        {/* Legend underneath */}
         <div
           style={{
-            flex: 1,
-            overflowY: "auto",
-            maxHeight: 260,
-            paddingRight: 4,
+            width: "100%",
+            display: "grid",
+            gridTemplateColumns: "repeat(2, max-content)",
+            justifyContent: "center",
+            gap: "8px 16px",
+            paddingTop: 8,
           }}
         >
           {data.map((item, i) => (
             <div
-              key={i}
+              key={`${item[nameKey]}-${i}`}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: 7,
-                marginBottom: 6,
               }}
             >
               <span
@@ -317,6 +342,7 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey, colo
                   display: "inline-block",
                 }}
               />
+
               <span
                 style={{
                   fontSize: 11,
@@ -327,9 +353,9 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey, colo
               >
                 {item[nameKey]}
               </span>
+
               <span
                 style={{
-                  marginLeft: "auto",
                   fontSize: 11,
                   color: "#9C7B65",
                   fontWeight: 600,

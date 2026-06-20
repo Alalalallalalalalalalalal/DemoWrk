@@ -142,90 +142,6 @@ function ClickableVisitorDot({
     );
 }
 
-function NewRepeatTooltip({
-    active,
-    payload,
-    label,
-    }) {
-    if (
-        !active ||
-        !payload?.length
-    ) {
-        return null;
-    }
-
-    const row = payload[0]?.payload;
-
-    if (!row) {
-        return null;
-    }
-
-    return (
-        <div style={TIP}>
-        <div
-            style={{
-            fontWeight: 700,
-            marginBottom: 6,
-            }}
-        >
-            {label}
-        </div>
-
-        <div>
-            New Visitors:{" "}
-            <strong>
-            {row.total_new ?? 0}
-            </strong>
-        </div>
-
-        <div
-            style={{
-            paddingLeft: 8,
-            fontSize: 11,
-            opacity: 0.8,
-            }}
-        >
-            Members: {row.new_members ?? 0}
-            {" · "}
-            Guests: {row.new_guests ?? 0}
-        </div>
-
-        <div
-            style={{
-            marginTop: 6,
-            }}
-        >
-            Repeat Visitors:{" "}
-            <strong>
-            {row.total_repeat ?? 0}
-            </strong>
-        </div>
-
-        <div
-            style={{
-            paddingLeft: 8,
-            fontSize: 11,
-            opacity: 0.8,
-            }}
-        >
-            Members: {row.repeat_members ?? 0}
-            {" · "}
-            Guests: {row.repeat_guests ?? 0}
-        </div>
-
-        <div
-            style={{
-            marginTop: 8,
-            fontSize: 10,
-            opacity: 0.7,
-            }}
-        >
-            Click a dot to view records
-        </div>
-        </div>
-    );
-}
-
 function formatDashboardDate(value) {
     if (!value) {
         return "—";
@@ -627,6 +543,49 @@ export default function DemographicsTab({
             ),
         });
         };
+
+        const ClickableBarRow = ({
+            x,
+            y,
+            width,
+            height,
+            payload,
+            onRowClick,
+            }) => (
+            <rect
+                x={x}
+                y={y}
+                width={width}
+                height={height}
+                fill="transparent"
+                style={{ cursor: "pointer" }}
+                onClick={() => onRowClick(payload)}
+            />
+            );
+
+        const ClickableBarColumn = ({
+            x,
+            y,
+            width,
+            height,
+            payload,
+            category,
+            onColumnClick,
+            }) => (
+            <rect
+                x={x}
+                y={y}
+                width={width}
+                height={height}
+                fill="transparent"
+                style={{ cursor: "pointer" }}
+                onClick={() =>
+                category
+                    ? onColumnClick(payload, category)
+                    : onColumnClick(payload)
+                }
+            />
+            );
     return (
         <>
         <div className="dashboard-section">
@@ -909,7 +868,13 @@ export default function DemographicsTab({
                         maxBarSize={20}
                         cursor="pointer"
                         onClick={handleAccountTypeClick}
-                    />
+                        background={(props) => (
+                            <ClickableBarRow
+                            {...props}
+                            onRowClick={handleAccountTypeClick}
+                            />
+                        )}
+                        />
                 </BarChart>
                 </ResponsiveContainer>
             </div>
@@ -1017,6 +982,7 @@ export default function DemographicsTab({
                         paddingTop: 6,
                         }}
                     />
+                    
                     <Bar
                         dataKey="members"
                         name="Members"
@@ -1026,6 +992,31 @@ export default function DemographicsTab({
                         onClick={(entry) =>
                             handleStatusClick(entry, "Member")
                         }
+                        background={(props) => (
+                            <ClickableBarColumn
+                            {...props}
+                            category="Member"
+                            onColumnClick={handleStatusClick}
+                            />
+                        )}
+                        />
+
+                    <Bar
+                        dataKey="guests"
+                        name="Guests"
+                        fill="var(--dashboard-truffle)"
+                        radius={[6, 6, 0, 0]}
+                        cursor="pointer"
+                        onClick={(entry) =>
+                            handleStatusClick(entry, "Guest")
+                        }
+                        background={(props) => (
+                            <ClickableBarColumn
+                            {...props}
+                            category="Guest"
+                            onColumnClick={handleStatusClick}
+                            />
+                        )}
                     />
                     <Bar
                         dataKey="guests"
@@ -1104,7 +1095,7 @@ export default function DemographicsTab({
 
             <div>
                 <Card
-                    title="New vs Repeat Visitors"
+                    title="New vs Repeat Guests & Members"
                     sub="First-time visitors compared with returning visitors by year"
                     >
                     <div className="dashboard-chart dashboard-chart-200">
@@ -1137,8 +1128,86 @@ export default function DemographicsTab({
                             />
 
                             <Tooltip
-                            content={<NewRepeatTooltip />}
-                            />
+                                content={({ active, payload, label }) => {
+                                    if (!active || !payload?.length) {
+                                    return null;
+                                    }
+
+                                    const row = payload[0]?.payload;
+
+                                    if (!row) {
+                                    return null;
+                                    }
+
+                                    const format = (value) =>
+                                    Number(value ?? 0).toLocaleString();
+
+                                    return (
+                                    <div
+                                        style={{
+                                        ...TIP,
+                                        minWidth: 180,
+                                        padding: "8px 10px",
+                                        fontSize: 11,
+                                        }}
+                                    >
+                                        <div
+                                        style={{
+                                            fontWeight: 700,
+                                            marginBottom: 6,
+                                        }}
+                                        >
+                                        Year: {label}
+                                        </div>
+
+                                        {/* New visitors */}
+                                        <div
+                                        style={{
+                                            display: "grid",
+                                            gridTemplateColumns: "1fr auto",
+                                            gap: "3px 12px",
+                                            paddingBottom: 6,
+                                            borderBottom: "1px solid #DDD6CA",
+                                        }}
+                                        >
+                                        <strong>New</strong>
+
+                                        <strong>
+                                            {format(row.total_new)}
+                                        </strong>
+
+                                        <span>Members</span>
+                                        <span>{format(row.new_members)}</span>
+
+                                        <span>Guests</span>
+                                        <span>{format(row.new_guests)}</span>
+                                        </div>
+
+                                        {/* Repeat visitors */}
+                                        <div
+                                        style={{
+                                            display: "grid",
+                                            gridTemplateColumns: "1fr auto",
+                                            gap: "3px 12px",
+                                            paddingTop: 6,
+                                        }}
+                                        >
+                                        <strong>Repeat</strong>
+
+                                        <strong>
+                                            {format(row.total_repeat)}
+                                        </strong>
+
+                                        <span>Members</span>
+                                        <span>{format(row.repeat_members)}</span>
+
+                                        <span>Guests</span>
+                                        <span>{format(row.repeat_guests)}</span>
+                                        </div>
+                                    </div>
+                                    );
+                                }}
+                                />
 
                             <Legend
                             wrapperStyle={{
@@ -1158,9 +1227,7 @@ export default function DemographicsTab({
                                 {...props}
                                 fill="#FFB162"
                                 visitorStatus="New"
-                                onPointClick={
-                                    handleVisitorPointClick
-                                }
+                                onPointClick={handleVisitorPointClick}
                                 />
                             )}
                             activeDot={(props) => (
@@ -1274,14 +1341,20 @@ export default function DemographicsTab({
                         <Tooltip contentStyle={TIP} />
 
                         <Bar
-                        dataKey="total"
-                        name="Accounts"
-                        fill="var(--dashboard-muted)"
-                        radius={[0, 6, 6, 0]}
-                        maxBarSize={20}
-                        cursor="pointer"
-                        onClick={handleCountryClick}
-                        />
+                            dataKey="total"
+                            name="Accounts"
+                            fill="var(--dashboard-muted)"
+                            radius={[0, 6, 6, 0]}
+                            maxBarSize={20}
+                            cursor="pointer"
+                            onClick={handleCountryClick}
+                            background={(props) => (
+                                <ClickableBarRow
+                                {...props}
+                                onRowClick={handleCountryClick}
+                                />
+                            )}
+                            />
                     </BarChart>
                     </ResponsiveContainer>
                 </div>
@@ -1376,6 +1449,12 @@ export default function DemographicsTab({
                         maxBarSize={42}
                         cursor="pointer"
                         onClick={handleHouseholdClick}
+                        background={(props) => (
+                            <ClickableBarColumn
+                            {...props}
+                            onColumnClick={handleHouseholdClick}
+                            />
+                        )}
                     />
                     </BarChart>
                 </ResponsiveContainer>
