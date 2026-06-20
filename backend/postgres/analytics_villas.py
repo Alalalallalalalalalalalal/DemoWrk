@@ -707,27 +707,18 @@ def villa_source_breakdown(
                 f.conf_code,
                 MAX(f.villa_name)                                    AS villa_name,
                 COALESCE(NULLIF(TRIM(MAX(f.source)), ''), 'Unknown') AS source,
-                COALESCE(
-                    NULLIF(TRIM(MAX(f.payment_type)), ''),
-                    NULLIF(TRIM(MAX(bs.payment_type)), ''),
-                    'Unknown'
-                )                                                    AS payment_type,
+                COALESCE(NULLIF(TRIM(MAX(f.payment_type)), ''), 'Unknown')                                                    AS payment_type,
                 MAX(f.member_number)                                 AS member_number,
                 MAX(f.check_out_date - f.check_in_date)              AS nights,
                 MAX(f.bedroom_count)                                 AS bedroom_count,
                 SUM(
                     CASE
-                        WHEN f.description ILIKE '%villa%'
-                          OR f.description ILIKE '%room%'
-                          OR f.description ILIKE '%rental%'
-                          OR f.description ILIKE '%accommodation%'
+                        WHEN LOWER(TRIM(COALESCE(f.transaction_category, ''))) = 'villa'
                         THEN COALESCE(f.amount, 0)
                         ELSE 0
                     END
                 )                                                    AS raw_amount
             FROM folios f
-            LEFT JOIN business_source bs
-                ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
             WHERE f.conf_code IS NOT NULL
               AND f.villa_name IS NOT NULL
               AND f.check_in_date IS NOT NULL
@@ -843,31 +834,11 @@ def villa_source_bookings(
         free_filter = """
             AND (
                 CASE
-                    WHEN LOWER(COALESCE(
-                            NULLIF(TRIM(f.payment_type), ''),
-                            NULLIF(TRIM(bs.payment_type), ''),
-                            'Unknown'
-                         )) ILIKE '%comp%'
-                      OR LOWER(COALESCE(
-                            NULLIF(TRIM(f.payment_type), ''),
-                            NULLIF(TRIM(bs.payment_type), ''),
-                            'Unknown'
-                         )) ILIKE '%free%'
-                      OR LOWER(COALESCE(
-                            NULLIF(TRIM(f.payment_type), ''),
-                            NULLIF(TRIM(bs.payment_type), ''),
-                            'Unknown'
-                         )) ILIKE '%complimentary%'
-                      OR LOWER(COALESCE(
-                            NULLIF(TRIM(f.payment_type), ''),
-                            NULLIF(TRIM(bs.payment_type), ''),
-                            'Unknown'
-                         )) ILIKE '%gratis%'
-                      OR LOWER(COALESCE(
-                            NULLIF(TRIM(f.payment_type), ''),
-                            NULLIF(TRIM(bs.payment_type), ''),
-                            'Unknown'
-                         )) ILIKE '%no charge%'
+                    WHEN LOWER(COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown')) ILIKE '%comp%'
+                      OR LOWER(COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown')) ILIKE '%free%'
+                      OR LOWER(COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown')) ILIKE '%complimentary%'
+                      OR LOWER(COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown')) ILIKE '%gratis%'
+                      OR LOWER(COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown')) ILIKE '%no charge%'
                     THEN TRUE
                     ELSE FALSE
                 END
@@ -918,48 +889,21 @@ def villa_source_bookings(
                 MAX(f.check_out_date)                                    AS check_out_date,
                 MAX(f.check_out_date - f.check_in_date)                 AS nights,
                 COALESCE(NULLIF(TRIM(MAX(f.source)), ''), 'Unknown')    AS source,
-                COALESCE(
-                    NULLIF(TRIM(MAX(f.payment_type)), ''),
-                    NULLIF(TRIM(MAX(bs.payment_type)), ''),
-                    'Unknown'
-                )                                                        AS payment_type,
+                COALESCE(NULLIF(TRIM(MAX(f.payment_type)), ''), 'Unknown')                                                        AS payment_type,
                 MAX(f.reservation_status)                               AS reservation_status,
                 SUM(
                     CASE
-                        WHEN f.description ILIKE '%villa%'
-                          OR f.description ILIKE '%room%'
-                          OR f.description ILIKE '%rental%'
-                          OR f.description ILIKE '%accommodation%'
+                        WHEN LOWER(TRIM(COALESCE(f.transaction_category, ''))) = 'villa'
                         THEN COALESCE(f.amount, 0)
                         ELSE 0
                     END
                 )                                                        AS total_amount,
                 CASE
-                    WHEN LOWER(COALESCE(
-                            NULLIF(TRIM(MAX(f.payment_type)), ''),
-                            NULLIF(TRIM(MAX(bs.payment_type)), ''),
-                            'Unknown'
-                         )) ILIKE '%comp%'
-                      OR LOWER(COALESCE(
-                            NULLIF(TRIM(MAX(f.payment_type)), ''),
-                            NULLIF(TRIM(MAX(bs.payment_type)), ''),
-                            'Unknown'
-                         )) ILIKE '%free%'
-                      OR LOWER(COALESCE(
-                            NULLIF(TRIM(MAX(f.payment_type)), ''),
-                            NULLIF(TRIM(MAX(bs.payment_type)), ''),
-                            'Unknown'
-                         )) ILIKE '%complimentary%'
-                      OR LOWER(COALESCE(
-                            NULLIF(TRIM(MAX(f.payment_type)), ''),
-                            NULLIF(TRIM(MAX(bs.payment_type)), ''),
-                            'Unknown'
-                         )) ILIKE '%gratis%'
-                      OR LOWER(COALESCE(
-                            NULLIF(TRIM(MAX(f.payment_type)), ''),
-                            NULLIF(TRIM(MAX(bs.payment_type)), ''),
-                            'Unknown'
-                         )) ILIKE '%no charge%'
+                    WHEN LOWER(COALESCE(NULLIF(TRIM(MAX(f.payment_type)), ''), 'Unknown')) ILIKE '%comp%'
+                      OR LOWER(COALESCE(NULLIF(TRIM(MAX(f.payment_type)), ''), 'Unknown')) ILIKE '%free%'
+                      OR LOWER(COALESCE(NULLIF(TRIM(MAX(f.payment_type)), ''), 'Unknown')) ILIKE '%complimentary%'
+                      OR LOWER(COALESCE(NULLIF(TRIM(MAX(f.payment_type)), ''), 'Unknown')) ILIKE '%gratis%'
+                      OR LOWER(COALESCE(NULLIF(TRIM(MAX(f.payment_type)), ''), 'Unknown')) ILIKE '%no charge%'
                     THEN TRUE
                     ELSE FALSE
                 END                                                      AS is_free
@@ -981,8 +925,6 @@ def villa_source_bookings(
                         ELSE 4
                     END
             ) mp ON mp.member_number = f.member_number
-            LEFT JOIN business_source bs
-                ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
             WHERE f.conf_code IS NOT NULL
               AND f.villa_name = :villa
               AND f.check_in_date IS NOT NULL
@@ -1042,26 +984,17 @@ def villa_source_bedroom_breakdown(
                 f.conf_code,
                 f.bedroom_count,
                 COALESCE(NULLIF(TRIM(MAX(f.source)), ''), 'Unknown') AS source,
-                COALESCE(
-                    NULLIF(TRIM(MAX(f.payment_type)), ''),
-                    NULLIF(TRIM(MAX(bs.payment_type)), ''),
-                    'Unknown'
-                )                                                    AS payment_type,
+                COALESCE(NULLIF(TRIM(MAX(f.payment_type)), ''), 'Unknown')                                                    AS payment_type,
                 MAX(f.member_number)                                 AS member_number,
                 MAX(f.check_out_date - f.check_in_date)              AS nights,
                 SUM(
                     CASE
-                        WHEN f.description ILIKE '%villa%'
-                          OR f.description ILIKE '%room%'
-                          OR f.description ILIKE '%rental%'
-                          OR f.description ILIKE '%accommodation%'
+                        WHEN LOWER(TRIM(COALESCE(f.transaction_category, ''))) = 'villa'
                         THEN COALESCE(f.amount, 0)
                         ELSE 0
                     END
                 )                                                    AS raw_amount
             FROM folios f
-            LEFT JOIN business_source bs
-                ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
             WHERE f.conf_code IS NOT NULL
               AND f.villa_name IS NOT NULL
               AND f.check_in_date IS NOT NULL

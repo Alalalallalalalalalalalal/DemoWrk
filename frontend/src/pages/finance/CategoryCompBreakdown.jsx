@@ -2,14 +2,14 @@
 //
 // SECTION TABS (Villa / Amenities / Services) choose which rows are in
 // play. The "Villa stay type" toggle then filters WITHIN that section by
-// whether the booking's villa stay was comped (villa_payment_type) — this
+// whether the booking's villa stay was comped (payment_type) — this
 // is what lets you answer "do guests whose villa stay was free still pay
 // for spa/golf/F&B, or are we comping those too."
 //
 // Bucket meaning (per line item, see backend for exact rule):
 //   collected   -> charge actually billed
 //   given_away  -> charge entered as a comp (Villa section uses
-//                  villa_payment_type; Amenities/Services use the line's
+//                  payment_type; Amenities/Services use the line's
 //                  own transaction_payment_type/payment_type)
 //   reversed    -> reversal/write-off line
 //
@@ -167,7 +167,7 @@ function KpiStrip({ totals }) {
   const blendedRate = pct(totals.givenAway, totals.collected + totals.givenAway);
   const cards = [
     { label: "Collected", value: money(totals.collected), color: C.green, tip: "Sum of charges in this section that actually billed." },
-    { label: "Given Away", value: money(totals.givenAway), color: C.accent3, tip: "Sum of charges in this section entered as comped — for Villa this is villa_payment_type = Free, for everything else it's the line's own payment type." },
+    { label: "Given Away", value: money(totals.givenAway), color: C.accent3, tip: "Sum of charges in this section entered as comped — for Villa this is payment_type = Free, for everything else it's the line's own payment type." },
     { label: "Reversed / Written Off", value: money(totals.reversed), color: C.red, tip: "Sum of reversal lines in this section." },
     { label: "Give-Away Rate", value: blendedRate, color: C.accent, tip: "Given Away ÷ (Collected + Given Away), within this section and filter." },
   ];
@@ -305,7 +305,7 @@ export default function CategoryCompBreakdown({ data, onRowClick }) {
       <p style={{ fontSize: 11, color: C.muted, fontFamily: "sans-serif", marginTop: 10, lineHeight: 1.5 }}>
         <strong style={{ color: C.soft }}>Reading this table:</strong> in the{" "}
         <strong>Villa</strong> tab, "Given Away" is what the rental would have
-        billed had the stay not been comped (driven by villa_payment_type). In{" "}
+        billed had the stay not been comped (driven by payment_type). In{" "}
         <strong>Amenities</strong> and <strong>Services</strong>, it's charges
         entered as comped on that specific line. "Given Away" only catches
         charges that were actually entered as a comp — it can't see value that
