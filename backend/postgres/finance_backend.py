@@ -455,17 +455,22 @@ def finance_member_vs_guest(
 # ══════════════════════════════════════════════════════════════════
 # 4. VILLA REVENUE (breakdown table, by villa name)
 #
-# Out of scope for this change. Still uses visit_room_villa_summary
-# (unfiltered) / folios fallback (filtered) as before — this endpoint
-# powers the "Villa Revenue" breakdown TABLE further down the page, not
-# the new "Villas Revenue" OVERVIEW CARD (which now uses
-# overview_villa_bookings, see finance_overview() above).
+# Migrated off visit_room_villa_summary / folios onto the same trusted
+# source as the Villas Revenue overview card — overview_villa_bookings.
+# overview_villa_revenue — so this table's rows always sum to that
+# card's total, filtered or not. (Previously these read from different
+# sources and could disagree for a filtered period — see the prior
+# flag in finance_overview()'s history; this closes that gap.)
 #
-# ⚠️ KNOWN INCONSISTENCY: this means the Villas Revenue card total and
-# the sum of this table's rows can now disagree for a filtered period,
-# since they read from different sources. Wasn't asked to fix this
-# table, so leaving it as-is — flagging in case you want to migrate it
-# to overview_villa_bookings too in a follow-up for full consistency.
+# _villa_bookings_date_filter_sql() already resolves to "no
+# restriction" when no date params are supplied, so a single query now
+# covers both the unfiltered and filtered cases — no more has_filter
+# branching, no more empty-table fallback to folios.
+#
+# total_bookings uses COUNT(DISTINCT overview_conf_code) defensively,
+# in case a future schema change ever produces more than one row per
+# booking (e.g. a bedroom_count split like overview_villa_stats does)
+# — today it's expected to already be one row per booking.
 # ══════════════════════════════════════════════════════════════════
 @router.get("/villa-revenue")
 def finance_villa_revenue(
@@ -479,48 +484,30 @@ def finance_villa_revenue(
         year=year, month=month, date=date,
         start_date=start_date, end_date=end_date,
     )
-    has_filter = any(v is not None for v in params.values())
 
-    rows = []
+    sql = text(f"""
+        SELECT
+            ovb.overview_villa_name                                  AS villa_name,
+            COALESCE(SUM(ovb.overview_villa_revenue), 0)             AS revenue,
+            COUNT(DISTINCT ovb.overview_conf_code)                   AS total_bookings,
+            COALESCE(SUM(ovb.overview_nights), 0)                    AS room_nights,
+            COALESCE(ROUND(AVG(ovb.overview_nights)::numeric, 1), 0) AS avg_stay,
+            COUNT(*) FILTER (
+                WHERE ovb.overview_member_or_guest = 'Member'
+                   OR ovb.overview_member_or_guest IS NULL
+            )                                                        AS member_bookings,
+            COUNT(*) FILTER (
+                WHERE ovb.overview_member_or_guest = 'Guest'
+            )                                                        AS guest_bookings
+        FROM overview_villa_bookings ovb
+        WHERE ovb.overview_villa_name IS NOT NULL
+        {_villa_bookings_date_filter_sql()}
+        GROUP BY ovb.overview_villa_name
+        ORDER BY revenue DESC NULLS LAST
+    """)
 
-    if not has_filter:
-        sql = text("""
-            SELECT
-                villa_name,
-                COALESCE(villa_rental_revenue, 0)  AS revenue,
-                COALESCE(total_bookings, 0)         AS total_bookings,
-                COALESCE(room_nights, 0)            AS room_nights,
-                COALESCE(avg_stay, 0)               AS avg_stay,
-                COALESCE(member_bookings, 0)        AS member_bookings,
-                COALESCE(guest_bookings, 0)         AS guest_bookings
-            FROM visit_room_villa_summary
-            WHERE villa_name IS NOT NULL
-            ORDER BY revenue DESC NULLS LAST
-        """)
-        with engine.connect() as conn:
-            rows = _rows_to_dicts(conn.execute(sql))
-
-    if not rows:
-        # Date-filtered (or summary table empty) — derive villa revenue
-        # straight from folios using the shared date filter pattern.
-        date_sql = date_filter_sql()  # alias="f", column="check_in_date"
-        sql2 = text(f"""
-            SELECT
-                COALESCE(f.villa_name, 'Unknown') AS villa_name,
-                SUM(f.amount)                     AS revenue,
-                COUNT(DISTINCT f.conf_code)       AS total_bookings,
-                0                                 AS room_nights,
-                0                                 AS avg_stay,
-                0                                 AS member_bookings,
-                0                                 AS guest_bookings
-            FROM folios f
-            WHERE f.amount IS NOT NULL AND f.villa_name IS NOT NULL
-            {date_sql}
-            GROUP BY f.villa_name
-            ORDER BY revenue DESC
-        """)
-        with engine.connect() as conn:
-            rows = _rows_to_dicts(conn.execute(sql2, params))
+    with engine.connect() as conn:
+        rows = _rows_to_dicts(conn.execute(sql, params))
 
     return [
         {
