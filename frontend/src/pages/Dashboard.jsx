@@ -6,7 +6,7 @@
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { Component, useEffect, useState } from "react";
+import { Component, useEffect, useState, useMemo } from "react";
 import {
   BarChart,
   Bar,
@@ -84,6 +84,9 @@ const AX = "#9A8E84";
 const GRID = "#DDD6CA";
 const TIP = TOOLTIP_STYLE;
 
+/* ─── API base, shared by every fetch in this file ──────────── */
+const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
+
 /* ─── Main Dashboard ─────────────────────────────────────────── */
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("overview");
@@ -115,6 +118,7 @@ export default function Dashboard() {
   const [dependentsPerHousehold, setDependentsPerHousehold,] = useState([]);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
   const [dependentsPerMember, setDependentsPerMember] = useState([]);
+  const [newVsRepeatVisitors, setNewVsRepeatVisitors] = useState([]);
   const [availableTables, setAvailableTables] = useState([]);
   const [selectedTable, setSelectedTable] = useState("");
   const [tableRows, setTableRows] = useState([]);
@@ -136,8 +140,15 @@ export default function Dashboard() {
   const [bedroomBookings, setBedroomBookings] = useState([]);
   const [villaRevenue, setVillaRevenue] = useState([]);
   const [monthlyRevenue, setMonthlyRevenue] = useState([]);
+  const [transactionFinanceSummary, setTransactionFinanceSummary] = useState([]);
+  const [transactionMemberVsGuestRevenue, setTransactionMemberVsGuestRevenue] = useState([]);
+  const [villaAmenityRevenue, setVillaAmenityRevenue] = useState([]);
+  const [monthlyRevenueByCategory, setMonthlyRevenueByCategory] = useState([]);
 
   useEffect(() => {
+    // ── Non-Overview data: members by country/state/gender/age, dependents
+    // breakdowns, spend history, etc. Unchanged — still served by the
+    // original /analytics/dashboard-summary endpoint. ──────────────────
     analyticsApi
       .dashboardSummary()
       .then((data) => {
@@ -160,29 +171,64 @@ export default function Dashboard() {
         setSpendByMonth(data.spendByMonth ?? []);
         setTotalRecentActivitySpend(data.totalRecentActivitySpend ?? null);
         setTopSpendDescriptions(data.topSpendDescriptions ?? []);
-        setTotalAmountDue(data.totalAmountDue ?? null);
-        setAmountDueByPeriod(data.amountDueByPeriod ?? []);
-        setTotalDependents(data.totalDependents ?? null);
         setDependentsByAgeGroup(data.dependentsByAgeGroup ?? []);
         setDependentsPerMember(data.dependentsPerMember ?? []);
         setDependentsPerHousehold(data.dependentsPerHousehold ?? [],);
+        // NOTE: totalAmountDue, amountDueByPeriod, and totalDependents are
+        // intentionally NOT set here anymore — they now come from
+        // /overview/summary below, so there's only one writer for each.
       })
-
       .catch(console.error);
 
+    analyticsApi
+      .demographicsSummary()
+      .then((data) => {
+        setNewVsRepeatVisitors(
+          data.newVsRepeatVisitors ?? [],
+        );
+      })
+      .catch((error) => {
+        console.error(
+          "Failed to load demographics summary:",
+          error,
+        );
+    });
+
     analyticsApi.getTables().then(setAvailableTables).catch(console.error);
-    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/finance/member-vs-guest`)
-      .then(r => r.json()).then(setMemberVsGuestRevenue).catch(console.error);
-    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/analytics/villa-stats`)
-      .then(r => r.json()).then(setVillaStats).catch(console.error);
-    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/analytics/visits-tab-summary`)
-      .then(r => r.json()).then(setVisitsTabSummary).catch(console.error);
-    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/analytics/bookings-by-bedroom`)
-      .then(r => r.json()).then(setBedroomBookings).catch(console.error);
-    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/finance/villa-revenue`)
-      .then(r => r.json()).then(setVillaRevenue).catch(console.error);
-    fetch(`${import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"}/analytics/monthly-revenue`)
-      .then(r => r.json()).then(setMonthlyRevenue).catch(console.error);
+    // ── Overview tab: single bundled fetch from the standalone overview
+    // module (postgres/overview_analytics.py, mounted at /overview).
+    // Replaces the old separate calls to:
+    //   /analytics/villa-stats
+    //   /analytics/visits-tab-summary
+    //   /analytics/bookings-by-bedroom
+    //   /analytics/monthly-revenue
+    //   /finance/member-vs-guest
+    //   /finance/villa-revenue
+    // Also includes the newer TRANSACTION-LEVEL (per net line-item, villa +
+    // amenity combined) Paid/Free data used by the Finance at a glance and
+    // Member vs guest revenue cards — see overview_transaction_lines in
+    // overview_views.sql for what powers these.
+    // ────────────────────────────────────────────────────────────────
+    fetch(`${API_BASE}/overview/summary`)
+      .then((r) => r.json())
+      .then((data) => {
+        setVillaStats(data.overviewVillaStats ?? []);
+        setVisitsTabSummary(data.overviewVisitsSummary ?? null);
+        setBedroomBookings(data.overviewBookingsByBedroom ?? []);
+        setMonthlyRevenue(data.overviewMonthlyRevenue ?? []);
+        setMemberVsGuestRevenue(data.overviewMemberVsGuestRevenue ?? []);
+        setTransactionFinanceSummary(data.overviewTransactionFinanceSummary ?? []);
+        setTransactionMemberVsGuestRevenue(data.overviewTransactionMemberVsGuestRevenue ?? []);
+        setVillaAmenityRevenue(data.overviewVillaAmenityRevenue ?? []);
+        setMonthlyRevenueByCategory(data.overviewMonthlyRevenueByCategory ?? []);
+        setTotalAmountDue(data.overviewAmountDue ?? null);
+        setAmountDueByPeriod(data.overviewAmountDueByPeriod ?? []);
+        setTotalDependents(data.overviewDependents ?? null);
+        // villaRevenue (rental-revenue-per-villa) is no longer fetched —
+        // "Top villas by revenue" now uses villaAmenityRevenue instead.
+        setVillaRevenue([]);
+      })
+      .catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -398,6 +444,10 @@ export default function Dashboard() {
             bedroomBookings={bedroomBookings}
             villaRevenue={villaRevenue}
             monthlyRevenue={monthlyRevenue}
+            transactionFinanceSummary={transactionFinanceSummary}
+            transactionMemberVsGuestRevenue={transactionMemberVsGuestRevenue}
+            villaAmenityRevenue={villaAmenityRevenue}
+            monthlyRevenueByCategory={monthlyRevenueByCategory}
           />
         )}
 
@@ -410,20 +460,13 @@ export default function Dashboard() {
             membersByAgeGroup={membersByAgeGroup}
             accountsByType={accountsByType}
             membersByStatus={membersByStatus}
-            membersByMaritalStatus={
-              membersByMaritalStatus
-            }
+            membersByMaritalStatus={membersByMaritalStatus}
             newMembersPerYear={newMembersPerYear}
+            newVsRepeatVisitors={newVsRepeatVisitors}
             totalDependents={totalDependents}
-            dependentsByAgeGroup={
-              dependentsByAgeGroup
-            }
-            dependentsPerHousehold={
-              dependentsPerHousehold
-            }
-            dependentsPerMember={
-              dependentsPerMember
-            }
+            dependentsByAgeGroup={dependentsByAgeGroup}
+            dependentsPerHousehold={dependentsPerHousehold}
+            dependentsPerMember={dependentsPerMember}
           />
         )}
 

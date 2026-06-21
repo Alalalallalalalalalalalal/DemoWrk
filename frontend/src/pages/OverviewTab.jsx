@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { InfoTip } from "./styles/Dashboardcomponents";
+
 const serif = "'Cormorant Garamond', serif";
 
 const C = {
@@ -32,6 +35,245 @@ const block = {
     boxShadow: "var(--dashboard-shadow-soft)",
 };
 
+// ─────────────────────────────────────────────
+// FILTER PILL
+// "Overall" is always visible. "Paid" and "Free" toggle on/off — clicking
+// the active one resets to Overall. The label is the same word on every
+// card ("Paid"/"Free"); what it actually MEANS differs by card and is
+// explained in that card's tooltip (InfoDot) rather than in the pill text:
+//   - Bookings at a glance, Bedroom demand, Revenue by month, Top villas
+//     by revenue: booking-level — was this villa STAY paid for or comped.
+//   - Finance at a glance, Member vs guest revenue: transaction-level —
+//     was this individual TRANSACTION (villa or amenity) actually charged
+//     or comped/reversed to zero.
+// ─────────────────────────────────────────────
+const FilterPill = ({ value, onChange }) => {
+    const options = [
+        { label: "Overall", key: "overall" },
+        { label: "Paid", key: "paid_villa" },
+        { label: "Free", key: "free_villa" },
+    ];
+    return (
+        <div style={{ display: "flex", gap: 3 }}>
+            {options.map(opt => {
+                const active = value === opt.key;
+                return (
+                    <button
+                        key={opt.key}
+                        onClick={() => onChange(active && opt.key !== "overall" ? "overall" : opt.key)}
+                        style={{
+                            fontSize: 9,
+                            fontFamily: "sans-serif",
+                            fontWeight: 700,
+                            letterSpacing: "0.08em",
+                            textTransform: "uppercase",
+                            padding: "3px 8px",
+                            borderRadius: 20,
+                            border: `1px solid ${active ? C.navy : C.border}`,
+                            background: active ? C.navy : "transparent",
+                            color: active ? C.flame : C.muted,
+                            cursor: "pointer",
+                            lineHeight: 1.4,
+                            transition: "all 0.15s ease",
+                        }}
+                    >
+                        {opt.label}
+                    </button>
+                );
+            })}
+        </div>
+    );
+};
+
+// ─────────────────────────────────────────────
+// CARD HEADERS
+// ─────────────────────────────────────────────
+const InfoDot = ({ tip }) => (
+    <div className="info-btn" data-tip={tip} style={{
+        width: 15, height: 15, borderRadius: "50%",
+        border: `1px solid ${C.border}`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 9, color: C.muted, fontWeight: 700, lineHeight: 1,
+        flexShrink: 0, cursor: "default",
+    }}>i</div>
+);
+
+// Plain header — no filter
+const CardHeader = ({ label, tip }) => (
+    <div style={{
+        padding: "10px 16px",
+        borderBottom: `1px solid ${C.border}`,
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+    }}>
+        <span className="dashboard-eyebrow">{label}</span>
+        <InfoDot tip={tip} />
+    </div>
+);
+
+// Header with filter pills
+const CardHeaderF = ({ label, tip, filter, onFilterChange }) => (
+    <div style={{
+        padding: "10px 16px",
+        borderBottom: `1px solid ${C.border}`,
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+    }}>
+        <span className="dashboard-eyebrow">{label}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <FilterPill value={filter} onChange={onFilterChange} />
+            <InfoDot tip={tip} />
+        </div>
+    </div>
+);
+
+// ─────────────────────────────────────────────
+// ROWS
+// ─────────────────────────────────────────────
+const StatRow = ({ label, value, warn, last, sub }) => (
+    <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        padding: "8px 16px", gap: 8,
+        borderBottom: last ? "none" : `1px solid ${C.rowBorder}`,
+    }}>
+        <div>
+            <div style={{ fontSize: 12, color: C.soft, fontFamily: "sans-serif" }}>{label}</div>
+            {sub && <div style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif", marginTop: 1 }}>{sub}</div>}
+        </div>
+        <span style={{
+            fontFamily: serif, fontSize: 18,
+            color: warn ? C.accent2 : C.text,
+            lineHeight: 1, textAlign: "right", flexShrink: 0,
+        }}>
+            {value}
+        </span>
+    </div>
+);
+
+const RankRow = ({ rank, label, value, mini, total, sub, last }) => (
+    <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        padding: "8px 16px", gap: 8,
+        background: rank % 2 === 0 ? C.panel : C.bg,
+        borderBottom: last ? "none" : `1px solid ${C.rowBorder}`,
+    }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+            <div style={{
+                width: 20, height: 20, borderRadius: 5, flexShrink: 0,
+                background: rank === 1 ? C.navy : C.panelAlt,
+                color: rank === 1 ? C.flame : C.muted,
+                fontSize: 9, fontWeight: 700,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontFamily: "sans-serif",
+            }}>{rank}</div>
+            <div style={{ minWidth: 0 }}>
+                <div style={{
+                    fontSize: 12, color: C.text,
+                    overflow: "hidden", textOverflow: "ellipsis",
+                    whiteSpace: "nowrap", maxWidth: 140, fontFamily: "sans-serif",
+                }}>{label}</div>
+                {sub && <div style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif" }}>{sub}</div>}
+            </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            {mini != null && total > 0 && (
+                <div style={{ width: 44, height: 4, background: C.panelAlt, borderRadius: 2 }}>
+                    <div style={{
+                        height: "100%", borderRadius: 2,
+                        background: rank === 1 ? C.navy : C.muted,
+                        width: `${Math.round((mini / total) * 100)}%`,
+                    }} />
+                </div>
+            )}
+            <span style={{ fontFamily: serif, fontSize: 18, color: C.text, minWidth: 32, textAlign: "right" }}>
+                {value}
+            </span>
+        </div>
+    </div>
+);
+
+// ─────────────────────────────────────────────
+// FILTER HELPERS
+// villa_payment_type field on each row: "Paid" | "Free" | "Unknown"
+// (set by the backend from folios.payment_type, sourced from
+// business_source.csv via cleaner.py's load_business_source step)
+// ─────────────────────────────────────────────
+const filterKeyToType = (filter) => (filter === "paid_villa" ? "Paid" : filter === "free_villa" ? "Free" : null);
+
+// For row-array datasets (bedroomBookings, monthlyRevenue, villaAmenityRevenue)
+// where each row already carries its own villa_payment_type.
+const applyVillaFilter = (data, filter) => {
+    if (!data || filter === "overall") return data ?? [];
+    const match = filterKeyToType(filter);
+    return data.filter(r => r.villa_payment_type === match);
+};
+
+// For datasets that need to be RE-AGGREGATED across a grouping key after filtering
+// by payment type (e.g. villa-stats has one row per villa+bedroom+payment_type,
+// but the "Top villas by revenue" card wants one row per villa regardless of type
+// once a filter is chosen). Sums numeric fields, re-derives any *_derived fields via reducer.
+const regroupSum = (rows, groupKey, sumFields) => {
+    const map = new Map();
+    for (const r of rows) {
+        const key = typeof groupKey === "function" ? groupKey(r) : r[groupKey];
+        if (!map.has(key)) {
+            map.set(key, { ...r });
+            sumFields.forEach(f => { map.get(key)[f] = 0; });
+        }
+        const acc = map.get(key);
+        sumFields.forEach(f => { acc[f] = (acc[f] || 0) + (r[f] || 0); });
+    }
+    return [...map.values()];
+};
+
+// visitsTabSummary carries an overall aggregate PLUS a by_payment_type breakdown
+// (an array of {villa_payment_type, total_members_booked, total_guests_booked,
+// avg_length_of_stay, avg_party_size, total_room_nights, villa_rental_revenue}).
+// This picks the right slice depending on the active filter.
+const pickSummary = (visitsTabSummary, filter) => {
+    if (!visitsTabSummary) return null;
+    if (filter === "overall") return visitsTabSummary;
+    const match = filterKeyToType(filter);
+    const row = (visitsTabSummary.by_payment_type || []).find(r => r.villa_payment_type === match);
+    return row ?? {
+        total_members_booked: 0,
+        total_guests_booked: 0,
+        avg_length_of_stay: null,
+        avg_party_size: null,
+        total_room_nights: 0,
+        villa_rental_revenue: 0,
+    };
+};
+
+// ─────────────────────────────────────────────
+// TRANSACTION-LEVEL FILTER HELPER
+// Used by transactionFinanceSummary / transactionMemberVsGuestRevenue —
+// these come from overview_transaction_lines (per net line-item, NOT per
+// booking), keyed by line_status: "Paid" | "Free" (Anomaly rows are never
+// sent here — the backend excludes them from these two endpoints).
+// Unlike villa_payment_type (booking-level), there's no "Unknown" bucket,
+// and "overall" here means SUM of Paid + Free for each grouping key,
+// since the API returns Paid and Free as separate rows rather than also
+// providing a combined row.
+//
+// NOTE on uniqueAccounts: this field is NOT summed across Paid+Free rows
+// even in "overall" mode, because a member/guest with both paid and free
+// transactions would otherwise be double-counted. Since uniqueAccounts is
+// only ever rendered as a per-status display value (not used in any
+// "overall" combined total in the UI today), it's safe to leave it as
+// whichever single row's value happens to land last during regroupSum —
+// callers needing an accurate combined unique-account count should query
+// the backend directly rather than rely on client-side summing here.
+const applyLineStatusFilter = (data, filter, groupKey) => {
+    const rows = data ?? [];
+    if (filter === "overall") {
+        return regroupSum(rows, groupKey, ["transaction_count", "total_amount", "revenue", "transactions"]);
+    }
+    const match = filterKeyToType(filter); // "Paid" | "Free" — same mapping as villa_payment_type
+    return rows.filter(r => r.line_status === match);
+};
+
+// ─────────────────────────────────────────────
+// MAIN COMPONENT
+// ─────────────────────────────────────────────
 export default function OverviewTab({
     membersByType = [],
     membersByStatus = [],
@@ -40,19 +282,92 @@ export default function OverviewTab({
     averageLengthOfStay = null,
     bookingsByMonth = [],
     bookingsByRoomType = [],
-    mostUsedRoomTypes = [],
+    mostUsedRoomTypes = [], // DEPRECATED — no longer read; "Top villas by bookings" now uses villaStats. Safe to stop passing this from dashboard.jsx.
     totalDependents = null,
     totalAmountDue = null,
     amountDueByPeriod = [],
     topSpendDescriptions = [],
     directoryMembers = [],
-    memberVsGuestRevenue = [],
+    memberVsGuestRevenue = [], // DEPRECATED — no longer read; superseded by transactionMemberVsGuestRevenue. Safe to stop passing this from dashboard.jsx.
     villaStats = [],
     visitsTabSummary = null,
     bedroomBookings = [],
-    villaRevenue = [],
-    monthlyRevenue = [],
+    villaRevenue = [], // DEPRECATED — no longer read; superseded by villaAmenityRevenue. Safe to stop passing this from dashboard.jsx.
+    monthlyRevenue = [], // DEPRECATED — no longer read; superseded by monthlyRevenueByCategory. Safe to stop passing this from dashboard.jsx.
+    transactionFinanceSummary = [],
+    transactionMemberVsGuestRevenue = [],
+    villaAmenityRevenue = [],
+    monthlyRevenueByCategory = [],
 }) {
+    // ── Per-card filter state ──────────────────────────────────────
+    const [financeFilter, setFinanceFilter] = useState("overall");
+    const [villaRevFilter, setVillaRevFilter] = useState("overall");
+    // How many rows are currently shown in "Top villas by revenue" — starts
+    // at 10, grows by 10 per "See more" click, caps at 50. Resets to 10
+    // whenever the Overall/Paid/Free filter changes, since a Free-filtered
+    // list might be much shorter than an expanded Paid/Overall list and
+    // "showing 40 of 6" would look broken.
+    const [villaRevVisibleCount, setVillaRevVisibleCount] = useState(10);
+    const [monthlyFilter, setMonthlyFilter] = useState("overall");
+    const [bookingsFilter, setBookingsFilter] = useState("overall");
+    const [bedroomDemandFilter, setBedroomDemandFilter] = useState("overall");
+    const [memberGuestFilter, setMemberGuestFilter] = useState("overall");
+    const [villaBookingsFilter, setVillaBookingsFilter] = useState("overall");
+    // Same "See more" pagination pattern as Top villas by revenue — starts
+    // at 10, grows by 10 per click, caps at 50, resets on filter change.
+    const [villaBookingsVisibleCount, setVillaBookingsVisibleCount] = useState(10);
+
+    // ── Derived: filtered datasets ─────────────────────────────────
+    // Used by the "Most booked bedroom" stat inside the Bookings at a glance card —
+    // intentionally tied to bookingsFilter, NOT bedroomDemandFilter, so that stat
+    // moves with the rest of the Bookings card.
+    const filteredBedroomBookingsForBookingsCard = applyVillaFilter(bedroomBookings, bookingsFilter);
+    // Used by the standalone Bedroom demand card — has its own independent toggle.
+    const filteredBedroomBookingsForDemandCard = applyVillaFilter(bedroomBookings, bedroomDemandFilter);
+    const filteredMemberGuest = applyLineStatusFilter(transactionMemberVsGuestRevenue, memberGuestFilter, "customerType");
+
+    // "Top villas by revenue" now ranks villas by AMENITY revenue (commissary,
+    // golf, wine, transportation, etc.) generated during stays — NOT villa
+    // rental revenue. Sourced from /overview/villa-amenity-revenue, which
+    // carries villa_payment_type per row (booking-level Paid/Free villa-stay
+    // type) so the existing applyVillaFilter/regroupSum pattern works
+    // unchanged. "Free Villa" here means: amenity revenue generated by
+    // guests whose villa stay itself was comped (the villa was free, but
+    // they still spent real money on amenities).
+    const filteredVillaAmenityRevenue = applyVillaFilter(villaAmenityRevenue, villaRevFilter);
+    const villaRevSource = regroupSum(
+        filteredVillaAmenityRevenue,
+        "villa_name",
+        ["amenity_revenue", "amenity_transactions", "bookings"],
+    ).map(v => ({
+        villaName: v.villa_name,
+        revenue: v.amenity_revenue,
+        totalBookings: v.bookings,
+        amenityTransactions: v.amenity_transactions,
+    }));
+
+    // Villa revenue sorted
+    const villaRevSorted = [...villaRevSource].sort((a, b) => b.revenue - a.revenue);
+    const villaRevPositive = villaRevSorted.filter(v => v.revenue > 0);
+
+    // "Top villas by bookings" — ranks villas by booking COUNT, filterable
+    // by the same booking-level Paid/Free villa-stay toggle used elsewhere.
+    // Sourced from villaStats (overview_villa_stats), which already carries
+    // villa_payment_type per row, the same dataset "Top villas by revenue"
+    // used before it was switched to amenity revenue.
+    const filteredVillaStatsForBookings = applyVillaFilter(villaStats, villaBookingsFilter);
+    const villaBookingsSource = regroupSum(
+        filteredVillaStatsForBookings,
+        "villa_name",
+        ["bookings", "total_nights", "total_guests"],
+    ).map(v => ({
+        villaName: v.villa_name,
+        bookings: v.bookings,
+    }));
+    const villaBookingsSorted = [...villaBookingsSource].sort((a, b) => b.bookings - a.bookings);
+    const villaBookingsPositive = villaBookingsSorted.filter(v => v.bookings > 0);
+
+    // ── Summary values — always from unfiltered data ───────────────
     const checkedIn = directoryMembers.filter(m => m.currently_checked_in).length;
     const withEmail = directoryMembers.filter(m => m.email).length;
 
@@ -62,90 +377,99 @@ export default function OverviewTab({
         .reduce((a, b) => a + (b.total || 0), 0);
     const totalAccounts = membersByType.reduce((a, b) => a + (b.total || 0), 0);
 
-    const memberRev = memberVsGuestRevenue.find(r => r.customerType === "Member");
-    const guestRev = memberVsGuestRevenue.find(r => r.customerType === "Guests");
+    // Revenue totals — respect filter
+    const memberRev = filteredMemberGuest.find(r => r.customerType === "Member");
+    const guestRev = filteredMemberGuest.find(r => r.customerType === "Guests");
     const totalRev = (memberRev?.revenue ?? 0) + (guestRev?.revenue ?? 0);
 
-    const villaRevSorted = [...villaRevenue].sort((a, b) => b.revenue - a.revenue);
-    const villaRevPositive = villaRevSorted.filter(v => v.revenue > 0);
-    const topRevenueVilla = villaRevPositive[0];
+    // ── Bookings card summary — respects bookingsFilter via visitsTabSummary.by_payment_type ──
+    const bookingsSummary = pickSummary(visitsTabSummary, bookingsFilter);
+    const totalBookingsMadeForBookings = (bookingsSummary?.total_members_booked ?? 0) + (bookingsSummary?.total_guests_booked ?? 0);
 
-    const totalVillaRevenue = visitsTabSummary?.villa_rental_revenue ?? 0;
-    const totalBookingsMade = (visitsTabSummary?.total_members_booked ?? 0) + (visitsTabSummary?.total_guests_booked ?? 0);
-    const revPerBooking = totalBookingsMade > 0 ? totalVillaRevenue / totalBookingsMade : null;
+    // ── Finance card — TRANSACTION-LEVEL Paid/Free (villa + amenity combined),
+    // respects financeFilter. Distinct from the booking-level "Paid/Free villa
+    // stay" meaning used everywhere else on this page — see
+    // applyLineStatusFilter's comment for why.
+    const financeLines = applyLineStatusFilter(transactionFinanceSummary, financeFilter, r => `${r.line_category}`);
+    const financeVillaRevenue = financeLines.find(r => r.line_category === "Villa")?.total_amount ?? 0;
+    const financeAmenityRevenue = financeLines.find(r => r.line_category === "Amenity")?.total_amount ?? 0;
+    const totalVillaRevenue = financeVillaRevenue + financeAmenityRevenue;
+    const financeTransactionCount = financeLines.reduce((a, b) => a + (b.transaction_count || 0), 0);
+    const revPerBooking = financeTransactionCount > 0 ? totalVillaRevenue / financeTransactionCount : null;
 
-    const totalBedroomBookings = bedroomBookings.reduce((a, b) => a + (b.bookings || 0), 0);
-    const topBedroom = [...bedroomBookings].sort((a, b) => b.bookings - a.bookings)[0];
+    // Member vs guest revenue for the Finance card's "Member revenue" /
+    // "Guest revenue" / "Member transactions" rows — same transaction-level
+    // source as the standalone Member vs guest revenue card, just filtered
+    // by financeFilter instead of memberGuestFilter.
+    const financeMemberGuestLines = applyLineStatusFilter(transactionMemberVsGuestRevenue, financeFilter, "customerType");
+    const finMemberRev = financeMemberGuestLines.find(r => r.customerType === "Member");
+    const finGuestRev = financeMemberGuestLines.find(r => r.customerType === "Guests");
 
-    const peakMonth = [...monthlyRevenue].sort((a, b) => b.revenue - a.revenue)[0];
-    const positiveMonths = monthlyRevenue.filter(m => m.revenue > 0);
+    // ── Hero KPIs — always overall (unfiltered), regardless of any card filter ──
+    const heroSummary = visitsTabSummary; // overall object, never filtered
+    const heroVillaRevenue = heroSummary?.villa_rental_revenue ?? 0;
+    // Bedroom data for the "Most booked bedroom" stat inside Bookings at a glance
+    // (follows bookingsFilter, same as the rest of that card).
+    const bedroomByBedsForBookingsCard = regroupSum(filteredBedroomBookingsForBookingsCard, "beds", ["bookings", "total_nights"]).map(b => ({
+        ...b,
+        avg_stay: b.total_nights && b.bookings ? b.total_nights / b.bookings : null,
+    }));
+    const topBedroom = [...bedroomByBedsForBookingsCard].sort((a, b) => b.bookings - a.bookings)[0];
+
+    // Bedroom data for the standalone Bedroom demand card (its own independent toggle).
+    const bedroomDemandByBeds = regroupSum(filteredBedroomBookingsForDemandCard, "beds", ["bookings", "total_nights"]).map(b => ({
+        ...b,
+        avg_stay: b.total_nights && b.bookings ? b.total_nights / b.bookings : null,
+    }));
+    const totalBedroomDemandBookings = bedroomDemandByBeds.reduce((a, b) => a + (b.bookings || 0), 0);
+    const topBedroomDemand = [...bedroomDemandByBeds].sort((a, b) => b.bookings - a.bookings)[0];
+
+    // Monthly revenue derived (re-aggregated by month after filtering by type)
+    // "Revenue by month" now uses the TRANSACTION-level category split
+    // (Villa vs Amenity, from /overview/monthly-revenue-by-category) so the
+    // card can show a stacked bar per month. villa_payment_type filtering
+    // works the same way as everywhere else (booking-level Paid/Free).
+    const filteredMonthlyByCategory = applyVillaFilter(monthlyRevenueByCategory, monthlyFilter);
+    const monthlyVillaRows = filteredMonthlyByCategory.filter(r => r.line_category === "Villa");
+    const monthlyAmenityRows = filteredMonthlyByCategory.filter(r => r.line_category === "Amenity");
+    const monthlyVillaByMonth = regroupSum(monthlyVillaRows, "month", ["revenue", "transactions", "bookings"]);
+    const monthlyAmenityByMonth = regroupSum(monthlyAmenityRows, "month", ["revenue", "transactions", "bookings"]);
+    // Combine into one row per month: villaRevenue, amenityRevenue, and a
+    // combined `revenue` total — kept under the same field name `revenue`
+    // so peakMonth/Hero KPI band (which only care about the combined
+    // total, not the split) don't need any changes.
+    const monthOrder = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const allMonthsPresent = [...new Set([...monthlyVillaByMonth.map(m => m.month), ...monthlyAmenityByMonth.map(m => m.month)])];
+    const monthlyByMonth = allMonthsPresent
+        .map(month => {
+            const v = monthlyVillaByMonth.find(m => m.month === month);
+            const a = monthlyAmenityByMonth.find(m => m.month === month);
+            const villaRevenue = v?.revenue ?? 0;
+            const amenityRevenue = a?.revenue ?? 0;
+            return {
+                month,
+                villaRevenue,
+                amenityRevenue,
+                revenue: villaRevenue + amenityRevenue,
+                bookings: Math.max(v?.bookings ?? 0, a?.bookings ?? 0),
+            };
+        })
+        .sort((a, b) => monthOrder.indexOf(a.month) - monthOrder.indexOf(b.month));
+    const peakMonth = [...monthlyByMonth].sort((a, b) => b.revenue - a.revenue)[0];
+    const positiveMonths = monthlyByMonth.filter(m => m.revenue > 0);
     const totalPositiveRev = positiveMonths.reduce((a, b) => a + b.revenue, 0);
 
     const villaStatsWithData = villaStats.filter(v => v.total_nights > 0);
     const totalVillaGuests = villaStats.reduce((a, b) => a + (b.total_guests || 0), 0);
     const totalVillaNights = villaStats.reduce((a, b) => a + (b.total_nights || 0), 0);
-    const longestStayVilla = [...villaStatsWithData].sort((a, b) => b.avg_stay - a.avg_stay)[0];
-    const biggestPartyVilla = [...villaStatsWithData].sort((a, b) => b.avg_party_size - a.avg_party_size)[0];
-
-    const InfoBtn = ({ tip }) => (
-        <div className="info-btn" data-tip={tip} style={{
-            width: 15, height: 15, borderRadius: "50%",
-            border: `1px solid ${C.navyBorder}`,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 9, color: C.navyMuted, fontWeight: 700, lineHeight: 1, flexShrink: 0, cursor: "default",
-        }}>i</div>
-    );
-
-    const CardHeader = ({ label, tip }) => (
-        <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span className="dashboard-eyebrow">{label}</span>
-            <div className="info-btn" data-tip={tip} style={{
-                width: 15, height: 15, borderRadius: "50%", border: `1px solid ${C.border}`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 9, color: C.muted, fontWeight: 700, lineHeight: 1, flexShrink: 0, cursor: "default",
-            }}>i</div>
-        </div>
-    );
-
-    const StatRow = ({ label, value, warn, last, sub }) => (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 16px", gap: 8, borderBottom: last ? "none" : `1px solid ${C.rowBorder}` }}>
-            <div>
-                <div style={{ fontSize: 12, color: C.soft, fontFamily: "sans-serif" }}>{label}</div>
-                {sub && <div style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif", marginTop: 1 }}>{sub}</div>}
-            </div>
-            <span style={{ fontFamily: serif, fontSize: 18, color: warn ? C.accent2 : C.text, lineHeight: 1, textAlign: "right", flexShrink: 0 }}>
-                {value}
-            </span>
-        </div>
-    );
-
-    const RankRow = ({ rank, label, value, mini, total, sub, last }) => (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 16px", gap: 8, background: rank % 2 === 0 ? C.panel : C.bg, borderBottom: last ? "none" : `1px solid ${C.rowBorder}` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                <div style={{ width: 20, height: 20, borderRadius: 5, flexShrink: 0, background: rank === 1 ? C.navy : C.panelAlt, color: rank === 1 ? C.flame : C.muted, fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "sans-serif" }}>{rank}</div>
-                <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 12, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 140, fontFamily: "sans-serif" }}>{label}</div>
-                    {sub && <div style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif" }}>{sub}</div>}
-                </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                {mini != null && total > 0 && (
-                    <div style={{ width: 44, height: 4, background: C.panelAlt, borderRadius: 2 }}>
-                        <div style={{ height: "100%", borderRadius: 2, background: rank === 1 ? C.navy : C.muted, width: `${Math.round((mini / total) * 100)}%` }} />
-                    </div>
-                )}
-                <span style={{ fontFamily: serif, fontSize: 18, color: C.text, minWidth: 32, textAlign: "right" }}>{value}</span>
-            </div>
-        </div>
-    );
 
     const heroKpis = [
-        { label: "Villa Revenue", value: totalVillaRevenue > 0 ? money(totalVillaRevenue) : "—", sub: `${visitsTabSummary?.total_room_nights ?? "—"} room nights`, color: C.flame, tip: "Total villa rental revenue from all reservations." },
-        { label: "Outstanding", value: totalAmountDue?.total_amount_due != null ? `$${(Number(totalAmountDue.total_amount_due) / 1_000_000).toFixed(2)}M` : "—", sub: "Total dues owed", color: C.rust, tip: "Sum of all unpaid balances across every account and statement period." },
-        { label: "Room Nights", value: visitsTabSummary?.total_room_nights?.toLocaleString() ?? "—", sub: `Avg ${visitsTabSummary?.avg_length_of_stay?.toFixed(1) ?? "—"} nights/stay`, color: C.navyText, tip: "Total room nights sold across all villa reservations." },
-        { label: "Rev / Booking", value: revPerBooking != null ? money(revPerBooking) : "—", sub: "Villa rental average", color: C.navyText, tip: "Average villa rental revenue per booking." },
-        { label: "Peak Month", value: peakMonth?.month ?? "—", sub: peakMonth ? money(peakMonth.revenue) : "—", color: C.flame, tip: "Month with the highest revenue. April dominates due to peak season." },
-        { label: "Active Accounts", value: membersByStatus.find(s => s.status === "Active")?.total?.toLocaleString() ?? "—", sub: `of ${totalAccounts.toLocaleString()} total`, color: C.navyText, tip: "Accounts with Active status able to make new bookings." },
+        { label: "Villa Revenue ($USD)", value: heroVillaRevenue > 0 ? money(heroVillaRevenue) : "—", sub: `${heroSummary?.total_room_nights ?? "—"} room nights`, color: C.flame, tip: "The villa rental charge only, not amenities like food, golf or spa. Any charge that was later cancelled or corrected has already been removed, so this is the real amount actually paid across every reservation. This figure is always shown unfiltered, regardless of any toggle elsewhere on the page." },
+        { label: "Outstanding ($USD)", value: totalAmountDue?.total_amount_due != null ? `$${(Number(totalAmountDue.total_amount_due) / 1_000_000).toFixed(2)}M` : "—", sub: "Total dues owed", color: C.rust, tip: "Shown in millions. The total of every unpaid balance currently owed, added up across all accounts and all billing periods." },
+        { label: "Room Nights", value: heroSummary?.total_room_nights?.toLocaleString() ?? "—", sub: `Avg ${heroSummary?.avg_length_of_stay?.toFixed(1) ?? "—"} nights/stay`, color: C.navyText, tip: "The total number of nights members and guests have stayed, added up across every reservation (e.g. one 7-night stay counts as 7)." },
+        { label: "Rev / Booking ($USD)", value: (heroSummary && ((heroSummary.total_members_booked ?? 0) + (heroSummary.total_guests_booked ?? 0)) > 0) ? money(heroVillaRevenue / ((heroSummary.total_members_booked ?? 0) + (heroSummary.total_guests_booked ?? 0))) : "—", sub: "Villa rental average", color: C.navyText, tip: "Villa Revenue divided by the total number of bookings - the average amount a single booking brings in from the villa rental charge alone, not counting amenities." },
+        { label: "Peak Month", value: peakMonth?.month ?? "—", sub: peakMonth ? money(peakMonth.revenue) : "—", color: C.flame, tip: "The single calendar month with the highest combined revenue - villa + amenities ($USD). Updates if you change the Overall/Paid/Free toggle on the \"Revenue by month\" card further down the page." },
+        { label: "Active Accounts", value: membersByStatus.find(s => s.status === "Active")?.total?.toLocaleString() ?? "—", sub: `of ${totalAccounts.toLocaleString()} total`, color: C.navyText, tip: "The number of member and guest accounts currently marked Active (not Inactive, Cancelled, etc.), out of every account on file. A count of accounts." },
     ];
 
     return (
@@ -153,12 +477,8 @@ export default function OverviewTab({
 
             {/* ── Dark hero KPI band ── */}
             <section style={{
-                background: C.navy,
-                borderRadius: 18,
-                overflow: "hidden",
-                marginBottom: 16,
-                display: "grid",
-                gridTemplateColumns: "repeat(6, 1fr)",
+                background: C.navy, borderRadius: 18, overflow: "hidden",
+                marginBottom: 16, display: "grid", gridTemplateColumns: "repeat(6, 1fr)",
             }}>
                 {heroKpis.map((k, i) => (
                     <div key={k.label} style={{
@@ -168,7 +488,7 @@ export default function OverviewTab({
                     }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
                             <span style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: C.navyMuted, fontFamily: "sans-serif" }}>{k.label}</span>
-                            <InfoBtn tip={k.tip} />
+                            <InfoTip text={k.tip} />
                         </div>
                         <span style={{ fontFamily: serif, fontSize: 26, lineHeight: 1.1, color: k.color, fontWeight: 600 }}>{k.value}</span>
                         <span style={{ fontSize: 11, color: C.navyDim, fontFamily: "sans-serif" }}>{k.sub}</span>
@@ -179,8 +499,9 @@ export default function OverviewTab({
             {/* ── Row 1: Members · Bookings · Finance ── */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
 
+                {/* Members — no filter (member data not villa-tagged) */}
                 <div style={block}>
-                    <CardHeader label="Members at a glance" tip="Breakdown of accounts by activity status, geography, and household data." />
+                    <CardHeader label="Members at a glance" tip="Counts every member and guest account on file, broken down by active/inactive status, country, and state. This is account counts only, not bookings or spend." />
                     <StatRow label="Active members" value={membersByStatus.find(s => s.status === "Active")?.members?.toLocaleString() ?? "—"} />
                     <StatRow label="Active guests" value={membersByStatus.find(s => s.status === "Active")?.guests?.toLocaleString() ?? "—"} />
                     <StatRow label="Inactive accounts" value={membersByStatus.find(s => s.status === "Inactive")?.total?.toLocaleString() ?? "—"} />
@@ -191,167 +512,94 @@ export default function OverviewTab({
                     <StatRow label="With email on file" value={withEmail > 0 ? withEmail.toLocaleString() : "—"} last />
                 </div>
 
+                {/* Bookings — filtered */}
                 <div style={block}>
-                    <CardHeader label="Bookings at a glance" tip="Villa reservation totals, stay lengths, guest volumes, and bedroom demand." />
-                    <StatRow label="Total bookings" value={bookingsByMonth.reduce((a, b) => a + (b.total || 0), 0).toLocaleString()} />
-                    <StatRow label="Members who booked" value={visitsTabSummary?.total_members_booked?.toLocaleString() ?? "—"} />
-                    <StatRow label="Guests who booked" value={visitsTabSummary?.total_guests_booked?.toLocaleString() ?? "—"} />
-                    <StatRow label="Total room nights" value={visitsTabSummary?.total_room_nights?.toLocaleString() ?? "—"} />
-                    <StatRow label="Avg. stay" value={visitsTabSummary?.avg_length_of_stay != null ? `${visitsTabSummary.avg_length_of_stay.toFixed(1)} nights` : "—"} />
-                    <StatRow label="Avg. party size" value={visitsTabSummary?.avg_party_size != null ? visitsTabSummary.avg_party_size.toFixed(1) : "—"} />
+                    <CardHeaderF
+                        label="Bookings at a glance"
+                        tip="Counts whole villa reservations (not individual charges). Paid/Free here describes how the BOOKING itself was classified at intake. Cancelled and no-show bookings are excluded."
+                        filter={bookingsFilter}
+                        onFilterChange={setBookingsFilter}
+                    />
+                    <StatRow label="Total bookings" value={totalBookingsMadeForBookings.toLocaleString()} />
+                    <StatRow label="Members who booked" value={bookingsSummary?.total_members_booked?.toLocaleString() ?? "—"} />
+                    <StatRow label="Guests who booked" value={bookingsSummary?.total_guests_booked?.toLocaleString() ?? "—"} />
+                    <StatRow label="Total room nights" value={bookingsSummary?.total_room_nights?.toLocaleString() ?? "—"} />
+                    <StatRow label="Avg. stay" value={bookingsSummary?.avg_length_of_stay != null ? `${bookingsSummary.avg_length_of_stay.toFixed(1)} nights` : "—"} />
+                    <StatRow label="Avg. party size" value={bookingsSummary?.avg_party_size != null ? bookingsSummary.avg_party_size.toFixed(1) : "—"} />
                     <StatRow label="Most booked bedroom" value={topBedroom ? `${topBedroom.beds} BR` : "—"} sub={topBedroom ? `${topBedroom.bookings} bookings` : undefined} />
                     <StatRow label="Villa types available" value={bookingsByRoomType.length} last />
                 </div>
 
+                {/* Finance — filtered */}
                 <div style={block}>
-                    <CardHeader label="Finance at a glance ($US)" tip="Outstanding dues, villa rental revenue, and revenue by customer type." />
-                    <StatRow label="Villa rental revenue" value={money(totalVillaRevenue)} />
-                    <StatRow label="Rev. per booking" value={revPerBooking != null ? money(revPerBooking) : "—"} />
+                    <CardHeaderF
+                        label="Finance at a glance ($USD)"
+                        tip="This card counts individual CHARGES across every booking, not whole bookings. Paid means money was actually charged for that item, after cancelling out any matching refund or correction. Free means the charge was reversed or comped down to $0 - it does not mean the booking itself was free. A small number of unusual refunds that don't match a known charge are left out of these totals entirely so they don't distort the numbers."
+                        filter={financeFilter}
+                        onFilterChange={setFinanceFilter}
+                    />
+                    <StatRow label="Total revenue" value={money(totalVillaRevenue)} sub={`${money(financeVillaRevenue)} villa · ${money(financeAmenityRevenue)} amenity`} />
+                    <StatRow label="Rev. per transaction" value={revPerBooking != null ? money(revPerBooking) : "—"} />
                     <StatRow label="Outstanding balance" value={totalAmountDue?.total_amount_due != null ? `$${(Number(totalAmountDue.total_amount_due) / 1_000_000).toFixed(2)}M` : "—"} warn />
-                    <StatRow label="Member revenue" value={memberRev?.revenue != null ? money(memberRev.revenue) : "—"} />
-                    <StatRow label="Guest revenue" value={guestRev?.revenue != null ? money(guestRev.revenue) : "—"} />
-                    <StatRow label="Member transactions" value={memberRev?.transactions?.toLocaleString() ?? "—"} />
+                    <StatRow label="Member revenue" value={finMemberRev?.revenue != null ? money(finMemberRev.revenue) : "—"} />
+                    <StatRow label="Guest revenue" value={finGuestRev?.revenue != null ? money(finGuestRev.revenue) : "—"} />
+                    <StatRow label="Member transactions" value={finMemberRev?.transactions?.toLocaleString() ?? "—"} />
                     <StatRow label="Statement periods" value={amountDueByPeriod.length} />
                     <StatRow label="Periods with credits" value={amountDueByPeriod.filter(p => (p.total || 0) < 0).length} last />
                 </div>
             </div>
 
-            {/* ── Row 2: Status · Bedroom demand · Monthly revenue ── */}
+            {/* ── Row 2: [Account status + Member vs guest revenue stacked] · Bedroom demand · Monthly revenue ── */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
 
-                {/* Account status */}
-                <div style={block}>
-                    <CardHeader label="Account status" tip="Active vs inactive accounts split by member and guest type." />
-                    <div style={{ padding: "14px 16px 10px", display: "flex", flexDirection: "column", gap: 12 }}>
-                        {membersByStatus.map((s) => {
-                            const tot = membersByStatus.reduce((a, b) => a + (b.total || 0), 0);
-                            const pct = tot > 0 ? Math.round((s.total / tot) * 100) : 0;
-                            const isActive = s.status === "Active";
-                            return (
-                                <div key={s.status}>
-                                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
-                                        <span style={{ color: C.soft, fontFamily: "sans-serif" }}>{s.status}</span>
-                                        <span style={{ fontFamily: serif, fontSize: 17, color: C.text, lineHeight: 1 }}>
-                                            {s.total.toLocaleString()}
-                                            <span style={{ fontSize: 11, fontFamily: "sans-serif", color: C.muted, marginLeft: 4 }}>({pct}%)</span>
-                                        </span>
-                                    </div>
-                                    <div style={{ height: 6, background: C.panelAlt, borderRadius: 3 }}>
-                                        <div style={{ height: "100%", width: `${pct}%`, background: isActive ? C.navy : C.muted, borderRadius: 3 }} />
-                                    </div>
-                                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, marginTop: 4, fontFamily: "sans-serif" }}>
-                                        <span>Members: {s.members?.toLocaleString() ?? "—"}</span>
-                                        <span>Guests: {s.guests?.toLocaleString() ?? "—"}</span>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                    <div style={{ borderTop: `1px solid ${C.border}`, padding: "8px 16px 4px" }}>
-                        <span className="dashboard-eyebrow">Top account types</span>
-                    </div>
-                    {membersByType.slice(0, 4).map((t, i, arr) => (
-                        <RankRow key={t.member_type} rank={i + 1} label={t.member_type} value={t.total.toLocaleString()} mini={t.total} total={totalAccounts} last={i === arr.length - 1} />
-                    ))}
-                </div>
-
-                {/* Bedroom demand */}
-                <div style={block}>
-                    <CardHeader label="Bedroom demand" tip="Bookings and avg stay by villa size. Shows which bedroom counts are most popular." />
-                    {bedroomBookings.map((b, i, arr) => {
-                        const pct = totalBedroomBookings > 0 ? Math.round((b.bookings / totalBedroomBookings) * 100) : 0;
-                        const isTop = b.beds === topBedroom?.beds;
-                        return (
-                            <div key={b.beds} style={{ padding: "9px 16px", borderBottom: i < arr.length - 1 ? `1px solid ${C.rowBorder}` : "none", background: i % 2 === 0 ? C.bg : C.panel }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                        <div style={{ width: 26, height: 26, borderRadius: 6, background: isTop ? C.navy : C.panelAlt, color: isTop ? C.flame : C.muted, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "sans-serif", flexShrink: 0 }}>
-                                            {b.beds}BR
-                                        </div>
-                                        <div>
-                                            <div style={{ fontSize: 12, color: C.text, fontFamily: "sans-serif" }}>{b.bookings} bookings</div>
-                                            <div style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif" }}>Avg {b.avg_stay?.toFixed(1)} nights</div>
-                                        </div>
-                                    </div>
-                                    <span style={{ fontFamily: serif, fontSize: 17, color: isTop ? C.accent : C.text }}>{pct}%</span>
-                                </div>
-                                <div style={{ height: 4, background: C.panelAlt, borderRadius: 2 }}>
-                                    <div style={{ height: "100%", width: `${pct}%`, background: isTop ? C.navy : C.muted, borderRadius: 2 }} />
-                                </div>
-                            </div>
-                        );
-                    })}
-                    <div style={{ padding: "9px 16px", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}>Total bookings tracked</span>
-                        <span style={{ fontFamily: serif, fontSize: 16, color: C.text }}>{totalBedroomBookings}</span>
-                    </div>
-                </div>
-
-                {/* Monthly revenue */}
-                <div style={block}>
-                    <CardHeader label="Revenue by month ($US)" tip="Monthly revenue totals. Negative values are credits or adjustments. April is peak season." />
-                    {monthlyRevenue.map((m, i, arr) => {
-                        const absMax = Math.max(...monthlyRevenue.map(x => Math.abs(x.revenue)));
-                        const pct = absMax > 0 ? Math.round((Math.abs(m.revenue) / absMax) * 100) : 0;
-                        const isPos = m.revenue >= 0;
-                        const isPeak = m.month === peakMonth?.month;
-                        return (
-                            <div key={m.month} style={{ padding: "7px 16px", borderBottom: i < arr.length - 1 ? `1px solid ${C.rowBorder}` : "none", background: isPeak ? `color-mix(in srgb, ${C.navy} 4%, transparent)` : i % 2 === 0 ? C.bg : C.panel }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                                        <span style={{ fontSize: 12, color: isPeak ? C.navy : C.soft, fontWeight: isPeak ? 700 : 400, fontFamily: "sans-serif", minWidth: 28 }}>{m.month}</span>
-                                        {isPeak && (
-                                            <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 8, background: C.navy, color: C.flame, fontFamily: "sans-serif", fontWeight: 700, letterSpacing: "0.08em" }}>PEAK</span>
-                                        )}
-                                        <span style={{ fontSize: 11, color: C.muted, fontFamily: "sans-serif" }}>{m.bookings} bkgs</span>
-                                    </div>
-                                    <span style={{ fontFamily: serif, fontSize: 15, color: isPos ? C.text : C.accent2, lineHeight: 1 }}>
-                                        {isPos ? "" : "−"}{money(Math.abs(m.revenue))}
-                                    </span>
-                                </div>
-                                <div style={{ height: 3, background: C.panelAlt, borderRadius: 2 }}>
-                                    <div style={{ height: "100%", width: `${pct}%`, background: isPos ? (isPeak ? C.navy : C.muted) : C.accent2, borderRadius: 2 }} />
-                                </div>
-                            </div>
-                        );
-                    })}
-                    <div style={{ padding: "9px 16px", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}>Positive months total</span>
-                        <span style={{ fontFamily: serif, fontSize: 16, color: C.text }}>{money(totalPositiveRev)}</span>
-                    </div>
-                </div>
-            </div>
-
-            {/* ── Row 3: Villa revenue table + Member vs Guest + Top bookings ── */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-
-                {/* Villa revenue table */}
-                <div style={block}>
-                    <CardHeader label="Top villas by revenue" tip="Villas ranked by rental revenue. Rev/night shows pricing efficiency — fewer nights at higher rate means strong demand." />
-                    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", padding: "7px 16px", borderBottom: `1px solid ${C.border}`, background: C.panelAlt }}>
-                        {["Villa", "Revenue", "Bookings", "Rev/night"].map(h => (
-                            <span key={h} style={{ fontSize: 9, color: C.muted, fontFamily: "sans-serif", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>{h}</span>
-                        ))}
-                    </div>
-                    {villaRevSorted.filter(v => v.revenue > 0).slice(0, 10).map((v, i, arr) => (
-                        <div key={v.villaName} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", padding: "8px 16px", borderBottom: i < arr.length - 1 ? `1px solid ${C.rowBorder}` : "none", background: i % 2 === 0 ? C.bg : C.panel, alignItems: "center" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-                                <div style={{ width: 18, height: 18, borderRadius: 4, background: i === 0 ? C.navy : C.panelAlt, color: i === 0 ? C.flame : C.muted, fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "sans-serif", flexShrink: 0 }}>{i + 1}</div>
-                                <span style={{ fontSize: 12, color: C.text, fontFamily: "sans-serif", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.villaName}</span>
-                            </div>
-                            <span style={{ fontFamily: serif, fontSize: 14, color: C.accent }}>{money(v.revenue)}</span>
-                            <span style={{ fontFamily: serif, fontSize: 14, color: C.text }}>{v.totalBookings}</span>
-                            <span style={{ fontFamily: serif, fontSize: 14, color: C.soft }}>{v.roomNights > 0 ? money(v.revenue / v.roomNights) : "—"}</span>
-                        </div>
-                    ))}
-                </div>
-
-                {/* Right column: member vs guest + top villas by bookings */}
+                {/* Column 1: Account status (top) + Member vs guest revenue (bottom), stacked */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 
+                    {/* Account status — no filter */}
                     <div style={block}>
-                        <CardHeader label="Member vs guest revenue ($US)" tip="Revenue and transaction breakdown between member and guest folio accounts." />
-                        {memberVsGuestRevenue.map((r, i, arr) => {
+                        <CardHeader label="Account status" tip="Counts every account on file by whether it's currently Active or Inactive, split into members and guests. This is a simple headcount - no dollar amounts." />
+                        <div style={{ padding: "14px 16px 10px", display: "flex", flexDirection: "column", gap: 12 }}>
+                            {membersByStatus.map((s) => {
+                                const tot = membersByStatus.reduce((a, b) => a + (b.total || 0), 0);
+                                const pct = tot > 0 ? Math.round((s.total / tot) * 100) : 0;
+                                const isActive = s.status === "Active";
+                                return (
+                                    <div key={s.status}>
+                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
+                                            <span style={{ color: C.soft, fontFamily: "sans-serif" }}>{s.status}</span>
+                                            <span style={{ fontFamily: serif, fontSize: 17, color: C.text, lineHeight: 1 }}>
+                                                {s.total.toLocaleString()}
+                                                <span style={{ fontSize: 11, fontFamily: "sans-serif", color: C.muted, marginLeft: 4 }}>({pct}%)</span>
+                                            </span>
+                                        </div>
+                                        <div style={{ height: 6, background: C.panelAlt, borderRadius: 3 }}>
+                                            <div style={{ height: "100%", width: `${pct}%`, background: isActive ? C.navy : C.muted, borderRadius: 3 }} />
+                                        </div>
+                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, marginTop: 4, fontFamily: "sans-serif" }}>
+                                            <span>Members: {s.members?.toLocaleString() ?? "—"}</span>
+                                            <span>Guests: {s.guests?.toLocaleString() ?? "—"}</span>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                        <div style={{ borderTop: `1px solid ${C.border}`, padding: "8px 16px 4px" }}>
+                            <span className="dashboard-eyebrow">Top account types</span>
+                        </div>
+                        {membersByType.slice(0, 4).map((t, i, arr) => (
+                            <RankRow key={t.member_type} rank={i + 1} label={t.member_type} value={t.total.toLocaleString()} mini={t.total} total={totalAccounts} last={i === arr.length - 1} />
+                        ))}
+                    </div>
+
+                    {/* Member vs Guest revenue — filtered */}
+                    <div style={block}>
+                        <CardHeaderF
+                            label="Member vs guest revenue ($USD)"
+                            tip="Splits revenue between Member accounts and Guest accounts. This counts individual charges (villa rental + amenities combined). Paid/Free reflects whether each specific charge was actually paid, after netting out any matching refund or correction - not whether the booking itself was comped."
+                            filter={memberGuestFilter}
+                            onFilterChange={setMemberGuestFilter}
+                        />
+                        {filteredMemberGuest.map((r, i, arr) => {
                             const pct = totalRev > 0 ? Math.round((r.revenue / totalRev) * 100) : 0;
                             const col = r.customerType === "Member" ? C.navy : C.flame;
                             return (
@@ -378,13 +626,211 @@ export default function OverviewTab({
                             <span style={{ fontFamily: serif, fontSize: 16, color: C.text }}>{money(totalRev)}</span>
                         </div>
                     </div>
+                </div>
 
-                    <div style={block}>
-                        <CardHeader label="Top villas by bookings" tip="Villas ranked by number of reservations." />
-                        {mostUsedRoomTypes.slice(0, 6).map((r, i, arr) => (
-                            <RankRow key={r.room_type} rank={i + 1} label={r.room_type} value={r.total} mini={r.total} total={mostUsedRoomTypes[0]?.total || 1} last={i === arr.length - 1} />
+                {/* Bedroom demand — filtered, independent toggle */}
+                <div style={block}>
+                    <CardHeaderF
+                        label="Bedroom demand"
+                        tip="Groups bookings by how many bedrooms the villa has, showing how many bookings and how long the average stay is for each size. Paid/Free describes how the booking itself was classified at intake, not whether amenities were purchased during the stay."
+                        filter={bedroomDemandFilter}
+                        onFilterChange={setBedroomDemandFilter}
+                    />
+                    {bedroomDemandByBeds.map((b, i, arr) => {
+                        const pct = totalBedroomDemandBookings > 0 ? Math.round((b.bookings / totalBedroomDemandBookings) * 100) : 0;
+                        const isTop = b.beds === topBedroomDemand?.beds;
+                        return (
+                            <div key={b.beds} style={{
+                                padding: "9px 16px",
+                                borderBottom: i < arr.length - 1 ? `1px solid ${C.rowBorder}` : "none",
+                                background: i % 2 === 0 ? C.bg : C.panel,
+                            }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                        <div style={{
+                                            width: 26, height: 26, borderRadius: 6,
+                                            background: isTop ? C.navy : C.panelAlt,
+                                            color: isTop ? C.flame : C.muted,
+                                            fontSize: 10, fontWeight: 700,
+                                            display: "flex", alignItems: "center", justifyContent: "center",
+                                            fontFamily: "sans-serif", flexShrink: 0,
+                                        }}>
+                                            {b.beds}BR
+                                        </div>
+                                        <div>
+                                            <div style={{ fontSize: 12, color: C.text, fontFamily: "sans-serif" }}>{b.bookings} bookings</div>
+                                            <div style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif" }}>Avg {b.avg_stay?.toFixed(1) ?? "—"} nights</div>
+                                        </div>
+                                    </div>
+                                    <span style={{ fontFamily: serif, fontSize: 17, color: isTop ? C.accent : C.text }}>{pct}%</span>
+                                </div>
+                                <div style={{ height: 4, background: C.panelAlt, borderRadius: 2 }}>
+                                    <div style={{ height: "100%", width: `${pct}%`, background: isTop ? C.navy : C.muted, borderRadius: 2 }} />
+                                </div>
+                            </div>
+                        );
+                    })}
+                    <div style={{ padding: "9px 16px", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}>Total bookings tracked</span>
+                        <span style={{ fontFamily: serif, fontSize: 16, color: C.text }}>{totalBedroomDemandBookings}</span>
+                    </div>
+                </div>
+
+                {/* Monthly revenue — filtered, stacked Villa vs Amenity */}
+                <div style={block}>
+                    <CardHeaderF
+                        label="Revenue by month ($USD)"
+                        tip="Each month's bar is the actual money charged that month, split into villa rental (navy) and amenity spend like food, golf, and wine (orange) - only real charges count, not the cancelled/comped portion. The Paid/Free toggle filters by how the underlying booking was classified at intake, then shows that booking's real spend."
+                        filter={monthlyFilter}
+                        onFilterChange={setMonthlyFilter}
+                    />
+                    <div style={{ padding: "8px 16px 0", display: "flex", gap: 14, alignItems: "center" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                            <div style={{ width: 8, height: 8, borderRadius: 2, background: C.navy }} />
+                            <span style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif" }}>Villa</span>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                            <div style={{ width: 8, height: 8, borderRadius: 2, background: C.flame }} />
+                            <span style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif" }}>Amenity</span>
+                        </div>
+                    </div>
+                    {monthlyByMonth.map((m, i, arr) => {
+                        const absMax = Math.max(...monthlyByMonth.map(x => Math.abs(x.revenue)));
+                        const villaPct = absMax > 0 ? (Math.abs(m.villaRevenue) / absMax) * 100 : 0;
+                        const amenityPct = absMax > 0 ? (Math.abs(m.amenityRevenue) / absMax) * 100 : 0;
+                        const isPos = m.revenue >= 0;
+                        const isPeak = m.month === peakMonth?.month;
+                        return (
+                            <div key={m.month} style={{
+                                padding: "7px 16px",
+                                borderBottom: i < arr.length - 1 ? `1px solid ${C.rowBorder}` : "none",
+                                background: isPeak ? `color-mix(in srgb, ${C.navy} 4%, transparent)` : i % 2 === 0 ? C.bg : C.panel,
+                            }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                                        <span style={{ fontSize: 12, color: isPeak ? C.navy : C.soft, fontWeight: isPeak ? 700 : 400, fontFamily: "sans-serif", minWidth: 28 }}>{m.month}</span>
+                                        {isPeak && (
+                                            <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 8, background: C.navy, color: C.flame, fontFamily: "sans-serif", fontWeight: 700, letterSpacing: "0.08em" }}>PEAK</span>
+                                        )}
+                                        <span style={{ fontSize: 11, color: C.muted, fontFamily: "sans-serif" }}>{m.bookings} bkgs</span>
+                                    </div>
+                                    <span style={{ fontFamily: serif, fontSize: 15, color: isPos ? C.text : C.accent2, lineHeight: 1 }}>
+                                        {isPos ? "" : "−"}{money(Math.abs(m.revenue))}
+                                    </span>
+                                </div>
+                                <div style={{ height: 3, background: C.panelAlt, borderRadius: 2, display: "flex", overflow: "hidden" }}>
+                                    <div style={{ height: "100%", width: `${villaPct}%`, background: C.navy }} />
+                                    <div style={{ height: "100%", width: `${amenityPct}%`, background: C.flame }} />
+                                </div>
+                                <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 3 }}>
+                                    <span style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif" }}>{money(m.villaRevenue)} villa</span>
+                                    <span style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif" }}>{money(m.amenityRevenue)} amenity</span>
+                                </div>
+                            </div>
+                        );
+                    })}
+                    <div style={{ padding: "9px 16px", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}>Positive months total</span>
+                        <span style={{ fontFamily: serif, fontSize: 16, color: C.text }}>{money(totalPositiveRev)}</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* ── Row 3: Top villas by revenue · Top villas by bookings ── */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+
+                {/* Villa revenue table — filtered */}
+                <div style={block}>
+                    <CardHeaderF
+                        label="Top villas by revenue ($USD)"
+                        tip="Ranks villas by AMENITY spend only - food, golf, spa, wine, equipment, etc. - NOT the villa rental charge itself. It only counts charges that were actually paid (comped/reversed amenity charges are excluded, since they amount to $0). The Paid/Free toggle filters by whether the guest's villa STAY was paid or comped - a comped stay can still show real amenity revenue here, since the guest may have paid for extras even though the villa itself was free."
+                        filter={villaRevFilter}
+                        onFilterChange={(val) => { setVillaRevFilter(val); setVillaRevVisibleCount(10); }}
+                    />
+                    <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr", padding: "7px 16px", borderBottom: `1px solid ${C.border}`, background: C.panelAlt }}>
+                        {["Villa", "Amenity revenue", "Bookings", "Amenity txns"].map(h => (
+                            <span key={h} style={{ fontSize: 9, color: C.muted, fontFamily: "sans-serif", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase" }}>{h}</span>
                         ))}
                     </div>
+                    {villaRevPositive.slice(0, villaRevVisibleCount).map((v, i, arr) => (
+                        <div key={v.villaName} style={{
+                            display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr",
+                            padding: "8px 16px",
+                            borderBottom: i < arr.length - 1 ? `1px solid ${C.rowBorder}` : "none",
+                            background: i % 2 === 0 ? C.bg : C.panel,
+                            alignItems: "center",
+                        }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                                <div style={{
+                                    width: 18, height: 18, borderRadius: 4,
+                                    background: i === 0 ? C.navy : C.panelAlt,
+                                    color: i === 0 ? C.flame : C.muted,
+                                    fontSize: 9, fontWeight: 700,
+                                    display: "flex", alignItems: "center", justifyContent: "center",
+                                    fontFamily: "sans-serif", flexShrink: 0,
+                                }}>{i + 1}</div>
+                                <span style={{ fontSize: 12, color: C.text, fontFamily: "sans-serif", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.villaName}</span>
+                            </div>
+                            <span style={{ fontFamily: serif, fontSize: 14, color: C.accent }}>{money(v.revenue)}</span>
+                            <span style={{ fontFamily: serif, fontSize: 14, color: C.text }}>{v.totalBookings}</span>
+                            <span style={{ fontFamily: serif, fontSize: 14, color: C.soft }}>{v.amenityTransactions?.toLocaleString() ?? "—"}</span>
+                        </div>
+                    ))}
+                    {(() => {
+                        const totalAvailable = Math.min(villaRevPositive.length, 50);
+                        const nextCount = Math.min(villaRevVisibleCount + 10, 50, villaRevPositive.length);
+                        const remainingToShow = nextCount - villaRevVisibleCount;
+                        if (remainingToShow <= 0) return null;
+                        return (
+                            <button
+                                onClick={() => setVillaRevVisibleCount(nextCount)}
+                                style={{
+                                    width: "100%", padding: "9px 16px",
+                                    background: C.panelAlt, border: "none",
+                                    borderTop: `1px solid ${C.border}`,
+                                    color: C.accent, fontFamily: "sans-serif",
+                                    fontSize: 11, fontWeight: 700, letterSpacing: "0.04em",
+                                    textTransform: "uppercase", cursor: "pointer",
+                                }}
+                            >
+                                See {remainingToShow} more (showing {villaRevVisibleCount} of {totalAvailable})
+                            </button>
+                        );
+                    })()}
+                </div>
+
+                {/* Top villas by bookings — Paid/Free villa-stay toggle, See-more pagination */}
+                <div style={block}>
+                    <CardHeaderF
+                        label="Top villas by bookings"
+                        tip="Ranks villas by how many separate reservations they've had - a count of bookings, not a dollar amount. A villa can appear here with bookings that have no amenity spend at all, which is why its count may not match the same villa's appearance on 'Top villas by revenue.' Paid/Free describes how each booking was classified at intake."
+                        filter={villaBookingsFilter}
+                        onFilterChange={(val) => { setVillaBookingsFilter(val); setVillaBookingsVisibleCount(10); }}
+                    />
+                    {villaBookingsPositive.slice(0, villaBookingsVisibleCount).map((v, i, arr) => (
+                        <RankRow key={v.villaName} rank={i + 1} label={v.villaName} value={v.bookings} mini={v.bookings} total={villaBookingsPositive[0]?.bookings || 1} last={i === arr.length - 1} />
+                    ))}
+                    {(() => {
+                        const totalAvailable = Math.min(villaBookingsPositive.length, 50);
+                        const nextCount = Math.min(villaBookingsVisibleCount + 10, 50, villaBookingsPositive.length);
+                        const remainingToShow = nextCount - villaBookingsVisibleCount;
+                        if (remainingToShow <= 0) return null;
+                        return (
+                            <button
+                                onClick={() => setVillaBookingsVisibleCount(nextCount)}
+                                style={{
+                                    width: "100%", padding: "9px 16px",
+                                    background: C.panelAlt, border: "none",
+                                    borderTop: `1px solid ${C.border}`,
+                                    color: C.accent, fontFamily: "sans-serif",
+                                    fontSize: 11, fontWeight: 700, letterSpacing: "0.04em",
+                                    textTransform: "uppercase", cursor: "pointer",
+                                }}
+                            >
+                                See {remainingToShow} more (showing {villaBookingsVisibleCount} of {totalAvailable})
+                            </button>
+                        );
+                    })()}
                 </div>
             </div>
 

@@ -1,8 +1,9 @@
 // frontend/src/pages/finance/FinanceOverview.jsx
 // Four headline revenue cards with click-to-drill.
-// Complimentary card removed — payment_type is 'Free' or 'Paid' direct values.
+// Replaces Paid/Free/Member/Guest (already covered by the Breakdowns
+// section below) with the Villas / Amenities / Services split.
 
-import { DollarSign, Users, UserCheck, TrendingUp } from "lucide-react";
+import { TrendingUp, Home, Sparkles, Briefcase } from "lucide-react";
 
 const C = {
   bg:      "var(--dashboard-card)",
@@ -78,47 +79,43 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Total Revenue",
       value: money(data.totalRevenue),
-      sub:   `${(data.totalTransactions ?? 0).toLocaleString()} transactions`,
+      sub:   `${(data.totalTransactions ?? 0).toLocaleString()} transactions: paid villa stays + amenities + services`,
       icon:  TrendingUp,
       accent: C.accent,
+      // Special-cased in FinanceTab's handleOverviewCardClick — opens a
+      // Villas/Amenities/Services mid-item breakdown instead of going
+      // straight to a flat record list.
       drillType: "total",
       drillValue: "Total Revenue",
     },
     {
-      label: "Paid Revenue",
-      value: money(data.paidRevenue),
-      sub:   "Paid bookings",
-      icon:  DollarSign,
+      label: "Villas Revenue",
+      value: money(data.villasRevenue),
+      sub:   "Villa rental bookings",
+      icon:  Home,
       accent: "#2D8A5F",
-      drillType: "paid",
-      drillValue: "Paid Revenue",
+      // transaction_category = 'Villa' — same /drilldown "category"
+      // filter the rest of Finance already uses.
+      drillType: "category",
+      drillValue: "Villa",
     },
     {
-      label: "Free / Comp Value",
-      value: money(data.freeValue),
-      sub:   "Free bookings",
-      icon:  DollarSign,
+      label: "Amenities Revenue",
+      value: money(data.amenitiesRevenue),
+      sub:   "Spa, golf, dining & more",
+      icon:  Sparkles,
       accent: "#D98C2B",
-      drillType: "free",
-      drillValue: "Free / Comp Value",
+      drillType: "section",
+      drillValue: "Amenities",
     },
     {
-      label: "Member Revenue",
-      value: money(data.memberRevenue),
-      sub:   "From member folios",
-      icon:  UserCheck,
+      label: "Services Revenue",
+      value: money(data.servicesRevenue),
+      sub:   "All other service charges",
+      icon:  Briefcase,
       accent: C.accent2,
-      drillType: "member",
-      drillValue: "Member Revenue",
-    },
-    {
-      label: "Guest Revenue",
-      value: money(data.guestRevenue),
-      sub:   "From guest folios",
-      icon:  Users,
-      accent: C.accent3,
-      drillType: "guest",
-      drillValue: "Guest Revenue",
+      drillType: "section",
+      drillValue: "Services",
     },
   ];
 

@@ -8,6 +8,12 @@ Output CSV columns per row:
   Conf. Code, Main Member #, Member #, Guest Name,
   Check-In Date, Check-Out Date, Room #, Villa Name, Bedroom Count,
   Persons, Source, Payment Type, Reservation Status
+
+Also writes reports/folio_report_enriched.csv — the original
+folio_report.csv with Villa Name / Bedroom Count / Persons / Source /
+Payment Type merged back in per Conf. Code, so you can filter the whole
+portfolio (e.g. Payment Type == "Free") without walking the journal tree.
+
 Folder naming:
   - Guests from Guests tab  → journal/{guest_number}/
   - All other folios        → journal/{main_member_number}/ (first token of Member/Guest Name)
@@ -39,11 +45,13 @@ from room_inquiry_scraper import get_payment_type
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-JOURNAL_FOLDER    = os.path.join(OUTPUT_FOLDER, "journal")
-SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
-REPORTS_FOLDER    = os.path.join(OUTPUT_FOLDER, "reports")
-DONE_LOG          = os.path.join(OUTPUT_FOLDER, "folio_done.txt")
-FOLIO_REPORT_CSV  = os.path.join(REPORTS_FOLDER, "folio_report.csv")
+JOURNAL_FOLDER       = os.path.join(OUTPUT_FOLDER, "journal")
+SCREENSHOT_FOLDER     = os.path.join(OUTPUT_FOLDER, "screenshots")
+REPORTS_FOLDER        = os.path.join(OUTPUT_FOLDER, "reports")
+DONE_LOG              = os.path.join(OUTPUT_FOLDER, "folio_done.txt")
+FOLIO_REPORT_CSV      = os.path.join(REPORTS_FOLDER, "folio_report.csv")
+# Enrichment is written back onto folio_report.csv itself (in place).
+ENRICHED_REPORT_CSV   = FOLIO_REPORT_CSV
 DEFAULT_LIMIT   = 10    # only used if --limit is explicitly passed
 DEFAULT_WORKERS = 4
 NAV_TIMEOUT   = 15000
@@ -65,6 +73,11 @@ LISTING_COLUMNS = [
     "Payment Type",         # Paid / Free  derived from business_source.csv
     "Reservation Status",
 ]
+# Subset of LISTING_COLUMNS that gets merged back onto folio_report.csv —
+# everything else (Conf. Code, dates, Room #, Reservation Status, ...) is
+# already present in folio_report.csv, so we only need the fields that are
+# actually scraped fresh from the live reservation page.
+ENRICHED_COLUMNS = ["Villa Name", "Bedroom Count", "Persons", "Source", "Payment Type"]
 # ─────────────────────────────────────────────
 # DONE LOG
 # ─────────────────────────────────────────────
@@ -348,6 +361,59 @@ def save_csv(filepath, rows):
         w.writeheader()
         w.writerows(rows)
     return filepath
+def write_enriched_report(all_rows, conf_summaries, out_path):
+    """
+    Merge per-reservation metadata (Villa Name, Bedroom Count, Persons,
+    Source, Payment Type) — scraped live off each reservation page —
+    back onto every original folio_report.csv row that shares that
+    Conf. Code, and save the result as a new enriched report.
+
+    all_rows        : the rows loaded from folio_report.csv (one or more
+                       rows per Conf. Code — one per folio)
+    conf_summaries  : {conf_code: listing_meta_dict} collected while
+                       scraping (see scrape_reservation / scrape_chunk)
+    out_path        : where to save the enriched CSV
+    """
+    if not all_rows:
+        print("  No rows to enrich — skipping enriched report.")
+        return None
+
+    out_rows = []
+    matched  = 0
+    for row in all_rows:
+        conf_code = get_conf_code(row)
+        meta      = conf_summaries.get(conf_code, {})
+        if meta:
+            matched += 1
+        new_row = dict(row)
+        for col in ENRICHED_COLUMNS:
+            # Fresh data from this run wins. If this reservation wasn't
+            # touched this run (e.g. already-done/skipped on a resumed
+            # run), keep whatever value already sits in that column from
+            # a previous run instead of blanking it out.
+            new_row[col] = meta.get(col) or row.get(col, "")
+        out_rows.append(new_row)
+
+    fieldnames = list(all_rows[0].keys())
+    for col in ENRICHED_COLUMNS:
+        if col not in fieldnames:
+            fieldnames.append(col)
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    # Write to a temp file first, then atomically swap it into place. If
+    # out_path == FOLIO_REPORT_CSV (overwriting the source report in
+    # place), this means a crash/interrupt mid-write can never leave you
+    # with a half-written or corrupted folio_report.csv — os.replace()
+    # only swaps once the temp file is fully and successfully written.
+    tmp_path = out_path + ".tmp"
+    with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(out_rows)
+    os.replace(tmp_path, out_path)
+    print(f"  Enriched report saved → {out_path}")
+    print(f"    {len(out_rows)} row(s) total, {matched} matched to scraped metadata")
+    return out_path
 def folio_csv_path(folder_name, folio_num):
     folder = os.path.join(JOURNAL_FOLDER, folder_name)
     os.makedirs(folder, exist_ok=True)
@@ -709,7 +775,16 @@ def scrape_all_folio_tabs(folio_frame, conf_code, folio_to_guest,
 # PER-RESERVATION PIPELINE
 # ─────────────────────────────────────────────
 def scrape_reservation(page, reservation_row, prefix=""):
-    """Full pipeline for one reservation. Returns {folder: [filepaths]}"""
+    """
+    Full pipeline for one reservation.
+    Returns (saved_files, listing_meta):
+      saved_files  — {folder: [filepaths]}
+      listing_meta — dict of LISTING_COLUMNS values resolved for this
+                     reservation (Villa Name, Source, Payment Type, etc.),
+                     used by scrape_chunk()/main() to build the enriched
+                     master report. Returned even on early-exit / partial
+                     failure so whatever was resolved isn't lost.
+    """
     conf_code       = get_conf_code(reservation_row)
     conf_href       = reservation_row.get("_conf_href", "")
     main_member_num = reservation_row.get("Member #", "")
@@ -727,9 +802,9 @@ def scrape_reservation(page, reservation_row, prefix=""):
     pr(prefix, f"=== Reservation: {conf_code} | {reservation_row.get('Member/Guest Name', '')} ===")
     if not conf_href:
         pr(prefix, "No URL — skipping")
-        return saved_files
+        return saved_files, listing_meta
     if not navigate_to_reservation(page, conf_href, conf_code, prefix):
-        return saved_files
+        return saved_files, listing_meta
     # ── Scrape live reservation form fields ──────────────────────────────────
     landing = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if landing:
@@ -775,7 +850,7 @@ def scrape_reservation(page, reservation_row, prefix=""):
     folio_frame = open_folio_management(page, conf_code, prefix)
     if not folio_frame:
         screenshot(page, f"no_folio_{conf_code}")
-        return saved_files
+        return saved_files, listing_meta
     # ── Scrape all tab groups ─────────────────────────────────────────────────
     pr(prefix, "Scraping folio tabs...")
     folio_data = scrape_all_folio_tabs(
@@ -785,7 +860,7 @@ def scrape_reservation(page, reservation_row, prefix=""):
     if not folio_data:
         pr(prefix, "No folio data scraped.")
         screenshot(page, f"empty_{conf_code}")
-        return saved_files
+        return saved_files, listing_meta
     for folder_name, folio_dict in folio_data.items():
         for folio_num, rows in folio_dict.items():
             fp = folio_csv_path(folder_name, folio_num)
@@ -793,7 +868,7 @@ def scrape_reservation(page, reservation_row, prefix=""):
             if saved:
                 saved_files.setdefault(folder_name, []).append(saved)
                 pr(prefix, f"Saved: {os.path.basename(saved)} ({len(rows)} rows)")
-    return saved_files
+    return saved_files, listing_meta
 # ─────────────────────────────────────────────
 # WORKER
 # ─────────────────────────────────────────────
@@ -803,7 +878,7 @@ def scrape_chunk(args):
     reservations_chunk, worker_id = args
     time.sleep(worker_id * 5)
     prefix   = f"[W{worker_id}] "
-    results  = {"success": [], "failed": [], "skipped": []}
+    results  = {"success": [], "failed": [], "skipped": [], "summary": {}}
     done_set = load_done_set()
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=False)
@@ -828,11 +903,11 @@ def scrape_chunk(args):
                     pr(prefix, "Already done — skipping.")
                     results["skipped"].append(conf_code)
                     continue
-                saved = scrape_reservation(page, row, prefix)
+                saved, meta = scrape_reservation(page, row, prefix)
                 if not saved:
                     if ensure_session(page, worker_id):
                         pr(prefix, f"Retrying {conf_code}...")
-                        saved = scrape_reservation(page, row, prefix)
+                        saved, meta = scrape_reservation(page, row, prefix)
                 if saved:
                     mark_done(conf_code)
                     done_set.add(conf_code)
@@ -842,6 +917,12 @@ def scrape_chunk(args):
                 else:
                     pr(prefix, "Nothing saved — not marking done, will retry next run.")
                     results["failed"].append(conf_code)
+                # Keep whatever metadata we resolved (Villa Name, Source,
+                # Payment Type, ...) even if the folio save itself failed —
+                # it's still useful for the enriched master report and a
+                # later retry will simply overwrite it with fresher data.
+                if meta:
+                    results["summary"][conf_code] = meta
         except Exception as e:
             pr(prefix, f"Fatal: {e}")
             screenshot(page, f"worker_{worker_id}_fatal")
@@ -908,6 +989,12 @@ def main():
     failed       = sum(len(r["failed"])  for r in all_results)
     skipped      = sum(len(r["skipped"]) for r in all_results)
     failed_codes = [c for r in all_results for c in r["failed"]]
+    # Collect per-reservation metadata gathered by every worker so far —
+    # this is merged into the enriched report at the very end, after any
+    # retries below have had a chance to overwrite it with fresher data.
+    conf_summaries = {}
+    for r in all_results:
+        conf_summaries.update(r.get("summary", {}))
     print("\n" + "=" * 60)
     print("Summary")
     print("=" * 60)
@@ -945,6 +1032,8 @@ def main():
         retry_success = sum(len(r["success"]) for r in retry_results)
         retry_failed  = sum(len(r["failed"])  for r in retry_results)
         still_failed  = [c for r in retry_results for c in r["failed"]]
+        for r in retry_results:
+            conf_summaries.update(r.get("summary", {}))
         print("\n" + "=" * 60)
         print("Retry Summary")
         print("=" * 60)
@@ -953,5 +1042,14 @@ def main():
         if still_failed:
             print(f"  Still failing: {still_failed}")
         print("=" * 60)
+    # ── Enriched master report ────────────────────────────────────────────────
+    # Merge Villa Name / Bedroom Count / Persons / Source / Payment Type back
+    # onto every row of folio_report.csv (in place), keyed by Conf. Code, so
+    # the whole portfolio can be filtered (e.g. Payment Type == "Free") from
+    # one file without walking the journal/ tree. Original rows you haven't
+    # re-scraped yet keep their existing columns; only the 5 enrichment
+    # columns get added/refreshed.
+    print("\nUpdating folio_report.csv with scraped metadata...")
+    write_enriched_report(all_reservations, conf_summaries, ENRICHED_REPORT_CSV)
 if __name__ == "__main__":
     main()

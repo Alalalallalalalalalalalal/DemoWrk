@@ -6,17 +6,80 @@ import { createPortal } from "react-dom";
 import { styles, COLORS, TOOLTIP_STYLE } from "./Dashboardstyles";
 
 /* ─── InfoTip ────────────────────────────────────────────────── */
+const INFO_TIP_WIDTH = 270; // keep in sync with maxWidth below
+const INFO_TIP_VIEWPORT_MARGIN = 8; // breathing room from the screen edge
+const INFO_TIP_FONT_SIZE = 11;
+const INFO_TIP_LINE_HEIGHT = 1.5;
+const INFO_TIP_PADDING_Y = 6; // top+bottom padding is 6px each, see style below
+// Roughly how many characters fit on one line at INFO_TIP_WIDTH and
+// INFO_TIP_FONT_SIZE. This is an approximation (real text wrapping
+// depends on individual character/word widths), but it scales properly
+// with text length — unlike a single flat constant, which was sized for
+// short one-line tooltips and badly underestimated the real height of
+// the much longer explanatory tooltips added later, causing the box to
+// open upward (assuming room it didn't have) and clip off the top of
+// the page/viewport. Recalibrated for the wider 270px box — a wider box
+// fits more characters per line, so fewer lines are needed overall.
+const INFO_TIP_CHARS_PER_LINE = 44;
+
+function estimateInfoTipHeight(text) {
+  if (!text) return 0;
+  const lineCount = Math.max(1, Math.ceil(text.length / INFO_TIP_CHARS_PER_LINE));
+  const lineHeightPx = INFO_TIP_FONT_SIZE * INFO_TIP_LINE_HEIGHT;
+  return lineCount * lineHeightPx + INFO_TIP_PADDING_Y * 2;
+}
+
 export function InfoTip({ text }) {
   const [visible, setVisible] = useState(false);
-  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [pos, setPos] = useState({ x: 0, y: 0, align: "center", direction: "up" });
   const iconRef = useRef(null);
 
   const show = useCallback(() => {
     if (!iconRef.current) return;
     const rect = iconRef.current.getBoundingClientRect();
+    const iconCenterX = rect.left + rect.width / 2 + window.scrollX;
+    const viewportWidth = window.innerWidth;
+
+    // Default alignment is CENTERED on the icon (confirmed 2026-06-18,
+    // after briefly trying left-leaning). The edge clamps below still
+    // apply as a safety net — a centered box on an icon near the left or
+    // right edge of the screen would otherwise run off that side, which
+    // is the original problem this whole positioning logic exists to fix.
+    const halfWidth = INFO_TIP_WIDTH / 2;
+    let align = "center";
+    let x = iconCenterX;
+
+    if (iconCenterX + halfWidth > viewportWidth - INFO_TIP_VIEWPORT_MARGIN) {
+      align = "right";
+      x = viewportWidth - INFO_TIP_VIEWPORT_MARGIN;
+    } else if (iconCenterX - halfWidth < INFO_TIP_VIEWPORT_MARGIN) {
+      align = "left";
+      x = INFO_TIP_VIEWPORT_MARGIN;
+    }
+
+    // The tooltip normally opens UPWARD (box sits above the icon, like
+    // a speech bubble pointing down at it). If the icon is near the top
+    // of the page/viewport — like the Hero KPI band, which sits right
+    // under the page header — or if the tooltip text is long enough that
+    // the box itself doesn't fit in the space above, there's no room for
+    // the box to render into, and it gets pushed off the top edge where
+    // it's either invisible or only partly visible (this is also what
+    // was causing text to look "cut off at the top" on longer tooltips —
+    // the box opened upward assuming it would fit, when it didn't). Flip
+    // to open DOWNWARD instead whenever there isn't enough room above.
+    const estimatedHeight = estimateInfoTipHeight(text);
+    const direction =
+      rect.top < estimatedHeight + INFO_TIP_VIEWPORT_MARGIN ? "down" : "up";
+
     setPos({
-      x: rect.left + rect.width / 2 + window.scrollX,
+      x,
       y: rect.top + window.scrollY,
+      bottom: rect.bottom + window.scrollY,
+      align,
+      direction,
+      // Keep the little pointer arrow lined up with the actual icon even
+      // when the box itself has been shifted off-center to stay on screen.
+      arrowX: iconCenterX,
     });
     setVisible(true);
   }, []);
@@ -24,6 +87,18 @@ export function InfoTip({ text }) {
   const hide = useCallback(() => setVisible(false), []);
 
   if (!text) return null;
+
+  // Translate the box horizontally based on which edge it's anchored to.
+  // "center" (the default) centers the box on the icon. "left"/"right"
+  // are edge-case clamps for icons near the screen edge, where centering
+  // would push part of the box off-screen — they anchor that edge of the
+  // box to `pos.x` instead.
+  const translateX =
+    pos.align === "right" ? "-100%" : pos.align === "left" ? "0%" : "-50%";
+  // Vertically: "up" keeps the original behavior (box bottom sits just
+  // above the icon). "down" places the box just below the icon instead,
+  // growing downward, with no vertical flip transform needed.
+  const translateY = pos.direction === "down" ? "0%" : "-100%";
 
   return (
     <>
@@ -47,9 +122,12 @@ export function InfoTip({ text }) {
           <div
             style={{
               position: "absolute",
-              top: pos.y - 8,
+              // "up" (default): box bottom sits 8px above the icon's top,
+              // same as before. "down" (flipped, when there's no room
+              // above): box top sits 8px below the icon's bottom instead.
+              top: pos.direction === "down" ? pos.bottom + 8 : pos.y - 8,
               left: pos.x,
-              transform: "translate(-50%, -100%)",
+              transform: `translate(${translateX}, ${translateY})`,
               background: "#3D2B1F",
               color: "#F5EEE6",
               fontSize: 11,
@@ -59,7 +137,7 @@ export function InfoTip({ text }) {
               borderRadius: 6,
               whiteSpace: "normal",
               width: "max-content",
-              maxWidth: 200,
+              maxWidth: INFO_TIP_WIDTH,
               textAlign: "center",
               zIndex: 99999,
               pointerEvents: "none",
@@ -69,14 +147,25 @@ export function InfoTip({ text }) {
             <span
               style={{
                 position: "absolute",
-                top: "100%",
-                left: "50%",
+                // When opening upward, the arrow sits at the box's
+                // bottom edge pointing down at the icon (original
+                // behavior). When opening downward, it sits at the box's
+                // top edge pointing up at the icon instead.
+                ...(pos.direction === "down"
+                  ? { bottom: "100%" }
+                  : { top: "100%" }),
+                left:
+                  pos.align === "center"
+                    ? "50%"
+                    : `${pos.arrowX - pos.x}px`,
                 transform: "translateX(-50%)",
                 width: 0,
                 height: 0,
                 borderLeft: "5px solid transparent",
                 borderRight: "5px solid transparent",
-                borderTop: "5px solid #3D2B1F",
+                ...(pos.direction === "down"
+                  ? { borderBottom: "5px solid #3D2B1F" }
+                  : { borderTop: "5px solid #3D2B1F" }),
               }}
             />
           </div>,
@@ -149,7 +238,14 @@ export function SectionLabel({ children }) {
 }
 
 /* ─── PieLegendCard ──────────────────────────────────────────── */
-export function PieLegendCard({ title, description, data, dataKey, nameKey, colorMap = {} }) {
+export function PieLegendCard({
+  title,
+  description,
+  data,
+  dataKey,
+  nameKey,
+  colorMap = {},
+}) {
   const getColor = (item, index) => {
     const rawValue = String(item?.[nameKey] ?? "").trim();
     const normalizedValue = rawValue.toLowerCase();
@@ -160,6 +256,7 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey, colo
       COLORS[index % COLORS.length]
     );
   };
+
   return (
     <div style={styles.card}>
       <div
@@ -167,16 +264,29 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey, colo
           ...styles.cardHeader,
           display: "flex",
           alignItems: "center",
+          justifyContent: "center",
           gap: 6,
         }}
       >
         <p style={{ ...styles.cardTitle, margin: 0 }}>{title}</p>
         <InfoTip text={description} />
       </div>
+
       <div
-        style={{ display: "flex", alignItems: "center", gap: 16, height: 260 }}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          width: "100%",
+        }}
       >
-        <div style={{ flex: "0 0 160px", height: "100%" }}>
+        {/* Pie chart */}
+        <div
+          style={{
+            width: "100%",
+            height: 190,
+          }}
+        >
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
@@ -196,26 +306,30 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey, colo
                   />
                 ))}
               </Pie>
+
               <Tooltip contentStyle={TOOLTIP_STYLE} />
             </PieChart>
           </ResponsiveContainer>
         </div>
+
+        {/* Legend underneath */}
         <div
           style={{
-            flex: 1,
-            overflowY: "auto",
-            maxHeight: 260,
-            paddingRight: 4,
+            width: "100%",
+            display: "grid",
+            gridTemplateColumns: "repeat(2, max-content)",
+            justifyContent: "center",
+            gap: "8px 16px",
+            paddingTop: 8,
           }}
         >
           {data.map((item, i) => (
             <div
-              key={i}
+              key={`${item[nameKey]}-${i}`}
               style={{
                 display: "flex",
                 alignItems: "center",
                 gap: 7,
-                marginBottom: 6,
               }}
             >
               <span
@@ -228,6 +342,7 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey, colo
                   display: "inline-block",
                 }}
               />
+
               <span
                 style={{
                   fontSize: 11,
@@ -238,9 +353,9 @@ export function PieLegendCard({ title, description, data, dataKey, nameKey, colo
               >
                 {item[nameKey]}
               </span>
+
               <span
                 style={{
-                  marginLeft: "auto",
                   fontSize: 11,
                   color: "#9C7B65",
                   fontWeight: 600,

@@ -7,13 +7,15 @@
 //   {activeTab === "finance" && <FinanceTab />}              ← add to render
 // ─────────────────────────────────────────────────────────────────
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { financeApi } from "../../api/financeApi";
 import FinanceOverview from "./FinanceOverview";
 import SourceRevenueTable from "./SourceRevenueTable";
 import { MemberGuestRevenueTable, VillaRevenueTable } from "./FinanceTables";
 import AmenityRevenueTable from "./AmenityRevenueTable";
 import RevenueBreakdownDrawer from "./RevenueBreakdownDrawer";
+import CategoryCompBreakdown from "./CategoryCompBreakdown";
+import { FinancePeriodFilter, periodToParams, DEFAULT_PERIOD } from "./FinanceShared";
 
 const C = {
   text:   "var(--dashboard-abyssal)",
@@ -87,16 +89,29 @@ function Skeleton({ height = 120 }) {
 
 // ══════════════════════════════════════════════════════════════════
 export default function FinanceTab() {
+  // ── period filter (year / month) — drives every fetch below ─────
+const [period, setPeriod] = useState(DEFAULT_PERIOD);
+
+  // Placeholder year range — there's no "available years" endpoint yet,
+  // so this just offers the current year back 6 years. Swap this out for
+  // a real source (e.g. whatever DemographicsDateFilter.jsx uses) if one
+  // already exists elsewhere in the app, for consistency.
+  const years = useMemo(() => {
+    const current = new Date().getFullYear();
+    return Array.from({ length: 7 }, (_, i) => current - i);
+  }, []);
+
   // ── data states ────────────────────────────────────────────────
   const [overview,       setOverview]       = useState(null);
   const [sourceBdown,    setSourceBdown]    = useState([]);
   const [memberGuest,    setMemberGuest]    = useState([]);
   const [villaRevenue,   setVillaRevenue]   = useState([]);
   const [amenityRevenue, setAmenityRevenue] = useState([]);
+  const [categoryBreakdown, setCategoryBreakdown] = useState([]);
 
   // ── loading / error per section ────────────────────────────────
   const [loadingMap, setLoadingMap] = useState({
-    overview: true, source: true, memberGuest: true, villa: true, amenity: true,
+    overview: true, category: true, source: true, memberGuest: true, villa: true, amenity: true,
   });
   const [errorMap, setErrorMap] = useState({});
 
@@ -113,38 +128,50 @@ export default function FinanceTab() {
   const setErr  = (key, msg) =>
     setErrorMap((prev) => ({ ...prev, [key]: msg }));
 
-  // ── fetch all sections in parallel ─────────────────────────────
+  // ── fetch all sections in parallel, re-run whenever period changes ──
   useEffect(() => {
+    const periodParams = periodToParams(period);
+
+    setLoadingMap({
+      overview: true, category: true, source: true, memberGuest: true, villa: true, amenity: true,
+    });
+    setErrorMap({});
+
     // Overview
-    financeApi.overview()
+    financeApi.overview(periodParams)
       .then(setOverview)
       .catch((e) => setErr("overview", e.message))
       .finally(() => setLoad("overview", false));
 
+    financeApi.categoryCompBreakdown(periodParams)
+      .then(setCategoryBreakdown)
+      .catch((e) => setErr("category", e.message))
+      .finally(() => setLoad("category", false));
+
     // Source breakdown
-    financeApi.sourceBreakdown()
+    financeApi.sourceBreakdown(periodParams)
       .then(setSourceBdown)
       .catch((e) => setErr("source", e.message))
       .finally(() => setLoad("source", false));
 
     // Member vs Guest
-    financeApi.memberVsGuest()
+    financeApi.memberVsGuest(periodParams)
       .then(setMemberGuest)
       .catch((e) => setErr("memberGuest", e.message))
       .finally(() => setLoad("memberGuest", false));
 
     // Villa revenue
-    financeApi.villaRevenue()
+    financeApi.villaRevenue(periodParams)
       .then(setVillaRevenue)
       .catch((e) => setErr("villa", e.message))
       .finally(() => setLoad("villa", false));
 
     // Amenity revenue
-    financeApi.amenityRevenue()
+    financeApi.amenityRevenue(periodParams)
       .then(setAmenityRevenue)
       .catch((e) => setErr("amenity", e.message))
       .finally(() => setLoad("amenity", false));
-  }, []);
+  }, [period]);
 
   // ── drawer helpers ─────────────────────────────────────────────
   const openDrawer = useCallback(({ drillType, drillValue, midItems = null }) => {
@@ -155,22 +182,42 @@ export default function FinanceTab() {
     setDrawer((d) => ({ ...d, open: false }));
   }, []);
 
-  // Build mid-items for "Total Revenue" card drill-down
-  // (shows villa / source / member-guest breakdown before going to folios)
+  // Build mid-items for "Total Revenue" card drill-down — shows the
+  // Villas / Amenities / Services split (matching the new overview
+  // cards) before going to underlying folio records. Pulled straight
+  // from the already-fetched `overview` state — no extra request.
   function buildTotalMidItems() {
+    if (!overview) return [];
     return [
-      ...villaRevenue.slice(0, 10).map((v) => ({
-        label:      v.villaName,
-        sub:        `${(v.totalBookings ?? 0).toLocaleString()} bookings`,
-        revenue:    v.revenue,
-        count:      v.totalBookings,
-        drillType:  "villa",
-        drillValue: v.villaName,
-      })),
+      {
+        label:      "Villas Revenue",
+        sub:        "Villa rental bookings",
+        revenue:    overview.villasRevenue,
+        drillType:  "category",
+        drillValue: "Villa",
+      },
+      {
+        label:      "Amenities Revenue",
+        sub:        "Spa, golf, dining & more",
+        revenue:    overview.amenitiesRevenue,
+        drillType:  "section",
+        drillValue: "Amenities",
+      },
+      {
+        label:      "Services Revenue",
+        sub:        "All other service charges",
+        revenue:    overview.servicesRevenue,
+        drillType:  "section",
+        drillValue: "Services",
+      },
     ];
   }
 
-  // Build villa mid-items from source breakdown
+  // Build villa mid-items from the Villa Revenue breakdown table data
+  // (kept for any UI that wants a per-villa breakdown before drilling
+  // into a single villa's folio records — currently unused by the
+  // overview cards, which drill straight to the flat "Villa" category
+  // list, but left in place in case a future row wants the richer view).
   function buildVillaMidItems() {
     return villaRevenue.map((v) => ({
       label:      v.villaName,
@@ -198,6 +245,11 @@ export default function FinanceTab() {
 
   return (
     <div className="dashboard-section">
+      {/* ── Period filter — applies to every section + the drawer ── */}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: 4 }}>
+        <FinancePeriodFilter value={period} onChange={setPeriod} years={years} />
+      </div>
+
       {/* ── 1. Overview ───────────────────────────────────────── */}
       <SectionLabel>Revenue Overview</SectionLabel>
 
@@ -207,6 +259,21 @@ export default function FinanceTab() {
         <InlineError message={errorMap.overview} />
       ) : (
         <FinanceOverview data={overview} onCardClick={handleOverviewCardClick} />
+      )}
+
+      {/* ── 1.5 Category Comp Breakdown ──────────────────────────────── */}
+      <SectionLabel>Collected .vs. Given Away</SectionLabel>
+      
+      {loadingMap.category ? (
+        <Skeleton height={360} />
+      ) : errorMap.category ? (
+        <InlineError message={errorMap.category} />
+      ) : (
+        <CategoryCompBreakdown
+          data={categoryBreakdown}
+          onRowClick={({ drillType, drillValue }) => 
+          openDrawer({ drillType, drillValue })
+        }/>
       )}
 
       {/* ── 2. Revenue by Source ──────────────────────────────── */}
@@ -278,6 +345,7 @@ export default function FinanceTab() {
         drillType={drawer.drillType}
         drillValue={drawer.drillValue}
         midItems={drawer.midItems}
+        period={period}
       />
 
       {/* Pulse animation for skeletons */}

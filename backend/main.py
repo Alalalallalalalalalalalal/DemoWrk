@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from postgres.analytics import router as analytics_router
 from postgres.finance_backend import router as finance_router
+from postgres.overview_analytics import router as overview_router #For overview analytics
 
 app = FastAPI()
 
@@ -28,4 +29,12 @@ app.include_router(
     finance_router,
     prefix="/finance",
     tags=["Finance"]
+)
+
+
+#For overview analytics
+app.include_router(                                                  
+    overview_router,                                              
+    prefix="/overview",                                               
+    tags=["Overview"]                                         
 )

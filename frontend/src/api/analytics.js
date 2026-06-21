@@ -38,11 +38,53 @@ export const analyticsApi = {
   dashboardSummary: () => fetchData("/analytics/dashboard-summary"),
 
   // Demographics detail endpoints
-  stateAccounts: (stateCode) =>
-    fetchData(`/analytics/state-accounts/${encodeURIComponent(stateCode)}`),
+  demographicsSummary: (params = {}) =>
+    fetchData(withQuery("/analytics/demographics-summary", params)),
 
-  accountCategoryDetails: (category) =>
-    fetchData(`/analytics/account-category/${encodeURIComponent(category)}`),
+  stateAccounts: (stateCode, params = {}) =>
+    fetchData(
+      withQuery(
+        `/analytics/state-accounts/${encodeURIComponent(stateCode)}`,
+        params,
+      ),
+    ),
+
+  accountCategoryDetails: (category, params = {}) =>
+    fetchData(
+      withQuery(
+        `/analytics/account-category/${encodeURIComponent(category)}`,
+        params,
+      ),
+    ),
+
+  newVsRepeatVisitorDetails: (year, visitorStatus) =>
+    fetchData(
+      withQuery(`/analytics/new-vs-repeat-visitors/details`, {
+        year,
+        visitor_status: visitorStatus,
+      }),
+    ),
+
+  demographicAccountDetails: ({ dimension, value, category, ...params }) => {
+    const query = new URLSearchParams({
+      dimension,
+      value,
+    });
+
+    if (category) {
+      query.set("category", category);
+    }
+
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") {
+        query.set(key, value);
+      }
+    });
+
+    return fetchData(
+      `/analytics/demographics/account-details?${query.toString()}`,
+    );
+  },
 
   // Season endpoints
   seasonSummary: () => fetchData("/analytics/season-summary"),
@@ -93,6 +135,9 @@ export const analyticsApi = {
   visitsRoomsDashboard: (params = {}) =>
     fetchData(withQuery("/analytics/visits-rooms-dashboard", params)),
 
+  // frontend/src/api/analytics.js
+  villaMonthly: (villa, params = {}) =>
+    fetchData(withQuery("/analytics/villa-monthly", { villa, ...params })),
   villaBookings: (villaName, params = {}) =>
     fetchData(
       withQuery("/analytics/villa-bookings", { villa: villaName, ...params }),
@@ -103,4 +148,24 @@ export const analyticsApi = {
 
   bookedPeople: (kind, params = {}) =>
     fetchData(withQuery("/analytics/booked-people", { kind, ...params })),
+
+  // Villa × business source
+  villaSourceBreakdown: (params = {}) =>
+    fetchData(withQuery("/analytics/villa-source-breakdown", params)),
+
+  villaSourceBookings: (villa, params = {}) =>
+    fetchData(
+      withQuery("/analytics/villa-source-bookings", { villa, ...params }),
+    ),
+
+  villaSources: (villa = null, params = {}) =>
+    fetchData(
+      withQuery("/analytics/villa-sources", {
+        ...(villa ? { villa } : {}),
+        ...params,
+      }),
+    ),
+
+  villaSourceBedroomBreakdown: (params = {}) =>
+    fetchData(withQuery("/analytics/villa-source-bedroom-breakdown", params)),
 };

@@ -617,7 +617,7 @@ function ContextCallout({ tab, filterLabel, summary }) {
       "Never Visited": `${summary["Never Visited"]?.count ?? 0} members who have not yet checked in. A direct invitation or complimentary introductory stay would be a natural first step.`,
     },
     amenities: {
-      null: "Amenity usage per member. Select a type above to filter, or click any row for full details.",
+      null: "Amenity usage per member. Select a type above to filter, or click any row for full details. Total Spend includes all amenities; Amenity Spend is specific to the member's top amenity spending.",
     },
   };
 
@@ -722,7 +722,7 @@ export default function SegmentationPanel() {
         activeTab === "spenders"
           ? r.net_spend
           : activeTab === "amenities"
-            ? r.total_spend
+            ? r.total_amenity_spend
             : 0;
       map[label].totalSpend += Number(spend) || 0;
     });

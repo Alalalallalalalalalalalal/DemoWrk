@@ -8,6 +8,11 @@
 // • Clicking a row expands member contact details (email, phone, city, country)
 // • Info tooltip on FolioTable explains what the table shows
 // • Records ordered highest amount first (done in backend)
+// • Accepts a `period` prop ({ year, month } from FinanceTab's period
+//   filter) and forwards it to financeApi.drilldown() on every fetch this
+//   drawer makes. Intentionally NOT a dependency of the open/reset effect —
+//   changing the period elsewhere while the drawer is open won't reset an
+//   in-progress drill-down trail. Close + reopen to pick up a new period.
 
 import { useEffect, useRef, useState, useMemo } from "react";
 import {
@@ -24,6 +29,7 @@ import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { financeApi } from "../../api/financeApi";
+import { periodToParams, DEFAULT_PERIOD } from "./FinanceShared";
 
 const C = {
   bg:      "var(--dashboard-card)",
@@ -556,6 +562,7 @@ export default function RevenueBreakdownDrawer({
   drillType,
   drillValue,
   midItems,
+  period = DEFAULT_PERIOD,
 }) {
   const [trail,           setTrail]           = useState([]);
   const [folioRows,       setFolioRows]       = useState([]);
@@ -602,6 +609,7 @@ export default function RevenueBreakdownDrawer({
   }, [drawerWidth]);
 
   // ── Reset when drawer opens with new context ─────────────────────
+  // Intentionally NOT keyed on `period` — see file header comment.
   useEffect(() => {
     if (!open) return;
     setTrail([{ label: drillValue ?? "Breakdown", drillType, drillValue }]);
@@ -619,7 +627,7 @@ export default function RevenueBreakdownDrawer({
     setLoading(true);
     setError(null);
     try {
-      const data = await financeApi.drilldown(type, value);
+      const data = await financeApi.drilldown(type, value, periodToParams(period));
       setFolioRows(data);
       setShowFolios(true);
     } catch (e) {
