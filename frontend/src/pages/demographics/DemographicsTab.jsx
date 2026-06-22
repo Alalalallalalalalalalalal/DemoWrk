@@ -1025,23 +1025,6 @@ export default function DemographicsTab({
                         onClick={(entry) =>
                             handleStatusClick(entry, "Guest")
                         }
-                        background={(props) => (
-                            <ClickableBarColumn
-                            {...props}
-                            category="Guest"
-                            onColumnClick={handleStatusClick}
-                            />
-                        )}
-                    />
-                    <Bar
-                        dataKey="guests"
-                        name="Guests"
-                        fill="var(--dashboard-truffle)"
-                        radius={[6, 6, 0, 0]}
-                        cursor="pointer"
-                        onClick={(entry) =>
-                            handleStatusClick(entry, "Guest")
-                        }
                     />
                     </BarChart>
                 </ResponsiveContainer>
