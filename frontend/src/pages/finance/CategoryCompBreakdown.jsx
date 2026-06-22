@@ -333,7 +333,7 @@ export default function CategoryCompBreakdown({ data, onRowClick }) {
       <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
         <div>
           <div className="dashboard-eyebrow">Spend Breakdown</div>
-          <h2 className="dashboard-card-title" style={{ marginBottom: 4 }}>Collected vs. forgone revenue</h2>
+          <h2 className="dashboard-card-title" style={{ marginBottom: 4 }}>Collected vs. Forgone Revenue</h2>
           <p style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif", margin: 0, maxWidth: 560 }}>
             Pick a section, then optionally isolate guests whose villa stay itself
             was comped to see whether they still spend on amenities or services.
