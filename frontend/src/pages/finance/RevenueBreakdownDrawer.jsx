@@ -1,13 +1,41 @@
 // frontend/src/pages/finance/RevenueBreakdownDrawer.jsx
 // Right-side slide-over drawer for drill-down folio records.
 //
-// Changes from original:
+// FILTER PROPAGATION
+// ───────────────────
+// The drawer now tracks one accumulating `filters` object for the
+// whole session instead of a single drillType/drillValue pair. Every
+// time the user drills deeper — clicking a mid-item, picking a row
+// from a "browse by…" breakdown, or following a breadcrumb — the new
+// dimension is MERGED into whatever was already active, never
+// replacing it. So "Free -> Villas" (click the Free payment-type
+// entry point, then choose to browse by villa) shows each villa's
+// FREE revenue, and clicking a specific villa from there narrows to
+// free + that villa, both filters preserved.
+//
+// Active filters are shown as removable chips in the header. Removing
+// one drops that dimension and re-fetches with the rest intact.
+//
+// A "Browse by…" pivot bar sits above the flat record table, offering
+// any of villa / source / category / customer that isn't already
+// pinned — this is what lets ANY entry point (a summary card, a
+// source row, a payment-type row, etc.) pivot into a per-villa (or
+// per-source, per-category, per-customer) view without losing the
+// filters that got the user there. This generalizes the same
+// mechanism the "Free -> Villas" example asks for to every drilldown.
+//
+// Other changes kept from the original implementation:
 // • No total revenue shown in header (avoids misleading negative sums)
 // • Drawer is resizable via drag handle on left edge
 // • FolioTable has year + month filters
 // • Clicking a row expands member contact details (email, phone, city, country)
 // • Info tooltip on FolioTable explains what the table shows
 // • Records ordered highest amount first (done in backend)
+// • Accepts a `period` prop ({ year, month } from FinanceTab's period
+//   filter) and forwards it to the financeApi calls this drawer makes.
+//   Intentionally NOT a dependency of the open/reset effect — changing
+//   the period elsewhere while the drawer is open won't reset an
+//   in-progress drill-down trail. Close + reopen to pick up a new period.
 
 import { useEffect, useRef, useState, useMemo } from "react";
 import {
@@ -24,6 +52,7 @@ import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { financeApi } from "../../api/financeApi";
+import { periodToParams, DEFAULT_PERIOD } from "./FinanceShared";
 
 const C = {
   bg:      "var(--dashboard-card)",
@@ -44,6 +73,45 @@ const money = (v) =>
 const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
 
 const MONTHS = ["All","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+
+// ── Filter-dimension metadata (shared by chips + pivot bar) ────────
+const FILTER_LABELS = {
+  source:   "Source",
+  villa:    "Villa",
+  customer: "Customer",
+  payment:  "Payment",
+  amenity:  "Amenity",
+  category: "Category",
+  section:  "Section",
+};
+
+const formatFilterValue = (key, value) => {
+  if (key === "payment") return value === "free" ? "Free" : "Paid";
+  return value;
+};
+
+// Dimensions offered in the "Browse by…" pivot bar. Payment/amenity/
+// section are entry-point filters (set by the card or row that opened
+// the drawer) rather than pivot targets, so they're left out here —
+// villa/source/category/customer are the ones worth re-slicing by.
+const PIVOT_DIMENSIONS = [
+  { key: "villa",    label: "Villa" },
+  { key: "source",   label: "Source" },
+  { key: "category", label: "Category" },
+  { key: "customer", label: "Customer" },
+];
+
+// Maps the legacy {drillType, drillValue} shape — still emitted by
+// SourceRevenueTable, AmenityRevenueTable, FinanceTables, etc. — onto
+// the structured filter dict the backend understands. Centralizing
+// this here means none of those child components need to change.
+function legacyDrillToPatch(drillType, drillValue) {
+  if (!drillType || drillType === "total") return {};
+  if (drillType === "paid") return { payment: "paid" };
+  if (drillType === "free" || drillType === "complimentary") return { payment: "free" };
+  return { [drillType]: drillValue };
+}
 
 
 // ---Exported component only below this line---
@@ -246,7 +314,7 @@ function InfoTip({ title, description, tips = [] }) {
 function Breadcrumbs({ trail, onNavigate }) {
   if (!trail.length) return null;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 14 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginBottom: 10 }}>
       {trail.map((crumb, i) => (
         <span key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
           {i > 0 && <ChevronRight size={12} color={C.muted} />}
@@ -265,6 +333,78 @@ function Breadcrumbs({ trail, onNavigate }) {
             {crumb.label}
           </button>
         </span>
+      ))}
+    </div>
+  );
+}
+
+
+// ── Active filter chips — the net set of filters applied right now,
+// independent of how many breadcrumb hops it took to build them ──
+function FilterChips({ filters, onRemove }) {
+  const entries = Object.entries(filters || {}).filter(([, v]) => v != null && v !== "");
+  if (entries.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+      {entries.map(([key, value]) => (
+        <span
+          key={key}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "4px 6px 4px 10px", borderRadius: 999,
+            background: C.panelAlt, border: `1px solid ${C.border}`,
+            fontSize: 11, color: C.text, fontFamily: "sans-serif",
+          }}
+        >
+          <span style={{
+            color: C.muted, fontWeight: 700, textTransform: "uppercase",
+            letterSpacing: "0.05em", fontSize: 9,
+          }}>
+            {FILTER_LABELS[key] ?? key}
+          </span>
+          {formatFilterValue(key, value)}
+          <button
+            onClick={() => onRemove(key)}
+            aria-label={`Remove ${FILTER_LABELS[key] ?? key} filter`}
+            style={{
+              background: "none", border: "none", cursor: "pointer",
+              color: C.muted, display: "flex", padding: 2, borderRadius: 999,
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = C.accent3)}
+            onMouseLeave={(e) => (e.currentTarget.style.color = C.muted)}
+          >
+            <X size={11} />
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+
+// ── "Browse by…" pivot bar — re-slice the current filtered set by a
+// dimension that isn't already pinned ───────────────────────────
+function PivotBar({ filters, onPivot }) {
+  const available = PIVOT_DIMENSIONS.filter((d) => filters?.[d.key] == null);
+  if (available.length === 0) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+      <span style={{ fontSize: 11, color: C.muted, fontFamily: "sans-serif" }}>Browse by</span>
+      {available.map((d) => (
+        <button
+          key={d.key}
+          onClick={() => onPivot(d.key)}
+          style={{
+            padding: "5px 12px", borderRadius: 999,
+            border: `1px solid ${C.accent2}`, background: "transparent",
+            color: C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer",
+            fontFamily: "sans-serif",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = C.panelAlt)}
+          onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+        >
+          {d.label}
+        </button>
       ))}
     </div>
   );
@@ -336,7 +476,7 @@ function FolioTable({ rows }) {
         </span>
         <InfoTip
           title="Folio Transaction Records"
-          description="Individual charge lines from the folios table matching the selected filter. Ordered highest amount first."
+          description="Individual charge lines from the folios table matching every active filter above. Ordered highest amount first."
           tips={[
             "Click any row to see member contact details",
             "Use the search bar to filter by description, folio name, member number, or villa",
@@ -502,7 +642,9 @@ function FolioTable({ rows }) {
 }
 
 
-// ── Mid-level breakdown list ─────────────────────────────────────
+// ── Mid-level breakdown list — used both for FinanceTab-supplied
+// static mid items (e.g. Total Revenue's Villas/Amenities/Services
+// split) and for dynamically-fetched "browse by…" breakdowns ──────
 function BreakdownList({ items, onDrill }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -555,14 +697,22 @@ export default function RevenueBreakdownDrawer({
   onClose,
   drillType,
   drillValue,
+  filters: initialFilters = null,  // optional — lets a caller seed >1 dimension atomically
   midItems,
+  period = DEFAULT_PERIOD,
 }) {
-  const [trail,           setTrail]           = useState([]);
-  const [folioRows,       setFolioRows]       = useState([]);
-  const [loading,         setLoading]         = useState(false);
-  const [error,           setError]           = useState(null);
-  const [showFolios,      setShowFolios]      = useState(false);
-  const [currentMidItems, setCurrentMidItems] = useState(midItems ?? []);
+  // `trail` holds one entry per navigation step. Each entry's `filters`
+  // is the FULL cumulative filter set active at that point (not just
+  // what was added at that step) — that's what makes breadcrumb
+  // navigation a simple "jump to this snapshot" instead of a replay.
+  //
+  // step.mode: "staticMid" | "breakdown" | "records"
+  const [trail, setTrail] = useState([]);
+  const [stepData, setStepData] = useState({ kind: null, rows: [], groupBy: null });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const currentFilters = trail.length ? trail[trail.length - 1].filters : {};
 
   // ── Resizable drawer ─────────────────────────────────────────────
   const MIN_WIDTH  = 460;
@@ -601,27 +751,13 @@ export default function RevenueBreakdownDrawer({
     };
   }, [drawerWidth]);
 
-  // ── Reset when drawer opens with new context ─────────────────────
-  useEffect(() => {
-    if (!open) return;
-    setTrail([{ label: drillValue ?? "Breakdown", drillType, drillValue }]);
-    setFolioRows([]);
-    setError(null);
-    setShowFolios(false);
-    setCurrentMidItems(midItems ?? []);
-
-    if (!midItems || midItems.length === 0) {
-      loadFolios(drillType, drillValue);
-    }
-  }, [open, drillType, drillValue]);
-
-  async function loadFolios(type, value) {
+  // ── Data loaders ───────────────────────────────────────────────
+  async function loadRecords(filters) {
     setLoading(true);
     setError(null);
     try {
-      const data = await financeApi.drilldown(type, value);
-      setFolioRows(data);
-      setShowFolios(true);
+      const data = await financeApi.drilldown({ filters, ...periodToParams(period) });
+      setStepData({ kind: "records", rows: data, groupBy: null });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -629,27 +765,114 @@ export default function RevenueBreakdownDrawer({
     }
   }
 
-  function drillIntoItem(item) {
-    setTrail((prev) => [
-      ...prev,
-      { label: item.label, drillType: item.drillType, drillValue: item.drillValue },
-    ]);
-    loadFolios(item.drillType, item.drillValue);
-  }
-
-  function navigateTrail(idx) {
-    const crumb    = trail[idx];
-    const newTrail = trail.slice(0, idx + 1);
-    setTrail(newTrail);
-    if (idx === 0 && currentMidItems.length > 0) {
-      setShowFolios(false);
-      setFolioRows([]);
-    } else {
-      loadFolios(crumb.drillType, crumb.drillValue);
+  async function loadBreakdown(groupBy, filters) {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await financeApi.drilldownBreakdown({
+        groupBy,
+        filters,
+        ...periodToParams(period),
+      });
+      setStepData({
+        kind: "breakdown",
+        groupBy,
+        rows: data.map((r) => ({
+          label: r.label,
+          revenue: r.revenue,
+          count: r.transactions,
+        })),
+      });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
     }
   }
 
+  // ── Reset when drawer opens with new context ─────────────────────
+  // Intentionally NOT keyed on `period` — see file header comment.
+  const initialFiltersKey = initialFilters ? JSON.stringify(initialFilters) : "";
+  useEffect(() => {
+    if (!open) return;
+
+    const rootFilters = { ...legacyDrillToPatch(drillType, drillValue), ...(initialFilters || {}) };
+    const rootLabel = drillValue ?? "Breakdown";
+
+    setError(null);
+
+    if (midItems && midItems.length > 0) {
+      const rootStep = { label: rootLabel, filters: rootFilters, mode: "staticMid", items: midItems };
+      setTrail([rootStep]);
+      setStepData({ kind: "staticMid", rows: midItems, groupBy: null });
+      setLoading(false);
+    } else {
+      const rootStep = { label: rootLabel, filters: rootFilters, mode: "records" };
+      setTrail([rootStep]);
+      loadRecords(rootFilters);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, drillType, drillValue, initialFiltersKey]);
+
+  // ── Drill from a static mid item (e.g. Total Revenue's 3 cards) ──
+  function drillIntoStaticItem(item) {
+    const patch = legacyDrillToPatch(item.drillType, item.drillValue);
+    const newFilters = { ...currentFilters, ...patch };
+    const newStep = { label: item.label, filters: newFilters, mode: "records" };
+    setTrail((prev) => [...prev, newStep]);
+    loadRecords(newFilters);
+  }
+
+  // ── Drill from a dynamically-fetched "browse by…" breakdown row ──
+  function drillIntoBreakdownItem(item) {
+    const groupBy = stepData.groupBy;
+    const newFilters = { ...currentFilters, [groupBy]: item.label };
+    const newStep = { label: item.label, filters: newFilters, mode: "records" };
+    setTrail((prev) => [...prev, newStep]);
+    loadRecords(newFilters);
+  }
+
+  // ── Pivot the current (filtered) record set into a breakdown by a
+  // new dimension — this is the "Free -> Villas" mechanism: filters
+  // stay exactly as they are, we just re-group by villa ──────────
+  function pivotBreakdown(groupBy) {
+    const dim = PIVOT_DIMENSIONS.find((d) => d.key === groupBy);
+    const newStep = {
+      label: `By ${dim?.label ?? groupBy}`,
+      filters: currentFilters,
+      mode: "breakdown",
+      groupBy,
+    };
+    setTrail((prev) => [...prev, newStep]);
+    loadBreakdown(groupBy, currentFilters);
+  }
+
+  function navigateTrail(idx) {
+    const step = trail[idx];
+    setTrail(trail.slice(0, idx + 1));
+    if (step.mode === "staticMid") {
+      setStepData({ kind: "staticMid", rows: step.items, groupBy: null });
+    } else if (step.mode === "breakdown") {
+      loadBreakdown(step.groupBy, step.filters);
+    } else {
+      loadRecords(step.filters);
+    }
+  }
+
+  // ── Remove a single active filter dimension, keeping everything
+  // else, and drop back to a flat record view for the reduced set ──
+  function removeFilter(key) {
+    const { [key]: _removed, ...rest } = currentFilters;
+    const rootLabel = trail[0]?.label ?? "Breakdown";
+    const newStep = { label: rootLabel, filters: rest, mode: "records" };
+    setTrail([newStep]);
+    loadRecords(rest);
+  }
+
   if (!open) return null;
+
+  const showFolios = stepData.kind === "records";
+  const exportRowsData = stepData.rows;
 
   return (
     <>
@@ -715,13 +938,13 @@ export default function RevenueBreakdownDrawer({
               {/* Record count — no total sum to avoid confusing negatives */}
               {showFolios && (
                 <span style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}>
-                  {folioRows.length} records
+                  {exportRowsData.length} records
                 </span>
               )}
               <ExportMenu
-                rows={showFolios ? folioRows : currentMidItems}
+                rows={exportRowsData}
                 filenameBase={`revenue_breakdown_${safeFilePart(trail[trail.length - 1]?.label ?? drillValue ?? "all")}`}
-                disabled={!(showFolios ? folioRows.length : currentMidItems.length)}
+                disabled={!exportRowsData.length}
               />
               <button
                 onClick={onClose}
@@ -735,6 +958,11 @@ export default function RevenueBreakdownDrawer({
                 <X size={16} />
               </button>
             </div>
+          </div>
+
+          {/* Active filters — net set applied right now */}
+          <div style={{ marginTop: 12 }}>
+            <FilterChips filters={currentFilters} onRemove={removeFilter} />
           </div>
 
           {/* Resize hint */}
@@ -759,17 +987,31 @@ export default function RevenueBreakdownDrawer({
             </div>
           )}
 
-          {!loading && !error && !showFolios && currentMidItems.length > 0 && (
+          {!loading && !error && stepData.kind === "staticMid" && (
             <>
               <p style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif", marginBottom: 14 }}>
                 Select a category below to see underlying folio records.
               </p>
-              <BreakdownList items={currentMidItems} onDrill={drillIntoItem} />
+              <BreakdownList items={stepData.rows} onDrill={drillIntoStaticItem} />
+            </>
+          )}
+
+          {!loading && !error && stepData.kind === "breakdown" && (
+            <>
+              <p style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif", marginBottom: 14 }}>
+                {stepData.rows.length === 0
+                  ? "No matching records for the active filters."
+                  : "Select a row to see its underlying folio records."}
+              </p>
+              <BreakdownList items={stepData.rows} onDrill={drillIntoBreakdownItem} />
             </>
           )}
 
           {!loading && !error && showFolios && (
-            <FolioTable rows={folioRows} />
+            <>
+              <PivotBar filters={currentFilters} onPivot={pivotBreakdown} />
+              <FolioTable rows={stepData.rows} />
+            </>
           )}
         </div>
       </aside>
