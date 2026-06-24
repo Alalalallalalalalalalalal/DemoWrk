@@ -200,21 +200,21 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
     return [
       {
         label:      "Villas Revenue",
-        sub:        "Villa rental bookings",
+        sub:        "All folio lines classified as villa stays — click to drill into individual charges",
         revenue:    overview.villasRevenue,
         drillType:  "category",
         drillValue: "Villa",
       },
       {
         label:      "Amenities Revenue",
-        sub:        "Spa, golf, dining & more",
+        sub:        "Spa, golf, F&B, tennis, boutique, and other amenity charges — click to see folio lines",
         revenue:    overview.amenitiesRevenue,
         drillType:  "section",
         drillValue: "Amenities",
       },
       {
         label:      "Services Revenue",
-        sub:        "All other service charges",
+        sub:        "Commissary, adjustments, and other service lines — click to inspect underlying records",
         revenue:    overview.servicesRevenue,
         drillType:  "section",
         drillValue: "Services",

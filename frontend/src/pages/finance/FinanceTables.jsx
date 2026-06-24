@@ -65,8 +65,10 @@ export function MemberGuestRevenueTable({ data, onRowClick }) {
       <div className="dashboard-eyebrow">Customer Type</div>
       <h2 className="dashboard-card-title">Member vs Guest revenue</h2>
       <p style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif", marginTop: -8, marginBottom: 14 }}>
-        Member type <code>NULL</code> in folios is treated as Member per business rule.
-        Guest type is explicitly set to <code>Guest</code>.
+        Folios with no <code>member_type</code> value are classified as <strong>Member</strong> — this covers
+        direct member charges where the type was not explicitly set at posting time. <strong>Guest</strong> records
+        carry an explicit designation and typically represent accompanied non-member visitors or single-stay bookings.
+        Click either row to inspect the underlying folio charges.
       </p>
 
       <div style={{ overflowX: "auto", borderRadius: 10, border: `1px solid ${C.border}` }}>

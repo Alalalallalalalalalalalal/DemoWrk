@@ -476,11 +476,11 @@ function FolioTable({ rows }) {
         </span>
         <InfoTip
           title="Folio Transaction Records"
-          description="Individual charge lines from the folios table matching every active filter above. Ordered highest amount first."
+          description="Raw charge lines posted to member and guest folios, filtered by every active dimension shown above. Each row is one line item — a single villa night, a spa treatment, a restaurant charge, or a service fee. Sorted largest amount first."
           tips={[
-            "Click any row to see member contact details",
-            "Use the search bar to filter by description, folio name, member number, or villa",
-            "Filter by year and month using the dropdowns above the table",
+            "Click a row to reveal the member's email, phone, and home location on file",
+            "Search by charge description, folio number, member number, confirmation code, or villa name to find specific transactions",
+            "Year and month filters narrow to a specific billing period while preserving all other active filters above",
           ]}
         />
       </div>

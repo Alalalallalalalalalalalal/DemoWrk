@@ -57,8 +57,10 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
       <div className="dashboard-eyebrow">Amenities</div>
       <h2 className="dashboard-card-title">Amenity revenue &amp; season breakdown</h2>
       <p style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif", marginBottom: 14, marginTop: -8 }}>
-        Click a row to drill into folio records.
-        Use the <strong>▼</strong> button to expand season sub-rows without opening the drawer.
+        Each row is one amenity category — spa, golf, F&amp;B, tennis, boutique, and others. Revenue is the
+        total of all charges posted under that category in the selected period. Click a row to inspect the
+        individual folio lines behind the figure. Use <strong>▼</strong> to compare performance across high,
+        shoulder, and low season without leaving this view.
       </p>
 
       <div style={{ overflowX: "auto", borderRadius: 10, border: `1px solid ${C.border}` }}>
