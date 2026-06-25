@@ -82,6 +82,17 @@ SEASON_JOIN_SQL = """
       )
 """
 
+PAYMENT_IS_FREE_SQL = """
+    CASE
+        WHEN LOWER(COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown')) ILIKE '%comp%'
+          OR LOWER(COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown')) ILIKE '%free%'
+          OR LOWER(COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown')) ILIKE '%complimentary%'
+          OR LOWER(COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown')) ILIKE '%gratis%'
+          OR LOWER(COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown')) ILIKE '%no charge%'
+        THEN TRUE
+        ELSE FALSE
+    END
+"""
 
 def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
     active_season_count = db.execute(
@@ -144,6 +155,8 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
 
                 f.description,
                 COALESCE(f.amount, 0) AS amount,
+                COALESCE(NULLIF(TRIM(f.payment_type), ''), 'Unknown') AS payment_type,
+                {PAYMENT_IS_FREE_SQL} AS is_free,
                 COALESCE(f.check_in_date, f.transaction_date)::DATE AS ref_date,
                 f.check_in_date,
                 f.check_out_date,
@@ -187,6 +200,8 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                 ar.dob,
                 ar.description,
                 ar.amount,
+                ar.payment_type,
+                ar.is_free,
                 ar.ref_date,
                 ar.check_in_date,
                 ar.check_out_date,
@@ -204,6 +219,8 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
         SELECT year,
                amenity,
                season,
+               ROUND(SUM(CASE WHEN NOT is_free THEN amount ELSE 0 END)::NUMERIC, 2) AS revenue,
+               ROUND(SUM(CASE WHEN is_free THEN amount ELSE 0 END)::NUMERIC, 2) AS free_value,
                ROUND(SUM(amount)::NUMERIC, 2) AS total_spend,
                COUNT(*)::INT AS transaction_count,
                ROUND((SUM(amount) / NULLIF(COUNT(*), 0))::NUMERIC, 2) AS avg_spend_per_visit,
@@ -220,8 +237,11 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                    member_id,
                    MAX(member_full_name) AS member_full_name,
                    amenity,
+                   BOOL_OR(is_free) AS has_comp,
                    COUNT(*) AS usage_count,
-                   SUM(amount) AS amenity_spend
+                   SUM(amount) AS amenity_spend,
+                   SUM(CASE WHEN NOT is_free THEN amount ELSE 0 END) AS amenity_revenue,
+                   SUM(CASE WHEN is_free THEN amount ELSE 0 END) AS amenity_free_value
             FROM season_amenity_rows
             GROUP BY year, member_id, amenity
         ),
@@ -231,15 +251,22 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                        PARTITION BY year, member_id
                        ORDER BY amenity_spend DESC NULLS LAST
                    ) AS rn,
-                   SUM(amenity_spend) OVER (PARTITION BY year, member_id) AS total_amenity_spend
+                   SUM(amenity_spend) OVER (PARTITION BY year, member_id) AS total_amenity_spend,
+                   SUM(amenity_revenue) OVER (PARTITION BY year, member_id) AS total_amenity_revenue,
+                   SUM(amenity_free_value) OVER (PARTITION BY year, member_id) AS total_amenity_free_value
             FROM per_member_amenity
         )
         SELECT year,
                member_id,
                member_full_name,
                amenity AS top_amenity,
+               has_comp,
                ROUND(amenity_spend::NUMERIC, 2) AS top_amenity_spend,
-               ROUND(total_amenity_spend::NUMERIC, 2) AS total_amenity_spend
+               ROUND(amenity_revenue::NUMERIC, 2) AS top_amenity_revenue,
+               ROUND(amenity_free_value::NUMERIC, 2) AS top_amenity_free_value,
+               ROUND(total_amenity_spend::NUMERIC, 2) AS total_amenity_spend,
+               ROUND(total_amenity_revenue::NUMERIC, 2) AS total_amenity_revenue,
+               ROUND(total_amenity_free_value::NUMERIC, 2) AS total_amenity_free_value
         FROM ranked
         WHERE rn = 1
         ORDER BY year DESC, total_amenity_spend DESC NULLS LAST
@@ -260,7 +287,11 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                TO_CHAR(dob, 'Mon DD, YYYY') AS dob,
                season,
                amenity,
+               payment_type,
+               is_free,
                COUNT(*)::INT AS usage_count,
+               ROUND(SUM(CASE WHEN NOT is_free THEN amount ELSE 0 END)::NUMERIC, 2) AS revenue,
+               ROUND(SUM(CASE WHEN is_free THEN amount ELSE 0 END)::NUMERIC, 2) AS free_value,
                ROUND(SUM(amount)::NUMERIC, 2) AS total_spend,
                TO_CHAR(check_in_date, 'Mon DD, YYYY') AS check_in_fmt,
                TO_CHAR(check_out_date, 'Mon DD, YYYY') AS check_out_fmt
@@ -278,7 +309,9 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                  season,
                  check_in_date,
                  check_out_date,
-                 amenity
+                 amenity,
+                 payment_type,
+                 is_free
         ORDER BY check_in_date DESC NULLS LAST
         LIMIT 2000
     """)
@@ -390,48 +423,139 @@ def ml_amenity_season_insights(
     def rows(sql: str):
         return [dict(row) for row in db.execute(text(sql)).mappings().all()]
 
-    spend_raw = rows("""
-        SELECT amenity,
-               season,
-               total_spend,
-               transaction_count,
-               avg_spend_per_visit,
-               member_count
-        FROM amenity_season_spend
-        ORDER BY season, total_spend DESC
-    """)
+    def table_columns(table_name: str):
+        return {
+            row["column_name"]
+            for row in db.execute(
+                text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = :table_name
+                """),
+                {"table_name": table_name},
+            ).mappings().all()
+        }
 
-    profile_raw = rows("""
-        SELECT member_id,
-               member_full_name,
-               top_amenity,
-               top_amenity_spend,
-               total_amenity_spend
-        FROM member_amenity_profile
-        ORDER BY total_amenity_spend DESC NULLS LAST
-        LIMIT 1000
-    """)
+    amenity_spend_cols = table_columns("amenity_season_spend")
+    if {"revenue", "free_value"}.issubset(amenity_spend_cols):
+        spend_raw = rows("""
+            SELECT amenity,
+                   season,
+                   revenue,
+                   free_value,
+                   total_spend,
+                   transaction_count,
+                   avg_spend_per_visit,
+                   member_count
+            FROM amenity_season_spend
+            ORDER BY season, total_spend DESC
+        """)
+    else:
+        spend_raw = rows("""
+            SELECT amenity,
+                   season,
+                   total_spend AS revenue,
+                   0::NUMERIC AS free_value,
+                   total_spend,
+                   transaction_count,
+                   avg_spend_per_visit,
+                   member_count
+            FROM amenity_season_spend
+            ORDER BY season, total_spend DESC
+        """)
 
-    visits_raw = rows("""
-        SELECT member_id,
-               member_full_name,
-               email,
-               telephone,
-               address,
-               country,
-               state,
-               title,
-               dob,
-               season,
-               amenity,
-               usage_count,
-               total_spend,
-               check_in_fmt,
-               check_out_fmt
-        FROM member_amenity_season_visits
-        ORDER BY check_in_fmt DESC NULLS LAST
-        LIMIT 2000
-    """)
+    member_profile_cols = table_columns("member_amenity_profile")
+    if {
+        "has_comp",
+        "top_amenity_free_value",
+        "top_amenity_revenue",
+        "top_amenity_free_value",
+        "total_amenity_revenue",
+        "total_amenity_free_value",
+    }.issubset(member_profile_cols):
+        profile_raw = rows("""
+            SELECT member_id,
+                   member_full_name,
+                   top_amenity,
+                   has_comp,
+                   top_amenity_spend,
+                   top_amenity_revenue,
+                   top_amenity_free_value,
+                   total_amenity_spend,
+                   total_amenity_revenue,
+                   total_amenity_free_value
+            FROM member_amenity_profile
+            ORDER BY total_amenity_spend DESC NULLS LAST
+            LIMIT 1000
+        """)
+    else:
+        profile_raw = rows("""
+            SELECT member_id,
+                   member_full_name,
+                   top_amenity,
+                   false AS has_comp,
+                   top_amenity_spend,
+                   top_amenity_spend AS top_amenity_revenue,
+                   0::NUMERIC AS top_amenity_free_value,
+                   total_amenity_spend,
+                   total_amenity_spend AS total_amenity_revenue,
+                   0::NUMERIC AS total_amenity_free_value
+            FROM member_amenity_profile
+            ORDER BY total_amenity_spend DESC NULLS LAST
+            LIMIT 1000
+        """)
+
+    member_visits_cols = table_columns("member_amenity_season_visits")
+    if {"payment_type", "is_free", "revenue", "free_value"}.issubset(member_visits_cols):
+        visits_raw = rows("""
+            SELECT member_id,
+                   member_full_name,
+                   email,
+                   telephone,
+                   address,
+                   country,
+                   state,
+                   title,
+                   dob,
+                   season,
+                   amenity,
+                   payment_type,
+                   is_free,
+                   usage_count,
+                   revenue,
+                   free_value,
+                   total_spend,
+                   check_in_fmt,
+                   check_out_fmt
+            FROM member_amenity_season_visits
+            ORDER BY check_in_fmt DESC NULLS LAST
+            LIMIT 2000
+        """)
+    else:
+        visits_raw = rows("""
+            SELECT member_id,
+                   member_full_name,
+                   email,
+                   telephone,
+                   address,
+                   country,
+                   state,
+                   title,
+                   dob,
+                   season,
+                   amenity,
+                   'Unknown' AS payment_type,
+                   false AS is_free,
+                   usage_count,
+                   total_spend AS revenue,
+                   0::NUMERIC AS free_value,
+                   total_spend,
+                   check_in_fmt,
+                   check_out_fmt
+            FROM member_amenity_season_visits
+            ORDER BY check_in_fmt DESC NULLS LAST
+            LIMIT 2000
+        """)
 
     villa_raw = rows("""
         SELECT season,

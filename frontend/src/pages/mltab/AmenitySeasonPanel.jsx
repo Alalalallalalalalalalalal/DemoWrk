@@ -61,6 +61,9 @@ const C = {
   panelShadow: "var(--dashboard-shadow-panel)",
 };
 
+const COLOR_PAID = "var(--dashboard-deep-blue)";
+const COLOR_FREE = "var(--dashboard-flame)";
+
 const tint = (color, amount = 14) =>
   `color-mix(in srgb, ${color} ${amount}%, transparent)`;
 
@@ -77,6 +80,20 @@ const AMENITY_COLORS = {
 const amenityColor = (name) => AMENITY_COLORS[name] ?? C.textMuted;
 
 const CHART_COLORS = Object.values(AMENITY_COLORS);
+const MONTH_NAMES = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 
 /* ── Shared micro-styles ────────────────────────────────────────── */
 const pill = (color) => ({
@@ -164,6 +181,212 @@ const TOOLTIP_STYLE = {
   fontFamily: "sans-serif",
 };
 
+function getRowDateValue(row) {
+  return (
+    row?.check_in_date ??
+    row?.transaction_date ??
+    row?.ref_date ??
+    row?.date ??
+    row?.month ??
+    row?.check_in_fmt ??
+    null
+  );
+}
+
+function normalizeDateOnly(value) {
+  if (!value) return "";
+  const raw = String(value);
+  const direct = raw.match(/^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?/);
+  if (direct) {
+    const y = direct[1];
+    const m = String(direct[2]).padStart(2, "0");
+    const d = String(direct[3] ?? "01").padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, "0");
+  const d = String(parsed.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function getRowDateParts(row) {
+  const iso = normalizeDateOnly(getRowDateValue(row));
+  if (!iso) return {};
+  const [year, month, day] = iso.split("-").map(Number);
+  return { iso, year, month, day };
+}
+
+function createDateFilter() {
+  return {
+    mode: "ym", // ym | day | range
+    year: "All",
+    month: "All",
+    date: "",
+    startDate: "",
+    endDate: "",
+  };
+}
+
+function rowMatchesDateFilter(row, filter) {
+  if (!filter) return true;
+  const parts = getRowDateParts(row);
+
+  if (filter.mode === "day") {
+    return !filter.date || parts.iso === filter.date;
+  }
+
+  if (filter.mode === "range") {
+    if (!filter.startDate || !filter.endDate) return true;
+    return (
+      Boolean(parts.iso) &&
+      parts.iso >= filter.startDate &&
+      parts.iso <= filter.endDate
+    );
+  }
+
+  if (filter.year !== "All" && parts.year !== Number(filter.year)) return false;
+  if (filter.month !== "All" && parts.month !== Number(filter.month))
+    return false;
+  return true;
+}
+
+function getDateFilterYearsFromRows(rows = []) {
+  const found = Array.from(
+    new Set(rows.map((row) => getRowDateParts(row).year).filter(Boolean)),
+  ).sort((a, b) => b - a);
+  const currentYear = new Date().getFullYear();
+  return [
+    "All",
+    ...(found.length
+      ? found
+      : Array.from(
+          { length: currentYear - 2018 + 1 },
+          (_, i) => currentYear - i,
+        )),
+  ];
+}
+
+function dateFilterLabel(filter) {
+  if (!filter) return "All dates";
+  if (filter.mode === "day") return filter.date || "All dates";
+  if (filter.mode === "range") {
+    return filter.startDate && filter.endDate
+      ? `${filter.startDate} to ${filter.endDate}`
+      : "All dates";
+  }
+  if (filter.year === "All" && filter.month === "All") return "All dates";
+  const monthLabel =
+    filter.month === "All"
+      ? "All months"
+      : MONTH_NAMES[Number(filter.month) - 1];
+  return `${filter.year === "All" ? "All years" : filter.year} / ${monthLabel}`;
+}
+
+function DateFilterControl({ value, onChange, years, label = "Date" }) {
+  const update = (patch) => onChange({ ...value, ...patch });
+  const changeMode = (mode) => {
+    onChange({
+      mode,
+      year: value.year ?? "All",
+      month: value.month ?? "All",
+      date: value.date ?? "",
+      startDate: value.startDate ?? "",
+      endDate: value.endDate ?? "",
+    });
+  };
+  const fieldStyle = { ...select, minWidth: 125 };
+  const dateInputStyle = { ...select, minWidth: 145, cursor: "text" };
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+      }}
+    >
+      <span
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.07em",
+          color: C.textMuted,
+          fontFamily: "sans-serif",
+        }}
+      >
+        {label}
+      </span>
+      <select
+        style={fieldStyle}
+        value={value.mode}
+        onChange={(e) => changeMode(e.target.value)}
+      >
+        <option value="ym">Year / Month</option>
+        <option value="day">Single Day</option>
+        <option value="range">Date Range</option>
+      </select>
+
+      {value.mode === "ym" && (
+        <>
+          <select
+            style={fieldStyle}
+            value={value.year}
+            onChange={(e) => update({ year: e.target.value })}
+          >
+            {years.map((year) => (
+              <option key={year} value={year}>
+                {year === "All" ? "All Years" : year}
+              </option>
+            ))}
+          </select>
+          <select
+            style={fieldStyle}
+            value={value.month}
+            onChange={(e) => update({ month: e.target.value })}
+          >
+            <option value="All">All Months</option>
+            {MONTH_NAMES.map((month, index) => (
+              <option key={month} value={index + 1}>
+                {month}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+
+      {value.mode === "day" && (
+        <input
+          type="date"
+          value={value.date}
+          onChange={(e) => update({ date: e.target.value })}
+          style={dateInputStyle}
+        />
+      )}
+
+      {value.mode === "range" && (
+        <>
+          <input
+            type="date"
+            value={value.startDate}
+            onChange={(e) => update({ startDate: e.target.value })}
+            style={dateInputStyle}
+          />
+          <input
+            type="date"
+            value={value.endDate}
+            onChange={(e) => update({ endDate: e.target.value })}
+            style={dateInputStyle}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
 function getRowYear(row) {
   const directYear =
     row?.year ?? row?.Year ?? row?.booking_year ?? row?.check_in_year;
@@ -184,7 +407,7 @@ function getRowYear(row) {
 
 function rowMatchesYear(row, year) {
   if (year === "All") return true;
-  return String(getRowYear(row)) === String(year);
+  return String(getRowDateParts(row).year ?? getRowYear(row)) === String(year);
 }
 
 function getYearOptionsFromRows(rows = []) {
@@ -471,11 +694,15 @@ function AmenitySeasonHeatmap({ data, onCellClick }) {
       if (!m[key]) {
         m[key] = {
           ...d,
+          revenue: 0,
+          free_value: 0,
           total_spend: 0,
           transaction_count: 0,
         };
       }
 
+      m[key].revenue += Number(d.revenue ?? d.total_spend ?? 0);
+      m[key].free_value += Number(d.free_value ?? 0);
       m[key].total_spend += Number(d.total_spend ?? 0);
       m[key].transaction_count += Number(d.transaction_count ?? 0);
     });
@@ -547,6 +774,11 @@ function AmenitySeasonHeatmap({ data, onCellClick }) {
                 const bg = cell
                   ? `rgba(var(--dashboard-deep-blue-rgb), ${0.08 + intensity * 0.55})`
                   : "transparent";
+                const paid = Number(cell?.revenue ?? 0);
+                const free = Number(cell?.free_value ?? 0);
+                const splitTotal = paid + free;
+                const paidWidth = splitTotal ? (paid / splitTotal) * 100 : 0;
+                const freeWidth = splitTotal ? (free / splitTotal) * 100 : 0;
                 return (
                   <td
                     key={season}
@@ -572,6 +804,31 @@ function AmenitySeasonHeatmap({ data, onCellClick }) {
                       <div>
                         <div style={{ fontWeight: 700, color: C.textPrimary }}>
                           ${Number(cell.total_spend / 1000).toFixed(1)}k
+                        </div>
+                        <div
+                          style={{
+                            height: 5,
+                            borderRadius: 999,
+                            overflow: "hidden",
+                            display: "flex",
+                            background: C.border,
+                            margin: "4px auto",
+                            maxWidth: 62,
+                          }}
+                          title={`Paid: $${paid.toLocaleString()} | Comp: $${free.toLocaleString()}`}
+                        >
+                          <div
+                            style={{
+                              width: `${paidWidth}%`,
+                              background: COLOR_PAID,
+                            }}
+                          />
+                          <div
+                            style={{
+                              width: `${freeWidth}%`,
+                              background: COLOR_FREE,
+                            }}
+                          />
                         </div>
                         <div style={{ fontSize: 10, color: C.textMuted }}>
                           {cell.transaction_count} txn
@@ -961,9 +1218,18 @@ function VisitSidePanel({ visit, onClose }) {
     { label: "DOB", value: visit.dob },
     { label: "Season", value: visit.season },
     { label: "Amenity", value: visit.amenity },
+    { label: "Payment Type", value: visit.payment_type },
     { label: "Check-In", value: visit.check_in_fmt },
     { label: "Check-Out", value: visit.check_out_fmt },
     { label: "Usage Count", value: visit.usage_count },
+    {
+      label: "Paid Revenue",
+      value: `$${Number(visit.revenue ?? 0).toLocaleString()}`,
+    },
+    {
+      label: "Comp Value",
+      value: `$${Number(visit.free_value ?? 0).toLocaleString()}`,
+    },
     {
       label: "Total Spend",
       value: `$${Number(visit.total_spend ?? 0).toLocaleString()}`,
@@ -1023,14 +1289,39 @@ function VisitSidePanel({ visit, onClose }) {
               </div>
               <div
                 style={{
-                  fontSize: 19,
-                  fontWeight: 700,
-                  color: C.textPrimary,
-                  fontFamily: "sans-serif",
-                  lineHeight: 1.25,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  flexWrap: "wrap",
                 }}
               >
-                {visit.member_full_name || "Unknown Member"}
+                <div
+                  style={{
+                    fontSize: 19,
+                    fontWeight: 700,
+                    color: C.textPrimary,
+                    fontFamily: "sans-serif",
+                    lineHeight: 1.25,
+                  }}
+                >
+                  {visit.member_full_name || "Unknown Member"}
+                </div>
+                {visit.is_free && (
+                  <span
+                    style={{
+                      padding: "3px 7px",
+                      borderRadius: 999,
+                      background: COLOR_FREE,
+                      color: "#fff",
+                      fontSize: 10,
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      fontFamily: "sans-serif",
+                    }}
+                  >
+                    Comp
+                  </span>
+                )}
               </div>
             </div>
 
@@ -1054,9 +1345,22 @@ function VisitSidePanel({ visit, onClose }) {
 
           <div style={{ marginTop: 14, display: "flex", gap: 24 }}>
             <div>
-              <div style={{ fontSize: 10, color: C.textMuted }}>SPEND</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: C.accent }}>
-                ${Number(visit.total_spend ?? 0).toLocaleString()}
+              <div style={{ fontSize: 10, color: C.textMuted }}>
+                {visit.is_free ? "COMP VALUE" : "PAID REVENUE"}
+              </div>
+              <div
+                style={{
+                  fontSize: 16,
+                  fontWeight: 700,
+                  color: visit.is_free ? COLOR_FREE : C.accent,
+                }}
+              >
+                $
+                {Number(
+                  visit.is_free
+                    ? visit.free_value
+                    : (visit.revenue ?? visit.total_spend ?? 0),
+                ).toLocaleString()}
               </div>
             </div>
             <div>
@@ -1124,14 +1428,17 @@ function MemberSeasonVisitsTable({
   const [search, setSearch] = useState("");
   const [season, setSeason] = useState(initialSeason);
   const [amenity, setAmenity] = useState(initialAmenity);
-  const [year, setYear] = useState(initialYear || "All");
+  const [dateFilter, setDateFilter] = useState({
+    ...createDateFilter(),
+    year: initialYear || "All",
+  });
   const [page, setPage] = useState(1);
   const [selectedVisit, setSelectedVisit] = useState(null);
   const PAGE = 30;
 
   useEffect(() => {
     setPage(1);
-  }, [search, season, amenity, year]);
+  }, [search, season, amenity, dateFilter]);
 
   useEffect(() => {
     setSeason(initialSeason);
@@ -1142,7 +1449,7 @@ function MemberSeasonVisitsTable({
   }, [initialAmenity]);
 
   useEffect(() => {
-    setYear(initialYear || "All");
+    setDateFilter((f) => ({ ...f, year: initialYear || "All" }));
   }, [initialYear]);
 
   const seasons = useMemo(
@@ -1155,22 +1462,12 @@ function MemberSeasonVisitsTable({
     [data],
   );
 
-  const years = useMemo(
-    () => [
-      "All",
-      ...Array.from(new Set(data.map((d) => getRowYear(d)).filter(Boolean)))
-        .sort((a, b) => b - a)
-        .map(String),
-    ],
-    [data],
-  );
+  const years = useMemo(() => getDateFilterYearsFromRows(data), [data]);
 
   const filtered = useMemo(() => {
     let rows = data;
 
-    if (year !== "All") {
-      rows = rows.filter((r) => String(getRowYear(r)) === String(year));
-    }
+    rows = rows.filter((r) => rowMatchesDateFilter(r, dateFilter));
 
     if (season !== "All" && season)
       rows = rows.filter((r) => r.season === season);
@@ -1190,7 +1487,7 @@ function MemberSeasonVisitsTable({
     }
 
     return rows;
-  }, [data, search, season, amenity, year]);
+  }, [data, search, season, amenity, dateFilter]);
 
   const totalPages = Math.ceil(filtered.length / PAGE);
   const visible = filtered.slice((page - 1) * PAGE, page * PAGE);
@@ -1209,9 +1506,13 @@ function MemberSeasonVisitsTable({
       DOB: r.dob ?? "",
       "Business Season": r.season ?? "",
       Amenity: r.amenity ?? "",
+      "Payment Type": r.payment_type ?? "",
+      Comped: r.is_free ? "Yes" : "No",
       "Check-In Date": r.check_in_fmt ?? "",
       "Check-Out Date": r.check_out_fmt ?? "",
       "Usage Count": r.usage_count ?? "",
+      "Paid Revenue (USD)": r.revenue ?? "",
+      "Comp Value (USD)": r.free_value ?? "",
       "Total Spend (USD)": r.total_spend ?? "",
     }));
 
@@ -1268,17 +1569,11 @@ function MemberSeasonVisitsTable({
           placeholder="Search name or ID…"
         />
 
-        <select
-          style={select}
-          value={year}
-          onChange={(e) => setYear(e.target.value)}
-        >
-          {years.map((y) => (
-            <option key={y} value={y}>
-              {y === "All" ? "All Years" : y}
-            </option>
-          ))}
-        </select>
+        <DateFilterControl
+          value={dateFilter}
+          onChange={setDateFilter}
+          years={years}
+        />
 
         <select
           style={select}
@@ -1304,11 +1599,14 @@ function MemberSeasonVisitsTable({
           ))}
         </select>
 
-        {(year !== "All" || season || amenity || search) && (
+        {(dateFilterLabel(dateFilter) !== "All dates" ||
+          season ||
+          amenity ||
+          search) && (
           <button
             onClick={() => {
               setSearch("");
-              setYear("All");
+              setDateFilter(createDateFilter());
               setSeason("");
               setAmenity("");
             }}
@@ -1374,9 +1672,12 @@ function MemberSeasonVisitsTable({
                   "Member ID",
                   "Business Season",
                   "Amenity",
+                  "Payment",
                   "Check-In Date",
                   "Check-Out Date",
                   "Usage Count",
+                  "Paid Revenue (USD)",
+                  "Comp Value (USD)",
                   "Total Spend (USD)",
                 ].map((h) => (
                   <th key={h} style={th}>
@@ -1389,7 +1690,7 @@ function MemberSeasonVisitsTable({
               {visible.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={12}
                     style={{
                       ...td,
                       textAlign: "center",
@@ -1446,6 +1747,11 @@ function MemberSeasonVisitsTable({
                         <span style={{ color: C.textLight }}>—</span>
                       )}
                     </td>
+                    <td style={td}>
+                      <span style={pill(r.is_free ? COLOR_FREE : COLOR_PAID)}>
+                        {r.is_free ? "Comp" : "Paid"}
+                      </span>
+                    </td>
                     <td
                       style={{
                         ...td,
@@ -1470,6 +1776,12 @@ function MemberSeasonVisitsTable({
                       {r.usage_count ?? "—"}
                     </td>
                     <td style={{ ...td, fontWeight: 600, color: C.accent }}>
+                      ${Number(r.revenue ?? 0).toLocaleString()}
+                    </td>
+                    <td style={{ ...td, fontWeight: 600, color: COLOR_FREE }}>
+                      ${Number(r.free_value ?? 0).toLocaleString()}
+                    </td>
+                    <td style={{ ...td, fontWeight: 600, color: C.accent2 }}>
                       ${Number(r.total_spend ?? 0).toLocaleString()}
                     </td>
                   </tr>
@@ -1878,15 +2190,26 @@ function SeasonCapacityCards({ data }) {
 
 /* ── AmenitySpendBarChart ────────────────────────────────────────── */
 function AmenitySpendBarChart({ spendData, onBarClick }) {
-  // Aggregate total spend per amenity across all seasons
+  // Aggregate paid revenue and comp value per amenity across all seasons.
   const chartData = useMemo(() => {
     const agg = {};
+
     (spendData ?? []).forEach((d) => {
-      agg[d.amenity] = (agg[d.amenity] ?? 0) + d.total_spend;
+      if (!agg[d.amenity]) {
+        agg[d.amenity] = {
+          amenity: d.amenity,
+          revenue: 0,
+          free_value: 0,
+          total_spend: 0,
+        };
+      }
+
+      agg[d.amenity].revenue += Number(d.revenue ?? d.total_spend ?? 0);
+      agg[d.amenity].free_value += Number(d.free_value ?? 0);
+      agg[d.amenity].total_spend += Number(d.total_spend ?? 0);
     });
-    return Object.entries(agg)
-      .map(([amenity, total_spend]) => ({ amenity, total_spend }))
-      .sort((a, b) => b.total_spend - a.total_spend);
+
+    return Object.values(agg).sort((a, b) => b.total_spend - a.total_spend);
   }, [spendData]);
 
   return (
@@ -1908,7 +2231,7 @@ function AmenitySpendBarChart({ spendData, onBarClick }) {
             fontSize={11}
             tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
             label={{
-              value: "Total Revenue (USD)",
+              value: "Paid Revenue + Comp Value (USD)",
               position: "insideBottom",
               offset: -12,
               fill: C.textMuted,
@@ -1948,18 +2271,26 @@ function AmenitySpendBarChart({ spendData, onBarClick }) {
             itemStyle={{
               color: "var(--dashboard-abyssal)",
             }}
-            formatter={(v) => [`$${Number(v).toLocaleString()}`, "Total Spend"]}
+            formatter={(v, name) => [
+              `$${Number(v).toLocaleString()}`,
+              name === "revenue" ? "Paid Revenue" : "Comp Value",
+            ]}
           />
           <Bar
-            dataKey="total_spend"
+            dataKey="revenue"
+            stackId="amenitySpend"
+            fill={COLOR_PAID}
+            cursor="pointer"
+            onClick={(d) => d?.amenity && onBarClick && onBarClick(d.amenity)}
+          />
+          <Bar
+            dataKey="free_value"
+            stackId="amenitySpend"
+            fill={COLOR_FREE}
             radius={[0, 6, 6, 0]}
             cursor="pointer"
             onClick={(d) => d?.amenity && onBarClick && onBarClick(d.amenity)}
-          >
-            {chartData.map((entry) => (
-              <Cell key={entry.amenity} fill={amenityColor(entry.amenity)} />
-            ))}
-          </Bar>
+          />
         </BarChart>
       </ResponsiveContainer>
     </div>
@@ -2148,6 +2479,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
   const [drillAmenity, setDrillAmenity] = useState("");
   const [drillSeason, setDrillSeason] = useState("");
   const [drillYear, setDrillYear] = useState("All");
+  const [dateFilter, setDateFilter] = useState(createDateFilter());
   const visitsRef = useRef(null);
 
   useEffect(() => {
@@ -2186,6 +2518,50 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
     memberAmenitySeasonVisits = [],
     seasonVillaBedroom = [],
   } = data ?? {};
+
+  const dateYears = useMemo(
+    () =>
+      getDateFilterYearsFromRows([
+        ...amenitySeasonSpend,
+        ...memberAmenityProfile,
+        ...memberAmenitySeasonVisits,
+        ...seasonVillaBedroom,
+      ]),
+    [
+      amenitySeasonSpend,
+      memberAmenityProfile,
+      memberAmenitySeasonVisits,
+      seasonVillaBedroom,
+    ],
+  );
+
+  const filteredAmenitySeasonSpend = useMemo(
+    () =>
+      amenitySeasonSpend.filter((row) => rowMatchesDateFilter(row, dateFilter)),
+    [amenitySeasonSpend, dateFilter],
+  );
+
+  const filteredMemberAmenityProfile = useMemo(
+    () =>
+      memberAmenityProfile.filter((row) =>
+        rowMatchesDateFilter(row, dateFilter),
+      ),
+    [memberAmenityProfile, dateFilter],
+  );
+
+  const filteredMemberAmenitySeasonVisits = useMemo(
+    () =>
+      memberAmenitySeasonVisits.filter((row) =>
+        rowMatchesDateFilter(row, dateFilter),
+      ),
+    [memberAmenitySeasonVisits, dateFilter],
+  );
+
+  const filteredSeasonVillaBedroom = useMemo(
+    () =>
+      seasonVillaBedroom.filter((row) => rowMatchesDateFilter(row, dateFilter)),
+    [seasonVillaBedroom, dateFilter],
+  );
 
   const handleCellClick = (amenity, season, year = "All") => {
     setDrillAmenity(amenity);
@@ -2245,28 +2621,51 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div
+        style={{
+          ...card,
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          alignItems: "center",
+          flexWrap: "wrap",
+        }}
+      >
+        <DateFilterControl
+          value={dateFilter}
+          onChange={setDateFilter}
+          years={dateYears}
+          label="Custom Date"
+        />
+        <span
+          style={{ fontSize: 12, color: C.textMuted, fontFamily: "sans-serif" }}
+        >
+          Showing: {dateFilterLabel(dateFilter)}
+        </span>
+      </div>
+
       {/* ── Summary stat row ── */}
       <SummaryStats
-        amenitySeasonSpend={amenitySeasonSpend}
-        memberAmenityProfile={memberAmenityProfile}
+        amenitySeasonSpend={filteredAmenitySeasonSpend}
+        memberAmenityProfile={filteredMemberAmenityProfile}
       />
 
       {/* ── Spend by amenity bar ── */}
       <AmenityRevenueSection
-        data={amenitySeasonSpend}
+        data={filteredAmenitySeasonSpend}
         onBarClick={handleBarClick}
       />
 
       {/* ── Heatmap ── */}
       <AmenityHeatmapSection
-        data={amenitySeasonSpend}
+        data={filteredAmenitySeasonSpend}
         onCellClick={handleCellClick}
       />
 
       <SectionDivider>Member Profiles</SectionDivider>
 
       {/* ── Member amenity profile table ── */}
-      <MemberAmenityProfileTable data={memberAmenityProfile} />
+      <MemberAmenityProfileTable data={filteredMemberAmenityProfile} />
 
       <SectionDivider>Visit Details</SectionDivider>
 
@@ -2326,7 +2725,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
           </div>
         )}
         <MemberSeasonVisitsTable
-          data={memberAmenitySeasonVisits}
+          data={filteredMemberAmenitySeasonVisits}
           initialSeason={drillSeason}
           initialAmenity={drillAmenity}
           initialYear={drillYear}
@@ -2353,7 +2752,7 @@ export default function AmenitySeasonPanel({ seasonGroupId = null }) {
           ]}
           action="Select a season card to expand detailed accommodation demand insights."
         />
-        <SeasonCapacityCards data={seasonVillaBedroom} />
+        <SeasonCapacityCards data={filteredSeasonVillaBedroom} />
       </div>
     </div>
   );

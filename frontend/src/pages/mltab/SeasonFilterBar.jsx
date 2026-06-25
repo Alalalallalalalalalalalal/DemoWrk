@@ -50,6 +50,218 @@ const C = {
 const tint = (color, amount = 14) =>
   `color-mix(in srgb, ${color} ${amount}%, transparent)`;
 
+function createDateFilter() {
+  return {
+    mode: "ym", // ym | day | range
+    year: "All",
+    month: "All",
+    date: "",
+    startDate: "",
+    endDate: "",
+  };
+}
+
+function normalizeDateOnly(value) {
+  if (!value) return "";
+  const raw = String(value);
+  const direct = raw.match(/^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?/);
+  if (direct) {
+    const y = direct[1];
+    const m = String(direct[2]).padStart(2, "0");
+    const d = String(direct[3] ?? "01").padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, "0");
+  const d = String(parsed.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function getRowDateParts(row) {
+  const raw =
+    row?.check_in_date ??
+    row?.transaction_date ??
+    row?.ref_date ??
+    row?.date ??
+    row?.month ??
+    null;
+  const iso = normalizeDateOnly(raw);
+  if (!iso) return {};
+  const [year, month, day] = iso.split("-").map(Number);
+  return { iso, year, month, day };
+}
+
+function rowMatchesDateFilter(row, filter) {
+  if (!filter) return true;
+  const parts = getRowDateParts(row);
+  if (filter.mode === "day") return !filter.date || parts.iso === filter.date;
+  if (filter.mode === "range") {
+    if (!filter.startDate || !filter.endDate) return true;
+    return (
+      Boolean(parts.iso) &&
+      parts.iso >= filter.startDate &&
+      parts.iso <= filter.endDate
+    );
+  }
+  if (filter.year !== "All" && parts.year !== Number(filter.year)) return false;
+  if (filter.month !== "All" && parts.month !== Number(filter.month))
+    return false;
+  return true;
+}
+
+function getDateFilterYearsFromRows(rows = []) {
+  const found = Array.from(
+    new Set(rows.map((row) => getRowDateParts(row).year).filter(Boolean)),
+  ).sort((a, b) => b - a);
+  const currentYear = new Date().getFullYear();
+  return [
+    "All",
+    ...(found.length
+      ? found
+      : Array.from(
+          { length: currentYear - 2018 + 1 },
+          (_, i) => currentYear - i,
+        )),
+  ];
+}
+
+function toDateParams(filter) {
+  if (filter.mode === "day") return filter.date ? { date: filter.date } : {};
+  if (filter.mode === "range") {
+    return filter.startDate && filter.endDate
+      ? { start_date: filter.startDate, end_date: filter.endDate }
+      : {};
+  }
+  return {
+    year: filter.year === "All" ? null : Number(filter.year),
+    month: filter.month === "All" ? null : Number(filter.month),
+  };
+}
+
+function dateFilterLabel(filter) {
+  if (filter.mode === "day") return filter.date || "All dates";
+  if (filter.mode === "range") {
+    return filter.startDate && filter.endDate
+      ? `${filter.startDate} to ${filter.endDate}`
+      : "All dates";
+  }
+  if (filter.year === "All" && filter.month === "All") return "All dates";
+  const monthLabel =
+    filter.month === "All"
+      ? "All months"
+      : MONTH_NAMES[Number(filter.month) - 1];
+  return `${filter.year === "All" ? "All years" : filter.year} / ${monthLabel}`;
+}
+
+function DateFilterBar({ value, onChange, years }) {
+  const update = (patch) => onChange({ ...value, ...patch });
+  const inputStyle = {
+    padding: "6px 8px",
+    border: `1px solid ${C.border}`,
+    borderRadius: 8,
+    fontSize: 12,
+    background: C.bg,
+    color: C.textPrimary,
+    outline: "none",
+    fontFamily: "sans-serif",
+  };
+  const changeMode = (mode) => {
+    onChange({
+      mode,
+      year: value.year ?? "All",
+      month: value.month ?? "All",
+      date: value.date ?? "",
+      startDate: value.startDate ?? "",
+      endDate: value.endDate ?? "",
+    });
+  };
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 8,
+        flexWrap: "wrap",
+        alignItems: "center",
+      }}
+    >
+      <span
+        style={{
+          fontSize: 11,
+          color: C.textMuted,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: "0.07em",
+          fontFamily: "sans-serif",
+        }}
+      >
+        Custom Date
+      </span>
+      <select
+        value={value.mode}
+        onChange={(e) => changeMode(e.target.value)}
+        style={inputStyle}
+      >
+        <option value="ym">Year / Month</option>
+        <option value="day">Single Day</option>
+        <option value="range">Date Range</option>
+      </select>
+      {value.mode === "ym" && (
+        <>
+          <select
+            value={value.year}
+            onChange={(e) => update({ year: e.target.value })}
+            style={inputStyle}
+          >
+            {years.map((year) => (
+              <option key={year} value={year}>
+                {year === "All" ? "All Years" : year}
+              </option>
+            ))}
+          </select>
+          <select
+            value={value.month}
+            onChange={(e) => update({ month: e.target.value })}
+            style={inputStyle}
+          >
+            <option value="All">All Months</option>
+            {MONTH_NAMES.map((month, index) => (
+              <option key={month} value={index + 1}>
+                {month}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+      {value.mode === "day" && (
+        <input
+          type="date"
+          value={value.date}
+          onChange={(e) => update({ date: e.target.value })}
+          style={inputStyle}
+        />
+      )}
+      {value.mode === "range" && (
+        <>
+          <input
+            type="date"
+            value={value.startDate}
+            onChange={(e) => update({ startDate: e.target.value })}
+            style={inputStyle}
+          />
+          <input
+            type="date"
+            value={value.endDate}
+            onChange={(e) => update({ endDate: e.target.value })}
+            style={inputStyle}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
 function formatSeasonRange(season) {
   return `${MONTH_NAMES[season.start_month - 1]} ${season.start_day}–${
     MONTH_NAMES[season.end_month - 1]
@@ -194,6 +406,7 @@ export default function SeasonFilterBar({
     end_day: 31,
   });
   const [editForm, setEditForm] = useState({});
+  const [dateFilter, setDateFilter] = useState(createDateFilter());
 
   const [selectedSeasonName, setSelectedSeasonName] = useState("");
   const [seasonDetailRows, setSeasonDetailRows] = useState([]);
@@ -203,7 +416,7 @@ export default function SeasonFilterBar({
 
   useEffect(() => {
     analyticsApi
-      .seasonSummary()
+      .seasonSummary(toDateParams(dateFilter))
       .then((data) => {
         const visibleGroups = (data?.seasonGroups ?? []).filter(
           (group) => group.group_type !== "simple",
@@ -215,11 +428,15 @@ export default function SeasonFilterBar({
         onSeasonGroupChange?.(visibleGroups[0] ?? null);
       })
       .catch(() => {});
-  }, [onSeasonGroupChange]);
+  }, [onSeasonGroupChange, dateFilter]);
 
   const activeGroup = groups[activeGroupIdx];
+  const dateYears = getDateFilterYearsFromRows(seasonalVisits);
+  const filteredSeasonalVisits = seasonalVisits.filter((row) =>
+    rowMatchesDateFilter(row, dateFilter),
+  );
   const chartData = activeGroup
-    ? aggregateByGroup(seasonalVisits, activeGroup.seasons)
+    ? aggregateByGroup(filteredSeasonalVisits, activeGroup.seasons)
     : [];
 
   async function toggleSeason(season) {
@@ -317,7 +534,10 @@ export default function SeasonFilterBar({
     setSeasonModalLoading(true);
 
     try {
-      const rows = await analyticsApi.seasonMembers(data.season_id);
+      const rows = await analyticsApi.seasonMembers(
+        data.season_id,
+        toDateParams(dateFilter),
+      );
       setSeasonDetailRows(Array.isArray(rows) ? rows : []);
     } catch (error) {
       console.error("Failed to load season member details:", error);
@@ -512,6 +732,23 @@ export default function SeasonFilterBar({
           />
         </div>
         {/* Group tabs */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <DateFilterBar
+            value={dateFilter}
+            onChange={setDateFilter}
+            years={dateYears}
+          />
+          <span style={S.note}>Showing: {dateFilterLabel(dateFilter)}</span>
+        </div>
+
         <div style={S.tabRow}>
           {groups.map((g, i) => (
             <div
