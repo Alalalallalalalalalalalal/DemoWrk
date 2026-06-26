@@ -796,11 +796,17 @@ export default function OverviewTab({
                 {/* ── Row 2: [Account status + Member vs guest revenue stacked] · Bedroom demand · Monthly revenue ── */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
 
-                    {/* Column 1: Account status (top) + Member vs guest revenue (bottom), stacked */}
+                    {/* Column 1: Account status (top) + Member vs guest revenue (bottom), stacked.
+                    Both cards get flex:1 so this column's total height naturally
+                    matches Bedroom demand / Revenue by month next to it — the grid
+                    row stretches this whole wrapper to match the tallest column,
+                    but without flex:1 here, the two cards keep their own natural
+                    height and just leave a gap below "Combined total" instead of
+                    the column's bottom edge lining up with its neighbors. */}
                     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 
                         {/* Account status — no filter */}
-                        <div style={block}>
+                        <div style={{ ...block, flex: "1 1 auto" }}>
                             <CardHeader label="Account status" tip="Counts every account on file by whether it's currently Active or Inactive, split into members and guests. This is a simple headcount - no dollar amounts." />
                             <div style={{ padding: "14px 16px 10px", display: "flex", flexDirection: "column", gap: 12 }}>
                                 {membersByStatus.map((s) => {
@@ -836,7 +842,7 @@ export default function OverviewTab({
                         </div>
 
                         {/* Member vs Guest revenue — filtered */}
-                        <div style={block}>
+                        <div style={{ ...block, flex: "1 1 auto" }}>
                             <CardHeaderF
                                 label="Member vs guest revenue ($USD)"
                                 tip="Splits revenue between Member accounts and Guest accounts. This counts individual charges (villa rental + amenities combined). Paid/Free reflects whether each specific charge was actually paid, after netting out any matching refund or correction - not whether the booking itself was comped. Free shows a NEGATIVE number - the original amount charged before it was comped/reversed - since the actual net cost to the guest is always $0 and wouldn't show what was given away. Each bar is split Villa (navy) vs Amenity (orange) to show what kind of revenue (or giveaway) makes up that share."
