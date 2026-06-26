@@ -1,15 +1,6 @@
 // frontend/src/pages/mltab/MarketingTargetingPanel.jsx
 import { useEffect, useMemo, useState } from "react";
-import {
-  Download,
-  Eye,
-  Mail,
-  RefreshCw,
-  Search,
-  Sparkles,
-  Users,
-  X,
-} from "lucide-react";
+import { Download, Info, RefreshCw, Search, X } from "lucide-react";
 import { analyticsApi } from "../../api/analytics";
 
 const C = {
@@ -151,6 +142,9 @@ function toExportRows(rows = []) {
     paid_revenue: r.paid_revenue ?? 0,
     free_value: r.free_value ?? 0,
     lifetime_spend: r.lifetime_spend ?? 0,
+    potential_revenue: r.potential_revenue ?? 0,
+    villa_nights_value: r.villa_nights_value ?? 0,
+    avg_villa_night_value: r.avg_villa_night_value ?? 0,
     first_visit: r.first_visit ?? "",
     last_visit: r.last_visit ?? "",
     date_of_birth: r.date_of_birth ?? "",
@@ -195,15 +189,20 @@ function Metric({ label, value }) {
   );
 }
 
-function CampaignCard({ campaign, onOpen, onExport }) {
+function CampaignCard({ campaign, onOpen }) {
+  const [showInfo, setShowInfo] = useState(false);
+
   return (
     <div
+      onClick={() => onOpen(campaign)}
       style={{
         ...card,
         display: "flex",
         flexDirection: "column",
-        minHeight: 244,
+        minHeight: 224,
         borderTop: `4px solid ${C.accent}`,
+        cursor: "pointer",
+        position: "relative",
       }}
     >
       <div
@@ -238,76 +237,83 @@ function CampaignCard({ campaign, onOpen, onExport }) {
           </h3>
         </div>
 
-        <div
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowInfo((v) => !v);
+          }}
           style={{
-            width: 42,
-            height: 42,
-            borderRadius: 13,
-            background: tint(C.flame, 14),
-            color: C.flame,
+            width: 36,
+            height: 36,
+            borderRadius: 999,
+            border: `1px solid ${C.border}`,
+            background: C.panelAlt,
+            color: C.accent,
+            cursor: "pointer",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             flexShrink: 0,
           }}
+          aria-label="Campaign info"
         >
-          <Sparkles size={18} />
-        </div>
+          <Info size={16} />
+        </button>
       </div>
 
-      <p
-        style={{
-          margin: "0 0 14px",
-          color: C.textMuted,
-          fontSize: 12,
-          lineHeight: 1.5,
-          fontFamily: "sans-serif",
-          minHeight: 38,
-        }}
-      >
-        {campaign.description}
-      </p>
+      {showInfo && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: 58,
+            right: 16,
+            width: 260,
+            padding: 12,
+            borderRadius: 12,
+            border: `1px solid ${C.border}`,
+            background: C.bg,
+            color: C.textMid,
+            boxShadow: C.shadow,
+            fontSize: 12,
+            lineHeight: 1.45,
+            fontFamily: "sans-serif",
+            zIndex: 5,
+          }}
+        >
+          {campaign.description}
+        </div>
+      )}
 
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
           gap: 10,
-          marginBottom: 14,
+          marginTop: 14,
         }}
       >
         <Metric label="Targets" value={number(campaign.memberCount)} />
         <Metric label="Emails" value={number(campaign.emailableCount)} />
         <Metric label="Potential" value={money(campaign.potentialRevenue)} />
-        <Metric label="Avg Spend" value={money(campaign.avgLifetimeSpend)} />
+        <Metric
+          label="Avg Villa Night"
+          value={money(campaign.avgVillaNightValue)}
+        />
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
-        <button
-          onClick={() => onOpen(campaign)}
-          style={{
-            ...buttonBase,
-            background: C.accent,
-            color: "white",
-            border: `1px solid ${C.accent}`,
-            flex: 1,
-          }}
-        >
-          <Eye size={14} />
-          Open List
-        </button>
-        <button
-          onClick={() => onExport(campaign)}
-          style={{
-            ...buttonBase,
-            background: C.panelAlt,
-            color: C.accent,
-            border: `1px solid ${C.border}`,
-          }}
-        >
-          <Download size={14} />
-          CSV
-        </button>
+      <div
+        style={{
+          marginTop: "auto",
+          paddingTop: 14,
+          color: C.textMuted,
+          fontSize: 12,
+          fontWeight: 800,
+          fontFamily: "sans-serif",
+        }}
+      >
+        Click to view members/export CSV
       </div>
     </div>
   );
@@ -343,9 +349,10 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
         acc.paid += Number(r.paid_revenue || 0);
         acc.free += Number(r.free_value || 0);
         acc.lifetime += Number(r.lifetime_spend || 0);
+        acc.potential += Number(r.potential_revenue || 0);
         return acc;
       },
-      { paid: 0, free: 0, lifetime: 0 },
+      { paid: 0, free: 0, lifetime: 0, potential: 0 },
     );
   }, [filteredRows]);
 
@@ -458,8 +465,8 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
               label="Visible Targets"
               value={number(filteredRows.length)}
             />
+            <Metric label="Potential" value={money(totals.potential)} />
             <Metric label="Paid Revenue" value={money(totals.paid)} />
-            <Metric label="Free Value" value={money(totals.free)} />
             <Metric label="Lifetime Spend" value={money(totals.lifetime)} />
           </div>
 
@@ -554,6 +561,7 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
                     <th style={th}>Season</th>
                     <th style={th}>Villa</th>
                     <th style={th}>Amenity</th>
+                    <th style={{ ...th, textAlign: "right" }}>Potential</th>
                     <th style={{ ...th, textAlign: "right" }}>Paid</th>
                     <th style={{ ...th, textAlign: "right" }}>Free</th>
                     <th style={th}>Last Visit</th>
@@ -564,7 +572,7 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
                   {filteredRows.length === 0 ? (
                     <tr>
                       <td
-                        colSpan={12}
+                        colSpan={13}
                         style={{ ...td, padding: 34, color: C.textMuted }}
                       >
                         No matching members found.
@@ -583,6 +591,9 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
                         <td style={td}>{r.preferred_season || "—"}</td>
                         <td style={td}>{r.preferred_villa || "—"}</td>
                         <td style={td}>{r.preferred_amenity || "—"}</td>
+                        <td style={{ ...td, textAlign: "right" }}>
+                          {money(r.potential_revenue)}
+                        </td>
                         <td style={{ ...td, textAlign: "right" }}>
                           {money(r.paid_revenue)}
                         </td>
@@ -686,13 +697,6 @@ export default function MarketingTargetingPanel() {
     }
   };
 
-  const exportCampaign = async (campaign) => {
-    const data = await analyticsApi.marketingCampaignMembers(campaign.key);
-    const exportRows = toExportRows(data.members || []);
-    const date = new Date().toISOString().slice(0, 10);
-    downloadRowsAsCsv(exportRows, `${campaign.key}_${date}.csv`);
-  };
-
   const exportVisibleMembers = (rows) => {
     const exportRows = toExportRows(rows || []);
     const date = new Date().toISOString().slice(0, 10);
@@ -745,20 +749,6 @@ export default function MarketingTargetingPanel() {
             >
               Action-ready campaign audiences
             </h2>
-            <p
-              style={{
-                margin: 0,
-                color: C.textMuted,
-                fontSize: 13,
-                lineHeight: 1.55,
-                fontFamily: "sans-serif",
-              }}
-            >
-              Export targeted member lists for MailLink based on season
-              behavior, paid/free patterns, preferred villa, amenity usage,
-              business source, birthdays, anniversaries, and lapsed high-value
-              opportunities.
-            </p>
           </div>
 
           <button
@@ -846,21 +836,6 @@ export default function MarketingTargetingPanel() {
             <option key={c}>{c}</option>
           ))}
         </select>
-
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            color: C.textMuted,
-            fontSize: 12,
-            fontFamily: "sans-serif",
-            marginLeft: "auto",
-          }}
-        >
-          <Mail size={14} />
-          CSV exports include MailLink-ready fields and campaign reasons.
-        </span>
       </div>
 
       {error && (
@@ -897,30 +872,10 @@ export default function MarketingTargetingPanel() {
               key={campaign.key}
               campaign={campaign}
               onOpen={openCampaign}
-              onExport={exportCampaign}
             />
           ))}
         </div>
       )}
-
-      <div
-        style={{
-          ...card,
-          marginTop: 18,
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          color: C.textMuted,
-          fontSize: 12,
-          lineHeight: 1.5,
-          fontFamily: "sans-serif",
-        }}
-      >
-        <Users size={18} color={C.accent} />
-        Each exported row includes member contact details, preferred season,
-        preferred villa, preferred amenity, business source, paid/free value,
-        lifetime spend, last visit, and a plain-English campaign reason.
-      </div>
 
       {activeCampaign && (
         <CampaignDrawer
