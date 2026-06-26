@@ -94,18 +94,6 @@ const pill = (color) => ({
   fontFamily: "sans-serif",
 });
 
-const select = {
-  padding: "7px 10px",
-  border: `1px solid ${C.border}`,
-  borderRadius: 8,
-  fontSize: 12,
-  fontFamily: "sans-serif",
-  background: C.bg,
-  color: C.text,
-  outline: "none",
-  cursor: "pointer",
-};
-
 /* ─── helpers ───────────────────────────────────────────────────── */
 const fmt$ = (v) =>
   v == null
@@ -143,6 +131,59 @@ const SEGMENT_TABS = [
     description: "Amenity usage by member",
   },
 ];
+
+const SEGMENT_INFO = {
+  spenders:
+    "Groups members by total recorded spend so marketing can focus premium offers, loyalty upgrades, and low-spend reactivation.",
+  visitors:
+    "Groups members by visit frequency and recency so outreach can target frequent, regular, lapsed, or never-visited members.",
+  amenities:
+    "Groups members by their strongest amenity usage. Total Spend is all amenity spend; Amenity Spend is their top amenity spend.",
+};
+
+const SEGMENT_LABEL_INFO = {
+  "High Spender":
+    "Top revenue members. Good for premium experiences, private dining, exclusive events, and upgrades.",
+  "Medium Spender":
+    "Consistent spenders. Good for bundles, loyalty packages, and targeted upgrades.",
+  "Low Spender":
+    "Lower recorded spend. Good for introductory offers or guided amenity experiences.",
+  Frequent:
+    "Members who return regularly. Good for referral programs, member events, and early access offers.",
+  Regular:
+    "Members who visit occasionally. Good for seasonal invitations and curated packages.",
+  Lapsed:
+    "Members with no recent visit. Good for personalized win-back outreach.",
+  "Never Visited":
+    "Members without a recorded check-in. Good for first-visit invitations or welcome offers.",
+};
+
+function InfoIcon({ text }) {
+  return (
+    <span
+      title={text}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 17,
+        height: 17,
+        borderRadius: "50%",
+        border: `1px solid ${C.border}`,
+        color: C.muted,
+        background: C.bg,
+        fontSize: 11,
+        fontWeight: 800,
+        lineHeight: 1,
+        cursor: "help",
+        fontFamily: "sans-serif",
+      }}
+    >
+      i
+    </span>
+  );
+}
 
 /* ══════════════════════════════════════════════════════════════════
    SIDE PANEL
@@ -450,7 +491,7 @@ function KpiChip({ label, value, color }) {
 /* ══════════════════════════════════════════════════════════════════
    SEGMENT SUMMARY CARDS
 ══════════════════════════════════════════════════════════════════ */
-function SegmentCard({ label, count, totalSpend, active, onClick }) {
+function SegmentCard({ label, count, totalSpend, active, onClick, info }) {
   const pal = paletteFor(label);
   return (
     <button
@@ -474,15 +515,31 @@ function SegmentCard({ label, count, totalSpend, active, onClick }) {
     >
       <div
         style={{
-          fontSize: 10,
-          fontWeight: 700,
-          textTransform: "uppercase",
-          letterSpacing: "0.1em",
-          color: active ? pal.accent : C.muted,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
           marginBottom: 6,
         }}
       >
-        {label}
+        <span
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            textTransform: "uppercase",
+            letterSpacing: "0.1em",
+            color: active ? pal.accent : C.muted,
+          }}
+        >
+          {label}
+        </span>
+        <InfoIcon
+          text={
+            info ||
+            SEGMENT_LABEL_INFO[label] ||
+            "Click to view the members in this segment."
+          }
+        />
       </div>
       <div
         style={{ fontSize: 24, fontWeight: 800, color: C.text, lineHeight: 1 }}
@@ -599,52 +656,6 @@ function MemberRow({ member, tab, idx, onClick }) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   CONTEXT CALLOUT
-══════════════════════════════════════════════════════════════════ */
-function ContextCallout({ tab, filterLabel, summary }) {
-  const msgs = {
-    spenders: {
-      null: "Members ranked by total spending. Select a tier above to narrow the list, or click any row for full details.",
-      "High Spender": `${summary["High Spender"]?.count ?? 0} members driving the most revenue. Strong candidates for premium experience upgrades, private dining, or early access to new services.`,
-      "Medium Spender": `${summary["Medium Spender"]?.count ?? 0} members with consistent but moderate spend. Loyalty packages or bundled offers could move some into the top tier.`,
-      "Low Spender": `${summary["Low Spender"]?.count ?? 0} members with minimal recorded spend. Consider introductory offers or a guided amenity experience to increase engagement.`,
-    },
-    visitors: {
-      null: "Members grouped by visit frequency and recency. Select a type above to focus the list.",
-      Frequent: `${summary["Frequent"]?.count ?? 0} members who return regularly. Well suited for referral programs, member events, or beta access to new facilities.`,
-      Regular: `${summary["Regular"]?.count ?? 0} members who visit occasionally. A seasonal invitation or curated package could increase their frequency.`,
-      Lapsed: `${summary["Lapsed"]?.count ?? 0} members with no visit in over 18 months. A personalised outreach before renewal time may re-engage them.`,
-      "Never Visited": `${summary["Never Visited"]?.count ?? 0} members who have not yet checked in. A direct invitation or complimentary introductory stay would be a natural first step.`,
-    },
-    amenities: {
-      null: "Amenity usage per member. Select a type above to filter, or click any row for full details. Total Spend includes all amenities; Amenity Spend is specific to the member's top amenity spending.",
-    },
-  };
-
-  const msg = msgs[tab]?.[filterLabel] ?? msgs[tab]?.[null] ?? "";
-  if (!msg) return null;
-
-  return (
-    <div
-      style={{
-        background: "#F7F2EC",
-        border: `1px solid ${C.border}`,
-        borderLeft: `3px solid ${C.accent}`,
-        borderRadius: 8,
-        padding: "11px 14px",
-        marginBottom: 16,
-        fontSize: 12,
-        color: C.sub,
-        lineHeight: 1.65,
-        fontFamily: "sans-serif",
-      }}
-    >
-      {msg}
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════════════════════════
    PAGINATION BUTTON
 ══════════════════════════════════════════════════════════════════ */
 function PageBtn({ label, active, disabled, onClick }) {
@@ -669,6 +680,307 @@ function PageBtn({ label, active, disabled, onClick }) {
   );
 }
 
+function SegmentTableSidePanel({
+  tab,
+  label,
+  rows,
+  summary,
+  tableHeaders,
+  onClose,
+  onSelectMember,
+}) {
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
+  const pal = paletteFor(label);
+
+  useEffect(() => {
+    setSearch("");
+    setPage(1);
+  }, [tab, label]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search]);
+
+  const filteredRows = useMemo(() => {
+    if (!search.trim()) return rows;
+    const q = search.trim().toLowerCase();
+    return rows.filter((r) =>
+      [
+        r.name,
+        r.member_number,
+        r.email,
+        r.tier,
+        r.visitor_type,
+        r.amenity_type,
+        r.top_amenity,
+        r.season,
+      ].some((v) => v && String(v).toLowerCase().includes(q)),
+    );
+  }, [rows, search]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const pageRows = filteredRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: C.overlay,
+          zIndex: 880,
+          backdropFilter: "blur(2px)",
+        }}
+      />
+
+      <div
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: "min(920px, 96vw)",
+          background: C.bg,
+          boxShadow: C.panelShadow,
+          zIndex: 881,
+          display: "flex",
+          flexDirection: "column",
+          animation: "slideInRight 0.2s ease",
+          borderLeft: `3px solid ${pal.accent}`,
+        }}
+      >
+        <div
+          style={{
+            background: pal.bg,
+            borderBottom: `1px solid ${C.border}`,
+            padding: "18px 22px",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 16,
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginBottom: 6,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 800,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.12em",
+                    color: pal.accent,
+                    fontFamily: "sans-serif",
+                  }}
+                >
+                  {tab}
+                </span>
+                <InfoIcon
+                  text={SEGMENT_LABEL_INFO[label] || SEGMENT_INFO[tab]}
+                />
+              </div>
+              <div
+                style={{
+                  fontSize: 22,
+                  fontWeight: 800,
+                  color: C.text,
+                  fontFamily: "sans-serif",
+                }}
+              >
+                {label}
+              </div>
+              <div
+                style={{
+                  marginTop: 5,
+                  display: "flex",
+                  gap: 18,
+                  color: C.muted,
+                  fontSize: 12,
+                  fontFamily: "sans-serif",
+                  flexWrap: "wrap",
+                }}
+              >
+                <span>{summary?.count ?? rows.length} members</span>
+                {tab !== "visitors" && (
+                  <span>{fmt$(summary?.totalSpend ?? 0)}</span>
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={onClose}
+              style={{
+                border: `1px solid ${C.border}`,
+                background: C.bg,
+                color: C.muted,
+                fontSize: 13,
+                cursor: "pointer",
+                padding: "5px 10px",
+                borderRadius: 7,
+                fontFamily: "sans-serif",
+              }}
+            >
+              close
+            </button>
+          </div>
+        </div>
+
+        <div style={{ padding: "16px 22px 12px" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search by name, member number, email…"
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: `1px solid ${C.border}`,
+                fontSize: 12,
+                color: C.text,
+                background: C.bg,
+                outline: "none",
+                width: "min(320px, 100%)",
+                fontFamily: "sans-serif",
+              }}
+            />
+            <span
+              style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}
+            >
+              {filteredRows.length} in {label}
+              {search ? `  ·  matching "${search}"` : ""}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ padding: "0 22px 16px", overflow: "hidden", flex: 1 }}>
+          <div
+            style={{
+              height: "100%",
+              overflow: "auto",
+              border: `1px solid ${C.border}`,
+              borderRadius: 12,
+            }}
+          >
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                minWidth: 640,
+                fontFamily: "sans-serif",
+              }}
+            >
+              <thead>
+                <tr>
+                  {tableHeaders.map((h) => (
+                    <th key={h} style={th}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pageRows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={6}
+                      style={{
+                        ...td,
+                        textAlign: "center",
+                        padding: 40,
+                        color: C.muted,
+                      }}
+                    >
+                      No members found
+                    </td>
+                  </tr>
+                ) : (
+                  pageRows.map((member, i) => (
+                    <MemberRow
+                      key={member.id ?? `${member.member_number}-${i}`}
+                      member={member}
+                      tab={tab}
+                      idx={i}
+                      onClick={() => onSelectMember(member)}
+                    />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {totalPages > 1 && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "0 22px 16px",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <span
+              style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}
+            >
+              Page {page} of {totalPages}
+            </span>
+            <div style={{ display: "flex", gap: 5 }}>
+              <PageBtn
+                label="←"
+                disabled={page === 1}
+                onClick={() => setPage((p) => p - 1)}
+              />
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                const start = Math.min(
+                  Math.max(1, page - 2),
+                  Math.max(1, totalPages - 4),
+                );
+                return start + i;
+              }).map((n) => (
+                <PageBtn
+                  key={n}
+                  label={String(n)}
+                  active={n === page}
+                  onClick={() => setPage(n)}
+                />
+              ))}
+              <PageBtn
+                label="→"
+                disabled={page === totalPages}
+                onClick={() => setPage((p) => p + 1)}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <style>{`@keyframes slideInRight { from { transform: translateX(100%); } to { transform: translateX(0); } }`}</style>
+    </>
+  );
+}
+
 /* ══════════════════════════════════════════════════════════════════
    MAIN COMPONENT
 ══════════════════════════════════════════════════════════════════ */
@@ -677,29 +989,21 @@ export default function SegmentationPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState("spenders");
-  const [filterLabel, setFilter] = useState(null);
-  const [search, setSearch] = useState("");
+  const [openSegment, setOpenSegment] = useState(null);
   const [selected, setSelected] = useState(null);
-  const [page, setPage] = useState(1);
-  const PAGE_SIZE = 25;
 
   useEffect(() => {
     analyticsApi
       .memberSegments()
-
       .then(setData)
       .catch(() => setError("Could not load segmentation data."))
       .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
-    setFilter(null);
-    setSearch("");
-    setPage(1);
+    setOpenSegment(null);
+    setSelected(null);
   }, [activeTab]);
-  useEffect(() => {
-    setPage(1);
-  }, [search, filterLabel]);
 
   const rows = useMemo(
     () => (data ? (data[activeTab] ?? []) : []),
@@ -731,37 +1035,17 @@ export default function SegmentationPanel() {
 
   const segmentLabels = useMemo(() => Object.keys(summaryMap), [summaryMap]);
 
-  const filteredRows = useMemo(() => {
-    let out = rows;
-    if (filterLabel) {
-      out = out.filter(
-        (r) =>
-          (activeTab === "spenders"
-            ? r.tier
-            : activeTab === "visitors"
-              ? r.visitor_type
-              : (r.amenity_type ?? r.top_amenity)) === filterLabel,
-      );
-    }
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      out = out.filter((r) =>
-        [
-          r.name,
-          r.member_number,
-          r.email,
-          r.tier,
-          r.visitor_type,
-          r.amenity_type,
-          r.season,
-        ].some((v) => v && String(v).toLowerCase().includes(q)),
-      );
-    }
-    return out;
-  }, [rows, filterLabel, search, activeTab]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
-  const pageRows = filteredRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const segmentRows = useMemo(() => {
+    if (!openSegment) return [];
+    return rows.filter(
+      (r) =>
+        (activeTab === "spenders"
+          ? r.tier
+          : activeTab === "visitors"
+            ? r.visitor_type
+            : (r.amenity_type ?? r.top_amenity)) === openSegment,
+    );
+  }, [rows, openSegment, activeTab]);
 
   const tableHeaders =
     activeTab === "spenders"
@@ -812,40 +1096,50 @@ export default function SegmentationPanel() {
       <div
         style={{
           display: "flex",
-          gap: 2,
-          background: "var(--dashboard-border)",
-          borderRadius: 10,
-          padding: 3,
+          gap: 8,
+          alignItems: "center",
+          flexWrap: "wrap",
           marginBottom: 20,
-          width: "fit-content",
         }}
       >
-        {SEGMENT_TABS.map(({ key, label, description }) => {
-          const active = activeTab === key;
-          return (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              title={description}
-              style={{
-                border: "none",
-                borderRadius: 8,
-                padding: "7px 20px",
-                cursor: "pointer",
-                fontFamily: "sans-serif",
-                fontSize: 12,
-                fontWeight: active ? 700 : 500,
-                background: active ? C.bg : "transparent",
-                color: active ? C.text : C.muted,
-                boxShadow: active ? "0 1px 4px rgba(0,0,0,0.07)" : "none",
-                transition: "all 0.13s ease",
-                letterSpacing: active ? 0 : "0.01em",
-              }}
-            >
-              {label}
-            </button>
-          );
-        })}
+        <div
+          style={{
+            display: "flex",
+            gap: 2,
+            background: "var(--dashboard-border)",
+            borderRadius: 10,
+            padding: 3,
+            width: "fit-content",
+          }}
+        >
+          {SEGMENT_TABS.map(({ key, label, description }) => {
+            const active = activeTab === key;
+            return (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                title={description}
+                style={{
+                  border: "none",
+                  borderRadius: 8,
+                  padding: "7px 20px",
+                  cursor: "pointer",
+                  fontFamily: "sans-serif",
+                  fontSize: 12,
+                  fontWeight: active ? 700 : 500,
+                  background: active ? C.bg : "transparent",
+                  color: active ? C.text : C.muted,
+                  boxShadow: active ? "0 1px 4px rgba(0,0,0,0.07)" : "none",
+                  transition: "all 0.13s ease",
+                  letterSpacing: active ? 0 : "0.01em",
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <InfoIcon text={SEGMENT_INFO[activeTab]} />
       </div>
 
       {/* ── SEGMENT SUMMARY CARDS ── */}
@@ -860,160 +1154,39 @@ export default function SegmentationPanel() {
             totalSpend={
               activeTab !== "visitors" ? summaryMap[label].totalSpend : null
             }
-            active={filterLabel === label}
-            onClick={() => setFilter((prev) => (prev === label ? null : label))}
+            active={openSegment === label}
+            info={SEGMENT_LABEL_INFO[label]}
+            onClick={() => setOpenSegment(label)}
           />
         ))}
       </div>
 
-      {/* ── CALLOUT ── */}
-      <ContextCallout
-        tab={activeTab}
-        filterLabel={filterLabel}
-        summary={summaryMap}
-      />
-
-      {/* ── SEARCH + COUNT ── */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 12,
-          marginBottom: 14,
-          flexWrap: "wrap",
-        }}
-      >
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name, member number, email…"
-          style={{
-            padding: "8px 12px",
-            borderRadius: 8,
-            border: `1px solid ${C.border}`,
-            fontSize: 12,
-            color: C.text,
-            background: C.bg,
-            outline: "none",
-            width: "min(300px, 100%)",
-            fontFamily: "sans-serif",
-          }}
-        />
-        <span
-          style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}
-        >
-          {filterLabel
-            ? `${filteredRows.length} in ${filterLabel}`
-            : `${filteredRows.length} members`}
-          {search ? `  ·  matching "${search}"` : ""}
-        </span>
-      </div>
-
-      {/* ── TABLE ── */}
-      <div
-        style={{
-          overflowX: "auto",
-          border: `1px solid ${C.border}`,
-          borderRadius: 12,
-        }}
-      >
-        <div style={{ maxHeight: 520, overflowY: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              minWidth: 640,
-              fontFamily: "sans-serif",
-            }}
-          >
-            <thead>
-              <tr>
-                {tableHeaders.map((h) => (
-                  <th key={h} style={th}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {pageRows.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={6}
-                    style={{
-                      ...td,
-                      textAlign: "center",
-                      padding: 40,
-                      color: C.muted,
-                    }}
-                  >
-                    No members found
-                  </td>
-                </tr>
-              ) : (
-                pageRows.map((member, i) => (
-                  <MemberRow
-                    key={member.id ?? `${member.member_number}-${i}`}
-                    member={member}
-                    tab={activeTab}
-                    idx={i}
-                    onClick={() => setSelected(member)}
-                  />
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* ── PAGINATION ── */}
-      {totalPages > 1 && (
+      {segmentLabels.length === 0 && (
         <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginTop: 12,
-            flexWrap: "wrap",
-            gap: 8,
+            border: `1px solid ${C.border}`,
+            borderRadius: 12,
+            padding: 24,
+            color: C.muted,
+            fontSize: 13,
           }}
         >
-          <span
-            style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}
-          >
-            Page {page} of {totalPages}
-          </span>
-          <div style={{ display: "flex", gap: 5 }}>
-            <PageBtn
-              label="←"
-              disabled={page === 1}
-              onClick={() => setPage((p) => p - 1)}
-            />
-            {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-              const start = Math.min(
-                Math.max(1, page - 2),
-                Math.max(1, totalPages - 4),
-              );
-              return start + i;
-            }).map((n) => (
-              <PageBtn
-                key={n}
-                label={String(n)}
-                active={n === page}
-                onClick={() => setPage(n)}
-              />
-            ))}
-            <PageBtn
-              label="→"
-              disabled={page === totalPages}
-              onClick={() => setPage((p) => p + 1)}
-            />
-          </div>
+          No segment data found.
         </div>
       )}
 
-      {/* ── SIDE PANEL ── */}
+      {openSegment && (
+        <SegmentTableSidePanel
+          tab={activeTab}
+          label={openSegment}
+          rows={segmentRows}
+          summary={summaryMap[openSegment]}
+          tableHeaders={tableHeaders}
+          onClose={() => setOpenSegment(null)}
+          onSelectMember={setSelected}
+        />
+      )}
+
       {selected && (
         <MemberSidePanel
           member={selected}

@@ -1,6 +1,15 @@
 // frontend/src/pages/mltab/MarketingTargetingPanel.jsx
 import { useEffect, useMemo, useState } from "react";
-import { Download, Info, RefreshCw, Search, X } from "lucide-react";
+import {
+  Download,
+  Edit3,
+  Info,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
 import { analyticsApi } from "../../api/analytics";
 
 const C = {
@@ -67,9 +76,19 @@ const td = {
   whiteSpace: "nowrap",
 };
 
+const emptyForm = {
+  key: "",
+  title: "",
+  category: "Custom",
+  description: "",
+  where: "total_visits >= 1",
+  reason: "'Custom campaign match.'",
+  sort: "lifetime_spend DESC",
+  is_active: true,
+};
+
 function money(value) {
-  const n = Number(value || 0);
-  return n.toLocaleString(undefined, {
+  return Number(value || 0).toLocaleString(undefined, {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
@@ -142,9 +161,6 @@ function toExportRows(rows = []) {
     paid_revenue: r.paid_revenue ?? 0,
     free_value: r.free_value ?? 0,
     lifetime_spend: r.lifetime_spend ?? 0,
-    potential_revenue: r.potential_revenue ?? 0,
-    villa_nights_value: r.villa_nights_value ?? 0,
-    avg_villa_night_value: r.avg_villa_night_value ?? 0,
     first_visit: r.first_visit ?? "",
     last_visit: r.last_visit ?? "",
     date_of_birth: r.date_of_birth ?? "",
@@ -189,20 +205,47 @@ function Metric({ label, value }) {
   );
 }
 
-function CampaignCard({ campaign, onOpen }) {
+function ActionButton({
+  children,
+  onClick,
+  danger = false,
+  primary = false,
+  disabled = false,
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...buttonBase,
+        background: primary ? C.accent : danger ? "rgba(196,91,91,0.09)" : C.bg,
+        color: primary ? "white" : danger ? "#9f2f2f" : C.accent,
+        border: `1px solid ${danger ? "rgba(196,91,91,0.25)" : primary ? C.accent : C.border}`,
+        opacity: disabled ? 0.55 : 1,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function CampaignCard({ campaign, onOpen, onEdit, onToggle, onDelete }) {
   const [showInfo, setShowInfo] = useState(false);
+  const inactive = campaign.isActive === false;
 
   return (
     <div
-      onClick={() => onOpen(campaign)}
+      onClick={() => !inactive && onOpen(campaign)}
       style={{
         ...card,
         display: "flex",
         flexDirection: "column",
-        minHeight: 224,
-        borderTop: `4px solid ${C.accent}`,
-        cursor: "pointer",
+        minHeight: 248,
+        borderTop: `4px solid ${inactive ? C.textMuted : C.accent}`,
+        cursor: inactive ? "default" : "pointer",
         position: "relative",
+        opacity: inactive ? 0.62 : 1,
       }}
     >
       <div
@@ -215,14 +258,15 @@ function CampaignCard({ campaign, onOpen }) {
               alignItems: "center",
               padding: "4px 9px",
               borderRadius: 999,
-              background: tint(C.accent, 12),
-              color: C.accent,
+              background: tint(inactive ? C.textMuted : C.accent, 12),
+              color: inactive ? C.textMuted : C.accent,
               fontSize: 11,
               fontWeight: 800,
               fontFamily: "sans-serif",
             }}
           >
             {campaign.category}
+            {inactive ? " · Disabled" : ""}
           </span>
           <h3
             style={{
@@ -236,7 +280,6 @@ function CampaignCard({ campaign, onOpen }) {
             {campaign.title}
           </h3>
         </div>
-
         <button
           type="button"
           onClick={(e) => {
@@ -269,7 +312,7 @@ function CampaignCard({ campaign, onOpen }) {
             position: "absolute",
             top: 58,
             right: 16,
-            width: 260,
+            width: 280,
             padding: 12,
             borderRadius: 12,
             border: `1px solid ${C.border}`,
@@ -282,7 +325,13 @@ function CampaignCard({ campaign, onOpen }) {
             zIndex: 5,
           }}
         >
-          {campaign.description}
+          <strong style={{ color: C.textPrimary }}>What it means:</strong>
+          <div style={{ marginTop: 5 }}>
+            {campaign.description || "No description added."}
+          </div>
+          <div style={{ marginTop: 10, color: C.textMuted }}>
+            Rule: <code>{campaign.where || "—"}</code>
+          </div>
         </div>
       )}
 
@@ -297,31 +346,268 @@ function CampaignCard({ campaign, onOpen }) {
         <Metric label="Targets" value={number(campaign.memberCount)} />
         <Metric label="Emails" value={number(campaign.emailableCount)} />
         <Metric label="Potential" value={money(campaign.potentialRevenue)} />
-        <Metric
-          label="Avg Villa Night"
-          value={money(campaign.avgVillaNightValue)}
-        />
+        <Metric label="Avg Lifetime" value={money(campaign.avgLifetimeSpend)} />
       </div>
 
       <div
+        onClick={(e) => e.stopPropagation()}
         style={{
+          display: "flex",
+          gap: 8,
+          flexWrap: "wrap",
           marginTop: "auto",
           paddingTop: 14,
-          color: C.textMuted,
-          fontSize: 12,
-          fontWeight: 800,
-          fontFamily: "sans-serif",
         }}
       >
-        Click to view members/export CSV
+        <ActionButton onClick={() => onEdit(campaign)}>
+          <Edit3 size={13} /> Edit
+        </ActionButton>
+        <ActionButton onClick={() => onToggle(campaign)}>
+          {inactive ? "Enable" : "Disable"}
+        </ActionButton>
+        <ActionButton danger onClick={() => onDelete(campaign)}>
+          <Trash2 size={13} /> Delete
+        </ActionButton>
       </div>
     </div>
   );
 }
 
+function CampaignFormDrawer({ campaign, onClose, onSave }) {
+  const [form, setForm] = useState(() =>
+    campaign
+      ? {
+          key: campaign.key || "",
+          title: campaign.title || "",
+          category: campaign.category || "Custom",
+          description: campaign.description || "",
+          where: campaign.where || "total_visits >= 1",
+          reason: campaign.reason || "'Custom campaign match.'",
+          sort: campaign.sort || "lifetime_spend DESC",
+          is_active: campaign.isActive !== false,
+        }
+      : emptyForm,
+  );
+  const editing = Boolean(campaign?.key);
+  const set = (field, value) =>
+    setForm((prev) => ({ ...prev, [field]: value }));
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: C.overlay,
+        zIndex: 1100,
+        display: "flex",
+        justifyContent: "flex-end",
+      }}
+      onClick={onClose}
+    >
+      <aside
+        style={{
+          width: "min(560px, 94vw)",
+          height: "100%",
+          background: C.bg,
+          boxShadow: C.shadow,
+          display: "flex",
+          flexDirection: "column",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            padding: "20px 22px",
+            borderBottom: `1px solid ${C.border}`,
+            background: C.panelAlt,
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 14,
+          }}
+        >
+          <div>
+            <p
+              style={{
+                margin: "0 0 5px",
+                color: C.textMuted,
+                fontSize: 11,
+                fontWeight: 900,
+                textTransform: "uppercase",
+                letterSpacing: "0.08em",
+                fontFamily: "sans-serif",
+              }}
+            >
+              {editing ? "Edit Campaign" : "Add Campaign"}
+            </p>
+            <h2
+              style={{
+                margin: 0,
+                color: C.textPrimary,
+                fontSize: 21,
+                fontWeight: 900,
+                fontFamily: "sans-serif",
+              }}
+            >
+              {editing ? campaign.title : "New marketing campaign"}
+            </h2>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              border: `1px solid ${C.border}`,
+              background: C.bg,
+              color: C.textPrimary,
+              borderRadius: 10,
+              width: 36,
+              height: 36,
+              cursor: "pointer",
+            }}
+          >
+            <X size={17} />
+          </button>
+        </div>
+
+        <div
+          style={{ padding: 20, overflowY: "auto", display: "grid", gap: 14 }}
+        >
+          <Field
+            label="Campaign Key"
+            help="Use lowercase_with_underscores. Leave blank when adding to auto-create from title."
+          >
+            <input
+              disabled={editing}
+              value={form.key}
+              onChange={(e) => set("key", e.target.value)}
+              placeholder="custom_campaign_key"
+              style={inputStyle(editing)}
+            />
+          </Field>
+          <Field label="Title">
+            <input
+              value={form.title}
+              onChange={(e) => set("title", e.target.value)}
+              placeholder="Summer Villa Win Back"
+              style={inputStyle()}
+            />
+          </Field>
+          <Field label="Category">
+            <input
+              value={form.category}
+              onChange={(e) => set("category", e.target.value)}
+              placeholder="Win Back"
+              style={inputStyle()}
+            />
+          </Field>
+          <Field label="Info Icon Description">
+            <textarea
+              value={form.description}
+              onChange={(e) => set("description", e.target.value)}
+              rows={3}
+              placeholder="Short explanation for users."
+              style={inputStyle()}
+            />
+          </Field>
+          <Field
+            label="Audience Rule / WHERE"
+            help="Examples: lifetime_spend >= 10000, preferred_villa = 'Haystack', total_visits >= 2 AND last_visit < CURRENT_DATE - INTERVAL '12 months'."
+          >
+            <textarea
+              value={form.where}
+              onChange={(e) => set("where", e.target.value)}
+              rows={4}
+              style={inputStyle()}
+            />
+          </Field>
+          <Field
+            label="Member Reason SQL"
+            help="Text shown per member. Keep it as a SQL expression."
+          >
+            <textarea
+              value={form.reason}
+              onChange={(e) => set("reason", e.target.value)}
+              rows={3}
+              style={inputStyle()}
+            />
+          </Field>
+          <Field label="Sort">
+            <input
+              value={form.sort}
+              onChange={(e) => set("sort", e.target.value)}
+              style={inputStyle()}
+            />
+          </Field>
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 9,
+              color: C.textPrimary,
+              fontSize: 13,
+              fontWeight: 800,
+              fontFamily: "sans-serif",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={form.is_active}
+              onChange={(e) => set("is_active", e.target.checked)}
+            />{" "}
+            Active
+          </label>
+        </div>
+
+        <div
+          style={{
+            padding: 18,
+            borderTop: `1px solid ${C.border}`,
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 10,
+          }}
+        >
+          <ActionButton onClick={onClose}>Cancel</ActionButton>
+          <ActionButton primary onClick={() => onSave(form, editing)}>
+            {editing ? "Save Changes" : "Add Campaign"}
+          </ActionButton>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function Field({ label, help, children }) {
+  return (
+    <label style={{ display: "grid", gap: 6, fontFamily: "sans-serif" }}>
+      <span style={{ color: C.textPrimary, fontSize: 12, fontWeight: 900 }}>
+        {label}
+      </span>
+      {children}
+      {help && (
+        <span style={{ color: C.textMuted, fontSize: 11, lineHeight: 1.4 }}>
+          {help}
+        </span>
+      )}
+    </label>
+  );
+}
+
+function inputStyle(disabled = false) {
+  return {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "9px 11px",
+    borderRadius: 10,
+    border: `1px solid ${C.border}`,
+    background: disabled ? C.panelAlt : C.bg,
+    color: C.textPrimary,
+    outline: "none",
+    fontSize: 13,
+    fontFamily: "sans-serif",
+  };
+}
+
 function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
   const [search, setSearch] = useState("");
-
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return rows;
@@ -342,19 +628,19 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
         .some((value) => String(value).toLowerCase().includes(q)),
     );
   }, [rows, search]);
-
-  const totals = useMemo(() => {
-    return filteredRows.reduce(
-      (acc, r) => {
-        acc.paid += Number(r.paid_revenue || 0);
-        acc.free += Number(r.free_value || 0);
-        acc.lifetime += Number(r.lifetime_spend || 0);
-        acc.potential += Number(r.potential_revenue || 0);
-        return acc;
-      },
-      { paid: 0, free: 0, lifetime: 0, potential: 0 },
-    );
-  }, [filteredRows]);
+  const totals = useMemo(
+    () =>
+      filteredRows.reduce(
+        (acc, r) => {
+          acc.paid += Number(r.paid_revenue || 0);
+          acc.free += Number(r.free_value || 0);
+          acc.lifetime += Number(r.lifetime_spend || 0);
+          return acc;
+        },
+        { paid: 0, free: 0, lifetime: 0 },
+      ),
+    [filteredRows],
+  );
 
   return (
     <div
@@ -427,7 +713,6 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
               {campaign?.description}
             </p>
           </div>
-
           <button
             onClick={onClose}
             style={{
@@ -465,11 +750,10 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
               label="Visible Targets"
               value={number(filteredRows.length)}
             />
-            <Metric label="Potential" value={money(totals.potential)} />
+            <Metric label="Potential" value={money(totals.lifetime)} />
             <Metric label="Paid Revenue" value={money(totals.paid)} />
-            <Metric label="Lifetime Spend" value={money(totals.lifetime)} />
+            <Metric label="Free Value" value={money(totals.free)} />
           </div>
-
           <div
             style={{
               display: "flex",
@@ -507,21 +791,13 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
                 }}
               />
             </div>
-
-            <button
-              onClick={() => onExport(filteredRows)}
+            <ActionButton
+              primary
               disabled={!filteredRows.length}
-              style={{
-                ...buttonBase,
-                background: C.accent,
-                color: "white",
-                border: `1px solid ${C.accent}`,
-                opacity: filteredRows.length ? 1 : 0.55,
-              }}
+              onClick={() => onExport(filteredRows)}
             >
-              <Download size={14} />
-              Export Visible CSV
-            </button>
+              <Download size={14} /> Export Visible CSV
+            </ActionButton>
           </div>
 
           <div
@@ -553,19 +829,31 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
               >
                 <thead>
                   <tr>
-                    <th style={th}>Name</th>
-                    <th style={th}>Email</th>
-                    <th style={th}>Phone</th>
-                    <th style={th}>Country</th>
-                    <th style={th}>Source</th>
-                    <th style={th}>Season</th>
-                    <th style={th}>Villa</th>
-                    <th style={th}>Amenity</th>
-                    <th style={{ ...th, textAlign: "right" }}>Potential</th>
-                    <th style={{ ...th, textAlign: "right" }}>Paid</th>
-                    <th style={{ ...th, textAlign: "right" }}>Free</th>
-                    <th style={th}>Last Visit</th>
-                    <th style={th}>Reason</th>
+                    {[
+                      "Name",
+                      "Email",
+                      "Phone",
+                      "Country",
+                      "Source",
+                      "Season",
+                      "Villa",
+                      "Amenity",
+                      "Potential",
+                      "Paid",
+                      "Free",
+                      "Last Visit",
+                      "Reason",
+                    ].map((h, idx) => (
+                      <th
+                        key={h}
+                        style={{
+                          ...th,
+                          textAlign: idx >= 8 && idx <= 10 ? "right" : "left",
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -592,7 +880,7 @@ function CampaignDrawer({ campaign, rows, loading, onClose, onExport }) {
                         <td style={td}>{r.preferred_villa || "—"}</td>
                         <td style={td}>{r.preferred_amenity || "—"}</td>
                         <td style={{ ...td, textAlign: "right" }}>
-                          {money(r.potential_revenue)}
+                          {money(r.lifetime_spend)}
                         </td>
                         <td style={{ ...td, textAlign: "right" }}>
                           {money(r.paid_revenue)}
@@ -633,12 +921,15 @@ export default function MarketingTargetingPanel() {
   const [membersLoading, setMembersLoading] = useState(false);
   const [category, setCategory] = useState("All");
   const [search, setSearch] = useState("");
+  const [showInactive, setShowInactive] = useState(false);
+  const [formCampaign, setFormCampaign] = useState(null);
+  const [formOpen, setFormOpen] = useState(false);
 
   const loadCampaigns = async () => {
     try {
       setLoading(true);
       setError("");
-      const data = await analyticsApi.marketingCampaigns();
+      const data = await analyticsApi.marketingCampaigns(showInactive);
       setCampaigns(data.campaigns || []);
     } catch (err) {
       setError(err.message || "Failed to load marketing campaigns.");
@@ -649,7 +940,7 @@ export default function MarketingTargetingPanel() {
 
   useEffect(() => {
     loadCampaigns();
-  }, []);
+  }, [showInactive]);
 
   const categories = useMemo(
     () => [
@@ -670,17 +961,20 @@ export default function MarketingTargetingPanel() {
     });
   }, [campaigns, category, search]);
 
-  const totals = useMemo(() => {
-    return campaigns.reduce(
-      (acc, c) => {
-        acc.members += Number(c.memberCount || 0);
-        acc.emails += Number(c.emailableCount || 0);
-        acc.revenue += Number(c.potentialRevenue || 0);
-        return acc;
-      },
-      { members: 0, emails: 0, revenue: 0 },
-    );
-  }, [campaigns]);
+  const totals = useMemo(
+    () =>
+      campaigns.reduce(
+        (acc, c) => {
+          if (c.isActive === false) return acc;
+          acc.members += Number(c.memberCount || 0);
+          acc.emails += Number(c.emailableCount || 0);
+          acc.revenue += Number(c.potentialRevenue || 0);
+          return acc;
+        },
+        { members: 0, emails: 0, revenue: 0 },
+      ),
+    [campaigns],
+  );
 
   const openCampaign = async (campaign) => {
     setActiveCampaign(campaign);
@@ -697,11 +991,48 @@ export default function MarketingTargetingPanel() {
     }
   };
 
+  const saveCampaign = async (form, editing) => {
+    try {
+      setError("");
+      if (editing) await analyticsApi.updateMarketingCampaign(form.key, form);
+      else await analyticsApi.createMarketingCampaign(form);
+      setFormOpen(false);
+      setFormCampaign(null);
+      await loadCampaigns();
+    } catch (err) {
+      setError(err.message || "Failed to save campaign.");
+    }
+  };
+
+  const toggleCampaign = async (campaign) => {
+    try {
+      await analyticsApi.setMarketingCampaignStatus(
+        campaign.key,
+        campaign.isActive === false,
+      );
+      await loadCampaigns();
+    } catch (err) {
+      setError(err.message || "Failed to update campaign status.");
+    }
+  };
+
+  const deleteCampaign = async (campaign) => {
+    const ok = window.confirm(
+      `Delete/disable ${campaign.title}? Built-in campaigns will be disabled, custom campaigns will be deleted.`,
+    );
+    if (!ok) return;
+    try {
+      await analyticsApi.deleteMarketingCampaign(campaign.key);
+      await loadCampaigns();
+    } catch (err) {
+      setError(err.message || "Failed to delete campaign.");
+    }
+  };
+
   const exportVisibleMembers = (rows) => {
-    const exportRows = toExportRows(rows || []);
     const date = new Date().toISOString().slice(0, 10);
     downloadRowsAsCsv(
-      exportRows,
+      toExportRows(rows || []),
       `${activeCampaign?.key || "marketing_campaign"}_${date}.csv`,
     );
   };
@@ -750,22 +1081,28 @@ export default function MarketingTargetingPanel() {
               Action-ready campaign audiences
             </h2>
           </div>
-
-          <button
-            onClick={loadCampaigns}
+          <div
             style={{
-              ...buttonBase,
-              height: 38,
-              background: C.bg,
-              color: C.accent,
-              border: `1px solid ${C.border}`,
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              alignItems: "flex-start",
             }}
           >
-            <RefreshCw size={14} />
-            Refresh
-          </button>
+            <ActionButton
+              primary
+              onClick={() => {
+                setFormCampaign(null);
+                setFormOpen(true);
+              }}
+            >
+              <Plus size={14} /> Add Campaign
+            </ActionButton>
+            <ActionButton onClick={loadCampaigns}>
+              <RefreshCw size={14} /> Refresh
+            </ActionButton>
+          </div>
         </div>
-
         <div
           style={{
             display: "grid",
@@ -774,7 +1111,10 @@ export default function MarketingTargetingPanel() {
             marginTop: 18,
           }}
         >
-          <Metric label="Campaigns" value={number(campaigns.length)} />
+          <Metric
+            label="Active Campaigns"
+            value={number(campaigns.filter((c) => c.isActive !== false).length)}
+          />
           <Metric label="Total Audience Rows" value={number(totals.members)} />
           <Metric label="Potential Value" value={money(totals.revenue)} />
         </div>
@@ -817,7 +1157,6 @@ export default function MarketingTargetingPanel() {
             }}
           />
         </div>
-
         <select
           value={category}
           onChange={(e) => setCategory(e.target.value)}
@@ -836,6 +1175,24 @@ export default function MarketingTargetingPanel() {
             <option key={c}>{c}</option>
           ))}
         </select>
+        <label
+          style={{
+            display: "inline-flex",
+            gap: 7,
+            alignItems: "center",
+            color: C.textMuted,
+            fontSize: 12,
+            fontWeight: 800,
+            fontFamily: "sans-serif",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={showInactive}
+            onChange={(e) => setShowInactive(e.target.checked)}
+          />{" "}
+          Show disabled
+        </label>
       </div>
 
       {error && (
@@ -872,6 +1229,12 @@ export default function MarketingTargetingPanel() {
               key={campaign.key}
               campaign={campaign}
               onOpen={openCampaign}
+              onEdit={(c) => {
+                setFormCampaign(c);
+                setFormOpen(true);
+              }}
+              onToggle={toggleCampaign}
+              onDelete={deleteCampaign}
             />
           ))}
         </div>
@@ -884,6 +1247,16 @@ export default function MarketingTargetingPanel() {
           loading={membersLoading}
           onClose={() => setActiveCampaign(null)}
           onExport={exportVisibleMembers}
+        />
+      )}
+      {formOpen && (
+        <CampaignFormDrawer
+          campaign={formCampaign}
+          onClose={() => {
+            setFormOpen(false);
+            setFormCampaign(null);
+          }}
+          onSave={saveCampaign}
         />
       )}
     </div>

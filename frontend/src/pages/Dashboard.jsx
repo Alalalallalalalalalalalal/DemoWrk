@@ -39,6 +39,7 @@ import {
   ChevronDown,
   MoreHorizontal,
   Settings,
+  PartyPopper,
 } from "lucide-react";
 import { analyticsApi } from "../api/analytics";
 import { COLORS, TOOLTIP_STYLE } from "./styles/Dashboardstyles";
@@ -68,6 +69,7 @@ const TABS = [
   { id: "visits", label: "Visits & Rooms", Icon: BedDouble },
   { id: "finance", label: "Finance", Icon: DollarSign },
   { id: "reports", label: "Reports", Icon: BookOpen },
+  { id: "market", label: "Marketing Targeting", Icon: PartyPopper },
   { id: "ml", label: "ML Insights", Icon: Sparkles },
 ];
 
@@ -77,6 +79,7 @@ const SUB = {
   visits: "Room performance, booking trends and live roster",
   finance: "Outstanding balances and spend breakdown",
   reports: "View and filter raw report data",
+  market: "Analysis and Insights on market Targeting",
   ml: "Segmentation, amenity insights and campaign recommendations — all monetary figures in $USD",
 };
 
@@ -1063,13 +1066,23 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* ════ ML INSIGHTS ════ */}
-        {activeTab === "ml" && (
+        {/* ════ MARKET TARGETING ════ */}
+        {activeTab === "market" && (
           <div className="dashboard-section">
             <SectionLabel>Customer Segments</SectionLabel>
             <ErrorBoundary title="Member Segments">
               <SegmentationPanel />
             </ErrorBoundary>
+
+            <SectionLabel>Marketing Targeting</SectionLabel>
+            <ErrorBoundary title="Marketing Targeting ">
+              <MarketingTargetingPanel />
+            </ErrorBoundary>
+          </div>
+        )}
+        {/* ════ ML INSIGHTS ════ */}
+        {activeTab === "ml" && (
+          <div className="dashboard-section">
             <SectionLabel>Season Filters</SectionLabel>
             <ErrorBoundary title="Season Filter Bar">
               <SeasonFilterBar onSeasonGroupChange={setActiveSeasonGroup} />
@@ -1077,10 +1090,6 @@ export default function Dashboard() {
             <SectionLabel>Amenity Season Analysis</SectionLabel>
             <ErrorBoundary title="Amenity Season Insights">
               <AmenitySeasonPanel seasonGroupId={activeSeasonGroup?.id} />
-            </ErrorBoundary>
-            <SectionLabel>Marketing Targeting</SectionLabel>
-            <ErrorBoundary title="Marketing Targeting ">
-              <MarketingTargetingPanel />
             </ErrorBoundary>
           </div>
         )}

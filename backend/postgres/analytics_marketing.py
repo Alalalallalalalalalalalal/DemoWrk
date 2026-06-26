@@ -15,6 +15,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
+import re
+
 
 from .analytics_shared import get_db
 
@@ -424,13 +427,91 @@ CAMPAIGN_DEFINITIONS = {
 }
 
 
+
+class CampaignPayload(BaseModel):
+    key: str | None = Field(default=None, max_length=80)
+    title: str = Field(min_length=2, max_length=160)
+    category: str = Field(default="Custom", min_length=2, max_length=80)
+    description: str = Field(default="", max_length=800)
+    where: str = Field(default="total_visits >= 1", min_length=1, max_length=1200)
+    reason: str = Field(default="'Custom campaign match.'", min_length=1, max_length=1200)
+    sort: str = Field(default="lifetime_spend DESC", min_length=1, max_length=400)
+    is_active: bool = True
+
+
+class CampaignStatusPayload(BaseModel):
+    is_active: bool
+
+
 def _rows(db: Session, sql: str, params: dict | None = None):
     return [dict(row) for row in db.execute(text(sql), params or {}).mappings().all()]
 
 
-def _campaign_sql(campaign_key: str, *, limit: int | None = None) -> str:
-    campaign = CAMPAIGN_DEFINITIONS[campaign_key]
+def _slug(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "_", value.strip().lower()).strip("_")
+    return cleaned or "custom_campaign"
+
+
+def _validate_sql_piece(value: str, field: str) -> str:
+    # These snippets are placed inside a SELECT/WHERE/ORDER BY. Keep them expression-only.
+    blocked = [";", "--", "/*", "*/", " drop ", " delete ", " insert ", " update ", " alter ", " create ", " truncate "]
+    low = f" {value.lower()} "
+    if any(token in low for token in blocked):
+        raise HTTPException(status_code=400, detail=f"Unsafe SQL in {field}.")
+    return value.strip()
+
+
+def _ensure_campaign_table(db: Session):
+    db.execute(text("""
+        CREATE TABLE IF NOT EXISTS marketing_campaign_definitions (
+            campaign_key TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'Custom',
+            description TEXT NOT NULL DEFAULT '',
+            where_sql TEXT NOT NULL,
+            reason_sql TEXT NOT NULL,
+            sort_sql TEXT NOT NULL DEFAULT 'lifetime_spend DESC',
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            is_custom BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+        )
+    """))
+    db.commit()
+
+
+def _get_campaign_definitions(db: Session, include_inactive: bool = False) -> dict:
+    _ensure_campaign_table(db)
+    definitions = {
+        key: {**value, "key": key, "is_active": True, "is_custom": False}
+        for key, value in CAMPAIGN_DEFINITIONS.items()
+    }
+    overrides = _rows(db, """
+        SELECT campaign_key, title, category, description, where_sql, reason_sql, sort_sql, is_active, is_custom
+        FROM marketing_campaign_definitions
+    """)
+    for row in overrides:
+        definitions[row["campaign_key"]] = {
+            "key": row["campaign_key"],
+            "title": row["title"],
+            "category": row["category"],
+            "description": row["description"],
+            "where": row["where_sql"],
+            "reason": row["reason_sql"],
+            "sort": row["sort_sql"],
+            "is_active": bool(row["is_active"]),
+            "is_custom": bool(row["is_custom"]),
+        }
+    if not include_inactive:
+        definitions = {k: v for k, v in definitions.items() if v.get("is_active", True)}
+    return definitions
+
+
+def _campaign_sql(campaign_key: str, campaign: dict, *, limit: int | None = None) -> str:
     limit_sql = "" if limit is None else "LIMIT :limit"
+    where_sql = _validate_sql_piece(campaign["where"], "where")
+    reason_sql = _validate_sql_piece(campaign["reason"], "reason")
+    sort_sql = _validate_sql_piece(campaign["sort"], "sort")
 
     return f"""
         {BASE_MARKETING_CTES},
@@ -465,10 +546,10 @@ def _campaign_sql(campaign_key: str, *, limit: int | None = None) -> str:
                 business_source,
                 '{campaign_key}' AS campaign_key,
                 :campaign_title AS campaign_name,
-                ({campaign['reason']}) AS campaign_reason
+                ({reason_sql}) AS campaign_reason
             FROM member_profile
-            WHERE {campaign['where']}
-            ORDER BY {campaign['sort']}
+            WHERE {where_sql}
+            ORDER BY {sort_sql}
             {limit_sql}
         )
         SELECT *
@@ -477,11 +558,17 @@ def _campaign_sql(campaign_key: str, *, limit: int | None = None) -> str:
 
 
 @router.get("/ml/marketing-campaigns")
-def marketing_campaigns(db: Session = Depends(get_db)):
+def marketing_campaigns(
+    include_inactive: bool = Query(default=False),
+    db: Session = Depends(get_db),
+):
     """Return campaign cards with counts and summary KPIs."""
     cards = []
+    definitions = _get_campaign_definitions(db, include_inactive=include_inactive)
 
-    for key, campaign in CAMPAIGN_DEFINITIONS.items():
+    for key, campaign in definitions.items():
+        if not include_inactive and not campaign.get("is_active", True):
+            continue
         sql = f"""
             {BASE_MARKETING_CTES}
             SELECT
@@ -496,29 +583,138 @@ def marketing_campaigns(db: Session = Depends(get_db)):
                 COUNT(DISTINCT preferred_amenity)::INT AS amenity_count,
                 COUNT(DISTINCT business_source)::INT AS source_count
             FROM member_profile
-            WHERE {campaign['where']}
+            WHERE {_validate_sql_piece(campaign['where'], 'where')}
         """
         stats = _rows(db, sql)[0]
-        cards.append(
-            {
-                "key": key,
-                "title": campaign["title"],
-                "category": campaign["category"],
-                "description": campaign["description"],
-                "memberCount": stats.get("member_count", 0),
-                "emailableCount": stats.get("emailable_count", 0),
-                "potentialRevenue": float(stats.get("potential_revenue") or 0),
-                "avgLifetimeSpend": float(stats.get("avg_lifetime_spend") or 0),
-                "avgPaidRevenue": float(stats.get("avg_paid_revenue") or 0),
-                "totalFreeValue": float(stats.get("total_free_value") or 0),
-                "seasonCount": stats.get("season_count", 0),
-                "villaCount": stats.get("villa_count", 0),
-                "amenityCount": stats.get("amenity_count", 0),
-                "sourceCount": stats.get("source_count", 0),
-            }
-        )
+        cards.append({
+            "key": key,
+            "title": campaign["title"],
+            "category": campaign["category"],
+            "description": campaign["description"],
+            "where": campaign["where"],
+            "reason": campaign["reason"],
+            "sort": campaign["sort"],
+            "isActive": bool(campaign.get("is_active", True)),
+            "isCustom": bool(campaign.get("is_custom", False)),
+            "memberCount": stats.get("member_count", 0),
+            "emailableCount": stats.get("emailable_count", 0),
+            "potentialRevenue": float(stats.get("potential_revenue") or 0),
+            "avgLifetimeSpend": float(stats.get("avg_lifetime_spend") or 0),
+            "avgPaidRevenue": float(stats.get("avg_paid_revenue") or 0),
+            "totalFreeValue": float(stats.get("total_free_value") or 0),
+            "seasonCount": stats.get("season_count", 0),
+            "villaCount": stats.get("villa_count", 0),
+            "amenityCount": stats.get("amenity_count", 0),
+            "sourceCount": stats.get("source_count", 0),
+        })
 
     return {"campaigns": cards}
+
+
+@router.post("/ml/marketing-campaigns")
+def create_marketing_campaign(payload: CampaignPayload, db: Session = Depends(get_db)):
+    _ensure_campaign_table(db)
+    key = _slug(payload.key or payload.title)
+    existing = _get_campaign_definitions(db, include_inactive=True)
+    if key in existing:
+        raise HTTPException(status_code=409, detail="Campaign key already exists. Use edit instead.")
+    db.execute(text("""
+        INSERT INTO marketing_campaign_definitions
+            (campaign_key, title, category, description, where_sql, reason_sql, sort_sql, is_active, is_custom)
+        VALUES
+            (:key, :title, :category, :description, :where_sql, :reason_sql, :sort_sql, :is_active, TRUE)
+    """), {
+        "key": key,
+        "title": payload.title.strip(),
+        "category": payload.category.strip(),
+        "description": payload.description.strip(),
+        "where_sql": _validate_sql_piece(payload.where, "where"),
+        "reason_sql": _validate_sql_piece(payload.reason, "reason"),
+        "sort_sql": _validate_sql_piece(payload.sort, "sort"),
+        "is_active": payload.is_active,
+    })
+    db.commit()
+    return {"ok": True, "key": key}
+
+
+@router.put("/ml/marketing-campaigns/{campaign_key}")
+def update_marketing_campaign(campaign_key: str, payload: CampaignPayload, db: Session = Depends(get_db)):
+    _ensure_campaign_table(db)
+    existing = _get_campaign_definitions(db, include_inactive=True)
+    if campaign_key not in existing:
+        raise HTTPException(status_code=404, detail="Unknown marketing campaign")
+    is_custom = bool(existing[campaign_key].get("is_custom", False))
+    db.execute(text("""
+        INSERT INTO marketing_campaign_definitions
+            (campaign_key, title, category, description, where_sql, reason_sql, sort_sql, is_active, is_custom, updated_at)
+        VALUES
+            (:key, :title, :category, :description, :where_sql, :reason_sql, :sort_sql, :is_active, :is_custom, NOW())
+        ON CONFLICT (campaign_key) DO UPDATE SET
+            title = EXCLUDED.title,
+            category = EXCLUDED.category,
+            description = EXCLUDED.description,
+            where_sql = EXCLUDED.where_sql,
+            reason_sql = EXCLUDED.reason_sql,
+            sort_sql = EXCLUDED.sort_sql,
+            is_active = EXCLUDED.is_active,
+            is_custom = EXCLUDED.is_custom,
+            updated_at = NOW()
+    """), {
+        "key": campaign_key,
+        "title": payload.title.strip(),
+        "category": payload.category.strip(),
+        "description": payload.description.strip(),
+        "where_sql": _validate_sql_piece(payload.where, "where"),
+        "reason_sql": _validate_sql_piece(payload.reason, "reason"),
+        "sort_sql": _validate_sql_piece(payload.sort, "sort"),
+        "is_active": payload.is_active,
+        "is_custom": is_custom,
+    })
+    db.commit()
+    return {"ok": True, "key": campaign_key}
+
+
+@router.patch("/ml/marketing-campaigns/{campaign_key}/status")
+def set_marketing_campaign_status(campaign_key: str, payload: CampaignStatusPayload, db: Session = Depends(get_db)):
+    existing = _get_campaign_definitions(db, include_inactive=True)
+    if campaign_key not in existing:
+        raise HTTPException(status_code=404, detail="Unknown marketing campaign")
+    campaign = existing[campaign_key]
+    db.execute(text("""
+        INSERT INTO marketing_campaign_definitions
+            (campaign_key, title, category, description, where_sql, reason_sql, sort_sql, is_active, is_custom, updated_at)
+        VALUES
+            (:key, :title, :category, :description, :where_sql, :reason_sql, :sort_sql, :is_active, :is_custom, NOW())
+        ON CONFLICT (campaign_key) DO UPDATE SET
+            is_active = EXCLUDED.is_active,
+            updated_at = NOW()
+    """), {
+        "key": campaign_key,
+        "title": campaign["title"],
+        "category": campaign["category"],
+        "description": campaign["description"],
+        "where_sql": campaign["where"],
+        "reason_sql": campaign["reason"],
+        "sort_sql": campaign["sort"],
+        "is_active": payload.is_active,
+        "is_custom": bool(campaign.get("is_custom", False)),
+    })
+    db.commit()
+    return {"ok": True, "key": campaign_key, "isActive": payload.is_active}
+
+
+@router.delete("/ml/marketing-campaigns/{campaign_key}")
+def delete_marketing_campaign(campaign_key: str, db: Session = Depends(get_db)):
+    existing = _get_campaign_definitions(db, include_inactive=True)
+    if campaign_key not in existing:
+        raise HTTPException(status_code=404, detail="Unknown marketing campaign")
+    if existing[campaign_key].get("is_custom"):
+        db.execute(text("DELETE FROM marketing_campaign_definitions WHERE campaign_key = :key"), {"key": campaign_key})
+        db.commit()
+        return {"ok": True, "deleted": True}
+    # Built-in campaigns are disabled instead of physically deleted.
+    set_marketing_campaign_status(campaign_key, CampaignStatusPayload(is_active=False), db)
+    return {"ok": True, "deleted": False, "disabled": True}
 
 
 @router.get("/ml/marketing-campaigns/{campaign_key}/members")
@@ -528,17 +724,15 @@ def marketing_campaign_members(
     db: Session = Depends(get_db),
 ):
     """Return marketing-ready member rows for one campaign export/drawer."""
-    if campaign_key not in CAMPAIGN_DEFINITIONS:
+    definitions = _get_campaign_definitions(db, include_inactive=True)
+    if campaign_key not in definitions:
         raise HTTPException(status_code=404, detail="Unknown marketing campaign")
 
-    campaign = CAMPAIGN_DEFINITIONS[campaign_key]
+    campaign = definitions[campaign_key]
     rows = _rows(
         db,
-        _campaign_sql(campaign_key, limit=limit),
-        {
-            "limit": limit,
-            "campaign_title": campaign["title"],
-        },
+        _campaign_sql(campaign_key, campaign, limit=limit),
+        {"limit": limit, "campaign_title": campaign["title"]},
     )
 
     return {
