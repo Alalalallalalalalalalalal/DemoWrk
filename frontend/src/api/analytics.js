@@ -57,11 +57,27 @@ export const analyticsApi = {
       ),
     ),
 
-  newVsRepeatVisitorDetails: (year, visitorStatus,) =>
+  newVsRepeatVisitors: (params = {}) =>
     fetchData(
       withQuery(
-        `/analytics/new-vs-repeat-visitors/details`,
-        {year, visitor_status: visitorStatus,},
+        "/analytics/new-vs-repeat-visitors",
+        params,
+      ),
+    ),
+
+  newVsRepeatVisitorDetails: ({
+    visitorStatus,
+    periodStart,
+    periodEnd,
+  }) =>
+    fetchData(
+      withQuery(
+        "/analytics/new-vs-repeat-visitors/details",
+        {
+          visitor_status: visitorStatus,
+          start_date: periodStart,
+          end_date: periodEnd,
+        },
       ),
     ),
 

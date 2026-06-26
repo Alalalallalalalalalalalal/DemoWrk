@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Info, X } from "lucide-react";
 import {
     BarChart,
     Bar,
@@ -21,12 +22,125 @@ import {
 
 import AccountsUSMap from "./AccountsUSMap";
 import StateAccountsModal from "./StateAccountsModal";
+import DateFilterBar from "./DemographicsDateFilter";
 
 /* ─── Shared chart values ───────────────────────────────────── */
 
 const AX = "#9A8E84";
 const GRID = "#DDD6CA";
 const TIP = TOOLTIP_STYLE;
+
+const C = {
+    bg: "var(--dashboard-card)",
+    panel: "var(--dashboard-panel)",
+    panelAlt: "var(--dashboard-panel-alt)",
+    border: "var(--dashboard-border)",
+    text: "var(--dashboard-abyssal)",
+    muted: "var(--dashboard-muted)",
+    soft: "var(--dashboard-text-soft)",
+    accent: "var(--dashboard-deep-blue)",
+    accent2: "var(--dashboard-truffle)",
+    accent3: "var(--dashboard-flame)",
+};
+
+const CHART_INFO = {
+    accountTypes: {
+        summary:
+            "Shows how member and guest accounts are distributed across the club's different account types.",
+        functionality:
+            "Switch between Members and Guests, hover for exact totals, and click a bar to open the matching accounts.",
+        x: "Number of accounts",
+        y: "Account type",
+    },
+    ageGroups: {
+        summary:
+            "Groups accounts into age ranges to show the age composition of the club's member and guest population.",
+        functionality:
+            "Hover over a bar to view the exact number of accounts in each age group.",
+        x: "Age group",
+        y: "Number of accounts",
+    },
+    genderSplit: {
+        summary:
+            "Shows the proportional distribution of accounts by recorded gender.",
+        functionality:
+            "Hover over a slice or review the legend to compare the gender categories.",
+        x: null,
+        y: null,
+    },
+    maritalStatus: {
+        summary:
+            "Shows how accounts are distributed across the recorded marital-status categories.",
+        functionality:
+            "Hover over a slice or review the legend to compare marital-status categories.",
+        x: null,
+        y: null,
+    },
+    memberGuestStatus: {
+        summary:
+            "Compares the current account statuses of members and guests.",
+        functionality:
+            "Hover for exact totals and click a Member or Guest bar to open accounts with that status.",
+        x: "Account status",
+        y: "Number of accounts",
+    },
+    newMembersGuests: {
+        summary:
+            "Tracks the number of members and guests first added during each year.",
+        functionality:
+            "Hover over a point for the annual total and use the legend to distinguish members from guests.",
+        x: "Year first added",
+        y: "Number of new accounts",
+    },
+    newVsRepeatVisitors: {
+        summary:
+            "Compares newly acquired accounts with returning accounts across each year.",
+        functionality:
+            "Click a legend item to show or hide a line. Hover for totals or click a point to open matching account records. Use the date filter to view yearly or monthly New vs Repeat trends.",
+        x: "Year",
+        y: "Number of accounts",
+    },
+    accountsByState: {
+        summary:
+            "Shows the geographic distribution of accounts across US states.",
+        functionality:
+            "Select a state on the map to open the accounts associated with that state.",
+        x: null,
+        y: null,
+    },
+    accountsByCountry: {
+        summary:
+            "Shows the countries represented by member and guest accounts.",
+        functionality:
+            "Hover for the exact total and click a country bar to open its associated accounts.",
+        x: "Number of accounts",
+        y: "Country",
+    },
+    dependentsByAge: {
+        summary:
+            "Groups registered dependents into age ranges to show the age composition of linked family accounts.",
+        functionality:
+            "Hover over a bar to see the exact number of dependents in each age group.",
+        x: "Dependent age group",
+        y: "Number of dependents",
+    },
+    dependentsPerHousehold: {
+        summary:
+            "Shows how households are distributed by their number of registered dependents.",
+        functionality:
+            "Hover for the household total and click a bar to open households in that group.",
+        x: "Dependents in household",
+        y: "Number of households",
+    },
+    topMembersByDependents: {
+        summary:
+            "Ranks member accounts with the highest number of registered dependents.",
+        functionality:
+            "Hover over a bar for the exact dependent count associated with each member account.",
+        x: "Member account",
+        y: "Number of dependents",
+    },
+};
 
 const MONTHS = [
   "All",
@@ -79,12 +193,180 @@ const toDateParams = (filter) => {
 
 /* ─── Local card wrapper ────────────────────────────────────── */
 
-function Card({ title, sub, children }) {
+function ChartInfo({ id }) {
+    const [open, setOpen] = useState(false);
+    const info = CHART_INFO[id];
+
+    if (!info) return null;
+
+    return (
+        <div style={{ position: "relative", display: "inline-flex" }}>
+            <button
+                type="button"
+                onClick={() => setOpen((previous) => !previous)}
+                aria-label="Chart information"
+                aria-expanded={open}
+                style={{
+                    background: "none",
+                    border: "none",
+                    padding: 4,
+                    cursor: "pointer",
+                    color: open ? C.accent2 : C.muted,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    borderRadius: 6,
+                    transition: "color 0.15s ease",
+                }}
+                onMouseEnter={(event) => {
+                    event.currentTarget.style.color = C.accent2;
+                }}
+                onMouseLeave={(event) => {
+                    event.currentTarget.style.color = open
+                        ? C.accent2
+                        : C.muted;
+                }}
+            >
+                <Info size={15} />
+            </button>
+
+            {open && (
+                <>
+                    <div
+                        onClick={() => setOpen(false)}
+                        style={{ position: "fixed", inset: 0, zIndex: 49 }}
+                    />
+
+                    <div
+                        role="dialog"
+                        aria-label="Chart explanation"
+                        style={{
+                            position: "absolute",
+                            top: "calc(100% + 6px)",
+                            right: 0,
+                            zIndex: 50,
+                            width: 280,
+                            background: C.bg,
+                            border: `1px solid ${C.border}`,
+                            borderRadius: 14,
+                            boxShadow: "0 8px 32px rgba(0, 0, 0, 0.14)",
+                            padding: "14px 16px",
+                            fontSize: 12,
+                            color: C.soft,
+                            lineHeight: 1.55,
+                        }}
+                    >
+                        <button
+                            type="button"
+                            onClick={() => setOpen(false)}
+                            aria-label="Close chart information"
+                            style={{
+                                position: "absolute",
+                                top: 8,
+                                right: 8,
+                                background: "none",
+                                border: "none",
+                                cursor: "pointer",
+                                color: C.muted,
+                                padding: 2,
+                                display: "flex",
+                            }}
+                        >
+                            <X size={13} />
+                        </button>
+
+                        <p
+                            style={{
+                                margin: "0 0 10px",
+                                color: C.text,
+                                fontSize: 12,
+                                paddingRight: 16,
+                            }}
+                        >
+                            {info.summary}
+                        </p>
+
+                        {(info.x || info.y) && (
+                            <div
+                                style={{
+                                    borderTop: `1px solid ${C.border}`,
+                                    paddingTop: 10,
+                                    marginBottom: 10,
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    gap: 5,
+                                }}
+                            >
+                                {info.x && (
+                                    <div style={{ display: "flex", gap: 6 }}>
+                                        <span
+                                            style={{
+                                                fontWeight: 700,
+                                                color: C.accent2,
+                                                minWidth: 14,
+                                                fontSize: 11,
+                                            }}
+                                        >
+                                            X
+                                        </span>
+                                        <span>{info.x}</span>
+                                    </div>
+                                )}
+
+                                {info.y && (
+                                    <div style={{ display: "flex", gap: 6 }}>
+                                        <span
+                                            style={{
+                                                fontWeight: 700,
+                                                color: C.accent,
+                                                minWidth: 14,
+                                                fontSize: 11,
+                                            }}
+                                        >
+                                            Y
+                                        </span>
+                                        <span>{info.y}</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        <div
+                            style={{
+                                borderTop: `1px solid ${C.border}`,
+                                paddingTop: 10,
+                                color: C.muted,
+                                fontSize: 11,
+                            }}
+                        >
+                            {info.functionality}
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+function Card({ title, sub, children, action }) {
     return (
         <div className="dashboard-card">
-        <div className="dashboard-eyebrow">{sub}</div>
-        <h2 className="dashboard-card-title">{title}</h2>
-        {children}
+            <div
+                style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    gap: 12,
+                    marginBottom: 14,
+                }}
+            >
+                <div>
+                    <div className="dashboard-eyebrow">{sub}</div>
+                    <h2 className="dashboard-card-title">{title}</h2>
+                </div>
+                {action}
+            </div>
+            {children}
         </div>
     );
 }
@@ -96,11 +378,12 @@ function ClickableVisitorDot({
     fill,
     visitorStatus,
     onPointClick,
-    }) {
+}) {
     if (
         cx == null ||
         cy == null ||
-        payload?.year == null
+        !payload?.period_start ||
+        !payload?.period_end
     ) {
         return null;
     }
@@ -108,36 +391,41 @@ function ClickableVisitorDot({
     const handleClick = (event) => {
         event?.stopPropagation?.();
 
-        onPointClick(
-        payload.year,
-        visitorStatus,
-        );
+        onPointClick({
+            visitorStatus,
+            periodStart: payload.period_start,
+            periodEnd: payload.period_end,
+            periodLabel: payload.period_label,
+        });
     };
 
     return (
         <circle
-        cx={cx}
-        cy={cy}
-        r={4}
-        fill={fill}
-        stroke="var(--dashboard-card)"
-        strokeWidth={2}
-        role="button"
-        tabIndex={0}
-        aria-label={`View ${visitorStatus} Accounts for ${payload.year}`}
-        style={{
-            cursor: "pointer",
-        }}
-        onClick={handleClick}
-        onKeyDown={(event) => {
-            if (
-            event.key === "Enter" ||
-            event.key === " "
-            ) {
-            event.preventDefault();
-            handleClick(event);
+            cx={cx}
+            cy={cy}
+            r={4}
+            fill={fill}
+            stroke="var(--dashboard-card)"
+            strokeWidth={2}
+            role="button"
+            tabIndex={0}
+            aria-label={
+                `View ${visitorStatus} accounts ` +
+                `for ${payload.period_label}`
             }
-        }}
+            style={{
+                cursor: "pointer",
+            }}
+            onClick={handleClick}
+            onKeyDown={(event) => {
+                if (
+                    event.key === "Enter" ||
+                    event.key === " "
+                ) {
+                    event.preventDefault();
+                    handleClick(event);
+                }
+            }}
         />
     );
 }
@@ -179,7 +467,6 @@ export default function DemographicsTab({
     membersByStatus = [],
     membersByMaritalStatus = [],
     newMembersPerYear = [],
-    newVsRepeatVisitors = [],
     totalDependents = null,
     dependentsByAgeGroup = [],
     dependentsPerHousehold = [],
@@ -227,7 +514,84 @@ export default function DemographicsTab({
         total_new: true,
         total_repeat: true,
     });
+    const [visitorChartFilter, setVisitorChartFilter] =
+        useState({
+            mode: "ym",
+            year: "All",
+            month: "All",
+            date: "",
+            startDate: "",
+            endDate: "",
+        });
+
+    const [visitorChartData, setVisitorChartData] =
+        useState([]);
+
+    const [visitorChartLoading, setVisitorChartLoading] =
+        useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadVisitorChart = async () => {
+            if (
+                visitorChartFilter.mode === "range" &&
+                (
+                    !visitorChartFilter.startDate ||
+                    !visitorChartFilter.endDate
+                )
+            ) {
+                return;
+            }
+
+            if (
+                visitorChartFilter.mode === "day" &&
+                !visitorChartFilter.date
+            ) {
+                return;
+            }
+
+            setVisitorChartLoading(true);
+
+            try {
+                const data =
+                    await analyticsApi.newVsRepeatVisitors(
+                        toDateParams(
+                            visitorChartFilter,
+                        ),
+                    );
+
+                if (!cancelled) {
+                    setVisitorChartData(
+                        Array.isArray(data)
+                            ? data
+                            : [],
+                    );
+                }
+            } catch (error) {
+                console.error(
+                    "Unable to load New vs Repeat chart:",
+                    error,
+                );
+
+                if (!cancelled) {
+                    setVisitorChartData([]);
+                }
+            } finally {
+                if (!cancelled) {
+                    setVisitorChartLoading(false);
+                }
+            }
+        };
+
+        loadVisitorChart();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [visitorChartFilter]);
     const countryChartRef = useRef(null);
+    
 
     /* ─── Derived account data ────────────────────────────────── */
 
@@ -313,6 +677,7 @@ export default function DemographicsTab({
         exportKey,
         state = null,
         request,
+        showDateFilter = true,
     }) => {
         const drawer = {
             state,
@@ -321,6 +686,7 @@ export default function DemographicsTab({
             emptyMessage,
             exportKey,
             request,
+            showDateFilter,
         };
 
         setAccountDrawer(drawer);
@@ -534,73 +900,81 @@ export default function DemographicsTab({
         }));
     };
 
-    const handleVisitorPointClick = (
-        year,
+    const handleVisitorPointClick = ({
         visitorStatus,
-        ) => {
+        periodStart,
+        periodEnd,
+        periodLabel,
+    }) => {
         openAccountDrawer({
             title:
-            `${visitorStatus} Accounts — ${year}`,
+                `${visitorStatus} Accounts — ` +
+                periodLabel,
 
             eyebrow:
-            "Account details",
+                "Account details",
 
             emptyMessage:
-            `No ${visitorStatus.toLowerCase()} Accounts were found for ${year}.`,
+                `No ${visitorStatus.toLowerCase()} ` +
+                `accounts were found for ${periodLabel}.`,
 
             exportKey:
-            `${visitorStatus.toLowerCase()}-visitors-${year}`,
+                `${visitorStatus.toLowerCase()}-visitors-` +
+                periodLabel,
+
+            showDateFilter: false,
 
             request: () =>
-            analyticsApi.newVsRepeatVisitorDetails(
-                Number(year),
-                visitorStatus,
-            ),
+                analyticsApi.newVsRepeatVisitorDetails({
+                    visitorStatus,
+                    periodStart,
+                    periodEnd,
+                }),
         });
-        };
+    };
 
-        const ClickableBarRow = ({
-            x,
-            y,
-            width,
-            height,
-            payload,
-            onRowClick,
-            }) => (
-            <rect
-                x={x}
-                y={y}
-                width={width}
-                height={height}
-                fill="transparent"
-                style={{ cursor: "pointer" }}
-                onClick={() => onRowClick(payload)}
-            />
-            );
+    const ClickableBarRow = ({
+        x,
+        y,
+        width,
+        height,
+        payload,
+        onRowClick,
+    }) => (
+        <rect
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            fill="transparent"
+            style={{ cursor: "pointer" }}
+            onClick={() => onRowClick(payload)}
+        />
+    );
 
-        const ClickableBarColumn = ({
-            x,
-            y,
-            width,
-            height,
-            payload,
-            category,
-            onColumnClick,
-            }) => (
-            <rect
-                x={x}
-                y={y}
-                width={width}
-                height={height}
-                fill="transparent"
-                style={{ cursor: "pointer" }}
-                onClick={() =>
+    const ClickableBarColumn = ({
+        x,
+        y,
+        width,
+        height,
+        payload,
+        category,
+        onColumnClick,
+    }) => (
+        <rect
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            fill="transparent"
+            style={{ cursor: "pointer" }}
+            onClick={() =>
                 category
                     ? onColumnClick(payload, category)
                     : onColumnClick(payload)
-                }
-            />
-            );
+            }
+        />
+    );
     return (
         <>
         <div className="dashboard-section">
@@ -742,6 +1116,7 @@ export default function DemographicsTab({
             <Card
             title="Account Types"
             sub="Distribution of member and guest account types"
+            action={<ChartInfo id="accountTypes" />}
             >
             <div
                 style={{
@@ -903,6 +1278,7 @@ export default function DemographicsTab({
             <Card
                 title="Age Groups"
                 sub="Accounts by age segment"
+                action={<ChartInfo id="ageGroups" />}
             >
                 <div className="dashboard-chart dashboard-chart-200">
                 <ResponsiveContainer>
@@ -920,7 +1296,7 @@ export default function DemographicsTab({
                         stroke={AX}
                         fontSize={11}
                     />
-                    <Tooltip contentStyle={TIP} />
+                    <Tooltip contentStyle={TIP}></Tooltip>
                     <Bar
                         dataKey="total"
                         fill="var(--dashboard-truffle)"
@@ -930,29 +1306,51 @@ export default function DemographicsTab({
                 </ResponsiveContainer>
                 </div>
             </Card>
-            <PieLegendCard
-                title="Gender Split"
-                description="Male vs Female"
-                data={membersByGender}
-                dataKey="total"
-                nameKey="gender"
-                colorMap={{
-                M: "var(--dashboard-truffle)",
-                F: "var(--dashboard-flame)",
-                }}
-            />
-            <PieLegendCard
-                title="Marital Status"
-                description="Household composition"
-                data={membersByMaritalStatus}
-                dataKey="total"
-                nameKey="marital_status"
-                colorMap={{
-                Single: "var(--dashboard-truffle)",
-                Married:
-                    "var(--dashboard-deep-blue)",
-                }}
-            />
+            <div style={{ position: "relative", minWidth: 0 }}>
+                <div
+                    style={{
+                        position: "absolute",
+                        top: 14,
+                        right: 14,
+                        zIndex: 10,
+                    }}
+                >
+                    <ChartInfo id="genderSplit" />
+                </div>
+                <PieLegendCard
+                    title="Gender Split"
+                    data={membersByGender}
+                    dataKey="total"
+                    nameKey="gender"
+                    colorMap={{
+                    M: "var(--dashboard-truffle)",
+                    F: "var(--dashboard-flame)",
+                    }}
+                />
+            </div>
+            <div style={{ position: "relative", minWidth: 0 }}>
+                <div
+                    style={{
+                        position: "absolute",
+                        top: 14,
+                        right: 14,
+                        zIndex: 10,
+                    }}
+                >
+                    <ChartInfo id="maritalStatus" />
+                </div>
+                <PieLegendCard
+                    title="Marital Status"
+                    data={membersByMaritalStatus}
+                    dataKey="total"
+                    nameKey="marital_status"
+                    colorMap={{
+                    Single: "var(--dashboard-truffle)",
+                    Married:
+                        "var(--dashboard-deep-blue)",
+                    }}
+                />
+            </div>
             </div>
 
             {/* ─── Member status and growth ──────────────────────── */}
@@ -963,6 +1361,7 @@ export default function DemographicsTab({
             <Card
                 title="Member & Guest Status"
                 sub="Status comparison between members and guests"
+                action={<ChartInfo id="memberGuestStatus" />}
             >
                 <div className="dashboard-chart dashboard-chart-200">
                 <ResponsiveContainer>
@@ -1033,6 +1432,7 @@ export default function DemographicsTab({
             <Card
                 title="New Members & Guests per Year"
                 sub="Member and guest acquisition over time"
+                action={<ChartInfo id="newMembersGuests" />}
             >
                 <div className="dashboard-chart dashboard-chart-200">
                 <ResponsiveContainer>
@@ -1094,227 +1494,185 @@ export default function DemographicsTab({
             <div>
                 <Card
                     title="New vs Repeat Guests & Members"
-                    sub="First-time accounts compared with returning visitors by year"
-                    >
-                    <div className="dashboard-chart dashboard-chart-200">
-                        <ResponsiveContainer>
-                        <LineChart
-                            data={newVsRepeatVisitors}
-                            margin={{
-                            top: 5,
-                            right: 12,
-                            bottom: 5,
-                            left: 0,
+                    sub={
+                        visitorChartFilter.mode === "ym" &&
+                        visitorChartFilter.year !== "All"
+                            ? `Monthly distribution for ${visitorChartFilter.year}`
+                            : visitorChartFilter.mode === "range" &&
+                                visitorChartFilter.startDate &&
+                                visitorChartFilter.endDate
+                            ? `${visitorChartFilter.startDate} to ${visitorChartFilter.endDate}`
+                            : "Yearly account distribution"
+                    }
+                    action={
+                        <ChartInfo id="newVsRepeatVisitors" />
+                    }
+                >
+                    <DateFilterBar
+                        value={visitorChartFilter}
+                        onChange={setVisitorChartFilter}
+                        years={years}
+                        months={MONTHS}
+                    />
+
+                    {visitorChartLoading && (
+                        <div
+                            style={{
+                                color: C.muted,
+                                fontSize: 12,
+                                marginBottom: 8,
                             }}
                         >
-                            <CartesianGrid
-                            strokeDasharray="3 3"
-                            stroke={GRID}
-                            />
+                            Updating chart…
+                        </div>
+                    )}
 
-                            <XAxis
-                            dataKey="year"
-                            stroke={AX}
-                            fontSize={11}
-                            allowDecimals={false}
-                            />
+                    <div
+                        className="dashboard-chart"
+                        style={{
+                            height: 280,
+                        }}
+                    >
+                        <ResponsiveContainer
+                            width="100%"
+                            height="100%"
+                        >
+                            <LineChart
+                                data={visitorChartData}
+                                margin={{
+                                    top: 10,
+                                    right: 20,
+                                    bottom: 10,
+                                    left: 0,
+                                }}
+                            >
+                                <CartesianGrid
+                                    strokeDasharray="3 3"
+                                    stroke={GRID}
+                                />
 
-                            <YAxis
-                                stroke={AX}
-                                fontSize={11}
-                                allowDecimals={false}
-                                includeHidden
-                                domain={[0, "auto"]}
-                            />
+                                <XAxis
+                                    dataKey="period_label"
+                                    stroke={AX}
+                                    fontSize={11}
+                                    interval={0}
+                                />
 
-                            <Tooltip
-                                content={({ active, payload, label }) => {
-                                    if (!active || !payload?.length) {
-                                    return null;
-                                    }
+                                <YAxis
+                                    stroke={AX}
+                                    fontSize={11}
+                                    allowDecimals={false}
+                                />
 
-                                    const row = payload[0]?.payload;
+                                <Tooltip
+                                    contentStyle={TIP}
+                                    labelFormatter={(
+                                        label,
+                                    ) => label}
+                                    formatter={(
+                                        value,
+                                        name,
+                                    ) => [
+                                        Number(
+                                            value,
+                                        ).toLocaleString(),
+                                        name,
+                                    ]}
+                                />
 
-                                    if (!row) {
-                                    return null;
-                                    }
-
-                                    const format = (value) =>
-                                    Number(value ?? 0).toLocaleString();
-
-                                    return (
-                                    <div
-                                        style={{
-                                        ...TIP,
-                                        minWidth: 180,
-                                        padding: "8px 10px",
+                                <Legend
+                                    onClick={handleLegendClick}
+                                    wrapperStyle={{
                                         fontSize: 11,
-                                        }}
-                                    >
-                                        <div
-                                        style={{
-                                            fontWeight: 700,
-                                            marginBottom: 6,
-                                        }}
-                                        >
-                                        Year: {label}
-                                        </div>
-
-                                        {/* New Accounts */}
-                                        <div
-                                        style={{
-                                            display: "grid",
-                                            gridTemplateColumns: "1fr auto",
-                                            gap: "3px 12px",
-                                            paddingBottom: 6,
-                                            borderBottom: "1px solid #DDD6CA",
-                                        }}
-                                        >
-                                        <strong>New</strong>
-
-                                        <strong>
-                                            {format(row.total_new)}
-                                        </strong>
-
-                                        <span>Members</span>
-                                        <span>{format(row.new_members)}</span>
-
-                                        <span>Guests</span>
-                                        <span>{format(row.new_guests)}</span>
-                                        </div>
-
-                                        {/* Repeat Accounts */}
-                                        <div
-                                        style={{
-                                            display: "grid",
-                                            gridTemplateColumns: "1fr auto",
-                                            gap: "3px 12px",
-                                            paddingTop: 6,
-                                        }}
-                                        >
-                                        <strong>Repeat</strong>
-
-                                        <strong>
-                                            {format(row.total_repeat)}
-                                        </strong>
-
-                                        <span>Members</span>
-                                        <span>{format(row.repeat_members)}</span>
-
-                                        <span>Guests</span>
-                                        <span>{format(row.repeat_guests)}</span>
-                                        <span style={{ color: "#2563eb", fontStyle: "italic" }}>click points to view accounts</span>
-                                        </div>
-                                    </div>
-                                    );
-                                }}
-                                />
-
-                            <Legend
-                                onClick={handleLegendClick}
-                                wrapperStyle={{
-                                    fontSize: 11,
-                                    paddingTop: 6,
-                                    cursor: "pointer",
-                                }}
-                                formatter={(value, entry) => {
-                                    const isVisible =
-                                    activeVisitorLines[
-                                        entry.dataKey
-                                    ];
-
-                                    return (
-                                    <span
-                                        style={{
-                                        color: isVisible
-                                            ? "var(--dashboard-abyssal)"
-                                            : "#dc1010",
-                                        opacity: isVisible ? 1 : 0.45,
-                                        textDecoration: isVisible
-                                            ? "none"
-                                            : "line-through",
+                                        paddingTop: 8,
                                         cursor: "pointer",
-                                        }}
-                                    >
-                                        {value}
-                                    </span>
-                                    );
-                                }}
-                                />
+                                    }}
+                                    formatter={(value, entry) => {
+                                        const isActive =
+                                            activeVisitorLines[
+                                                entry.dataKey
+                                            ];
 
-                            <Line
-                                type="monotone"
-                                dataKey="total_new"
-                                name="New Accounts"
-                                stroke="#FFB162"
-                                strokeWidth={2.5}
-                                hide={!activeVisitorLines.total_new}
-                                dot={(props) => (
-                                    <ClickableVisitorDot
-                                    {...props}
-                                    fill="#FFB162"
-                                    visitorStatus="New"
-                                    onPointClick={
-                                        handleVisitorPointClick
-                                    }
-                                    />
-                                )}
-                                activeDot={(props) => (
-                                    <ClickableVisitorDot
-                                    {...props}
-                                    fill="#FFB162"
-                                    visitorStatus="New"
-                                    onPointClick={
-                                        handleVisitorPointClick
-                                    }
-                                    />
-                                )}
+                                        return (
+                                            <span
+                                                style={{
+                                                    color: isActive
+                                                        ? C.text
+                                                        : C.muted,
+                                                    opacity: isActive
+                                                        ? 1
+                                                        : 0.45,
+                                                    textDecoration: isActive
+                                                        ? "none"
+                                                        : "line-through",
+                                                }}
+                                            >
+                                                {value}
+                                            </span>
+                                        );
+                                    }}
                                 />
 
                                 <Line
-                                type="monotone"
-                                dataKey="total_repeat"
-                                name="Repeat Accounts"
-                                stroke="var(--dashboard-truffle)"
-                                strokeWidth={2.5}
-                                hide={
-                                    !activeVisitorLines.total_repeat
-                                }
-                                dot={(props) => (
-                                    <ClickableVisitorDot
-                                    {...props}
-                                    fill="var(--dashboard-truffle)"
-                                    visitorStatus="Repeat"
-                                    onPointClick={
-                                        handleVisitorPointClick
+                                    type="monotone"
+                                    dataKey="total_new"
+                                    name="New"
+                                    stroke={
+                                        activeVisitorLines.total_new
+                                            ? "#FFB162"
+                                            : "transparent"
                                     }
-                                    />
-                                )}
-                                activeDot={(props) => (
-                                    <ClickableVisitorDot
-                                    {...props}
-                                    fill="var(--dashboard-truffle)"
-                                    visitorStatus="Repeat"
-                                    onPointClick={
-                                        handleVisitorPointClick
+                                    strokeWidth={2.5}
+                                    connectNulls
+                                    dot={
+                                        activeVisitorLines.total_new
+                                            ? (props) => (
+                                                <ClickableVisitorDot
+                                                    {...props}
+                                                    fill="#FFB162"
+                                                    visitorStatus="New"
+                                                    onPointClick={
+                                                        handleVisitorPointClick
+                                                    }
+                                                />
+                                            )
+                                            : false
                                     }
-                                    />
-                                )}
+                                    activeDot={false}
                                 />
-                        </LineChart>
+
+                                <Line
+                                    type="monotone"
+                                    dataKey="total_repeat"
+                                    name="Repeat"
+                                    stroke={
+                                        activeVisitorLines.total_repeat
+                                            ? "var(--dashboard-truffle)"
+                                            : "transparent"
+                                    }
+                                    strokeWidth={2.5}
+                                    connectNulls
+                                    dot={
+                                        activeVisitorLines.total_repeat
+                                            ? (props) => (
+                                                <ClickableVisitorDot
+                                                    {...props}
+                                                    fill="var(--dashboard-truffle)"
+                                                    visitorStatus="Repeat"
+                                                    onPointClick={
+                                                        handleVisitorPointClick
+                                                    }
+                                                />
+                                            )
+                                            : false
+                                    }
+                                    activeDot={false}
+                                />
+
+                            </LineChart>
                         </ResponsiveContainer>
                     </div>
-                    <div style={{ textAlign: "center" }}>
-                    <span
-                    style={{
-                    color: "#6b7280",
-                    fontStyle: "italic",
-                    fontSize: "12px",
-                    }}
-                    >
-                        click legend to focus
-                    </span></div>
-                    </Card>
+                </Card>
             </div>
 
             {/* ─── Geographic distribution ───────────────────────── */}
@@ -1326,6 +1684,7 @@ export default function DemographicsTab({
             <Card
                 title="Accounts by State"
                 sub="Account concentration across the United States"
+                action={<ChartInfo id="accountsByState" />}
             >
                 <AccountsUSMap
                 data={membersByState}
@@ -1337,6 +1696,7 @@ export default function DemographicsTab({
                 <Card
                 title="Accounts by Country"
                 sub="Click a country to view its accounts"
+                action={<ChartInfo id="accountsByCountry" />}
                 >
                 <div
                     className="dashboard-chart"
@@ -1412,6 +1772,7 @@ export default function DemographicsTab({
             <Card
                 title="Dependents by Age Group"
                 sub="Linked to member folios"
+                action={<ChartInfo id="dependentsByAge" />}
             >
                 <div className="dashboard-chart dashboard-chart-200">
                 <ResponsiveContainer>
@@ -1444,6 +1805,7 @@ export default function DemographicsTab({
             <Card
                 title="Dependents per Household"
                 sub="Distribution of linked dependents across member households"
+                action={<ChartInfo id="dependentsPerHousehold" />}
             >
                 <div className="dashboard-chart dashboard-chart-200">
                 <ResponsiveContainer
@@ -1506,6 +1868,7 @@ export default function DemographicsTab({
             <Card
             title="Top Members by Dependents"
             sub="Members with the most linked dependents"
+            action={<ChartInfo id="topMembersByDependents" />}
             >
             <div className="dashboard-chart dashboard-chart-200">
                 <ResponsiveContainer>
@@ -1573,6 +1936,9 @@ export default function DemographicsTab({
             }
             years={years}
             months={MONTHS}
+            showDateFilter={
+                accountDrawer?.showDateFilter !== false
+            }
             />
 
             
