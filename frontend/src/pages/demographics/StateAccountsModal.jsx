@@ -112,6 +112,7 @@ export default function StateAccountsModal({
   onDateFilterChange = () => {},
   years = [],
   months = [],
+  showDateFilter = true,
 }) {
   const [search, setSearch] = useState("");
   const [drawerWidth, setDrawerWidth] =
@@ -781,17 +782,14 @@ export default function StateAccountsModal({
               "14px 22px 0 26px",
           }}
         >
-          <DateFilterBar
-            value={
-              dateFilter ||
-              DEFAULT_DATE_FILTER
-            }
-            onChange={
-              onDateFilterChange
-            }
-            years={years}
-            months={months}
-          />
+          {showDateFilter && (
+            <DateFilterBar
+              value={dateFilter}
+              onChange={onDateFilterChange}
+              years={years}
+              months={months}
+            />
+          )}
         </div>
 
         {/* Search and export toolbar */}

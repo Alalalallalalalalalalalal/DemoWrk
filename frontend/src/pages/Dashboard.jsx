@@ -118,7 +118,6 @@ export default function Dashboard() {
   const [dependentsPerHousehold, setDependentsPerHousehold,] = useState([]);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
   const [dependentsPerMember, setDependentsPerMember] = useState([]);
-  const [newVsRepeatVisitors, setNewVsRepeatVisitors] = useState([]);
   const [availableTables, setAvailableTables] = useState([]);
   const [selectedTable, setSelectedTable] = useState("");
   const [tableRows, setTableRows] = useState([]);
@@ -185,20 +184,6 @@ export default function Dashboard() {
         // /overview/summary below, so there's only one writer for each.
       })
       .catch(console.error);
-
-    analyticsApi
-      .demographicsSummary()
-      .then((data) => {
-        setNewVsRepeatVisitors(
-          data.newVsRepeatVisitors ?? [],
-        );
-      })
-      .catch((error) => {
-        console.error(
-          "Failed to load demographics summary:",
-          error,
-        );
-      });
 
     analyticsApi.getTables().then(setAvailableTables).catch(console.error);
     // ── Overview tab: single bundled fetch from the standalone overview
@@ -483,7 +468,6 @@ export default function Dashboard() {
             membersByStatus={membersByStatus}
             membersByMaritalStatus={membersByMaritalStatus}
             newMembersPerYear={newMembersPerYear}
-            newVsRepeatVisitors={newVsRepeatVisitors}
             totalDependents={totalDependents}
             dependentsByAgeGroup={dependentsByAgeGroup}
             dependentsPerHousehold={dependentsPerHousehold}
