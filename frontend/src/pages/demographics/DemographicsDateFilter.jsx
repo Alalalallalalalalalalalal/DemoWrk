@@ -68,6 +68,7 @@ function DateFilterBar({
   onChange,
   years,
   months,
+  showSpecificDate = true,
 }) {
   const update = (changes) => {
     onChange({
@@ -121,7 +122,7 @@ function DateFilterBar({
       onChange={changeMode}
       options={[
         "ym",
-        "day",
+        ...(showSpecificDate ? ["day"] : []),
         "range",
       ]}
     />

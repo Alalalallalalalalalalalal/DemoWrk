@@ -32,15 +32,12 @@ const TIP = TOOLTIP_STYLE;
 
 const C = {
     bg: "var(--dashboard-card)",
-    panel: "var(--dashboard-panel)",
-    panelAlt: "var(--dashboard-panel-alt)",
     border: "var(--dashboard-border)",
     text: "var(--dashboard-abyssal)",
     muted: "var(--dashboard-muted)",
     soft: "var(--dashboard-text-soft)",
     accent: "var(--dashboard-deep-blue)",
     accent2: "var(--dashboard-truffle)",
-    accent3: "var(--dashboard-flame)",
 };
 
 const CHART_INFO = {
@@ -97,7 +94,7 @@ const CHART_INFO = {
             "Compares newly acquired accounts with returning accounts across each year.",
         functionality:
             "Click a legend item to show or hide a line. Hover for totals or click a point to open matching account records. Use the date filter to view yearly or monthly New vs Repeat trends.",
-        x: "Year",
+        x: "Year/Month",
         y: "Number of accounts",
     },
     accountsByState: {
@@ -430,31 +427,48 @@ function ClickableVisitorDot({
     );
 }
 
-function formatDashboardDate(value) {
-    if (!value) {
-        return "—";
-    }
-
-    const dateText =
-        String(value).slice(0, 10);
-
-    const date = new Date(
-        `${dateText}T00:00:00`,
+const ClickableBarRow = ({
+        x,
+        y,
+        width,
+        height,
+        payload,
+        onRowClick,
+    }) => (
+        <rect
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            fill="transparent"
+            style={{ cursor: "pointer" }}
+            onClick={() => onRowClick(payload)}
+        />
     );
 
-    if (Number.isNaN(date.getTime())) {
-        return String(value);
-    }
-
-    return date.toLocaleDateString(
-        "en-US",
-        {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        },
-    );
-}
+const ClickableBarColumn = ({
+        x,
+        y,
+        width,
+        height,
+        payload,
+        category,
+        onColumnClick,
+    }) => (
+        <rect
+            x={x}
+            y={y}
+            width={width}
+            height={height}
+            fill="transparent"
+            style={{ cursor: "pointer" }}
+            onClick={() =>
+                category
+                    ? onColumnClick(payload, category)
+                    : onColumnClick(payload)
+            }
+        />
+);
 
 /* ─── Demographics tab ──────────────────────────────────────── */
 
@@ -933,48 +947,6 @@ export default function DemographicsTab({
         });
     };
 
-    const ClickableBarRow = ({
-        x,
-        y,
-        width,
-        height,
-        payload,
-        onRowClick,
-    }) => (
-        <rect
-            x={x}
-            y={y}
-            width={width}
-            height={height}
-            fill="transparent"
-            style={{ cursor: "pointer" }}
-            onClick={() => onRowClick(payload)}
-        />
-    );
-
-    const ClickableBarColumn = ({
-        x,
-        y,
-        width,
-        height,
-        payload,
-        category,
-        onColumnClick,
-    }) => (
-        <rect
-            x={x}
-            y={y}
-            width={width}
-            height={height}
-            fill="transparent"
-            style={{ cursor: "pointer" }}
-            onClick={() =>
-                category
-                    ? onColumnClick(payload, category)
-                    : onColumnClick(payload)
-            }
-        />
-    );
     return (
         <>
         <div className="dashboard-section">
@@ -1296,7 +1268,7 @@ export default function DemographicsTab({
                         stroke={AX}
                         fontSize={11}
                     />
-                    <Tooltip contentStyle={TIP}></Tooltip>
+                    <Tooltip contentStyle={TIP}/>
                     <Bar
                         dataKey="total"
                         fill="var(--dashboard-truffle)"
@@ -1513,6 +1485,7 @@ export default function DemographicsTab({
                         onChange={setVisitorChartFilter}
                         years={years}
                         months={MONTHS}
+                        showSpecificDate={false}
                     />
 
                     {visitorChartLoading && (
