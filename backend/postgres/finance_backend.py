@@ -6,14 +6,42 @@
 # start_date / end_date and reuse the SAME date_filter_sql() +
 # filter_params() helpers from analytics_shared.py that Visits & Rooms
 # uses. No bespoke date-filtering SQL is defined in this file, EXCEPT
-# _villa_bookings_date_filter_sql() below — see its docstring for why.
+# _villa_bookings_date_filter_sql() and _rate_details_date_filter_sql()
+# below — see their docstrings for why.
 #
 # date_filter_sql() defaults to alias="f", column="check_in_date" and
 # always pairs it with "f.check_out_date" — i.e. it filters folio rows
 # whose underlying STAY overlaps the requested period. Since `folios`
 # is aliased `f` everywhere in this file already, the defaults apply
-# unmodified everywhere except the two pre-aggregated summary tables
-# (villa-revenue, amenity-revenue), which are addressed inline.
+# unmodified everywhere except the pre-aggregated/alternate-source
+# tables (villa-revenue, amenity-revenue, villa forgone revenue),
+# which are addressed inline.
+#
+# DRILLDOWN FILTERS — composable, not exclusive
+# ───────────────────────────────────────────────
+# /drilldown (flat folio records) and /drilldown-breakdown (grouped
+# totals) both accept the SAME set of independent filter dimensions:
+#   source, villa, customer, payment, amenity, category, section
+# Every dimension that's set is AND'ed together via _apply_common_filters()
+# — e.g. payment='free'&villa='Solaria Villa' returns only the
+# free-of-charge folio rows for that villa, not "whichever one came
+# last." This lets the frontend drawer accumulate filters as the user
+# drills deeper (e.g. click "Free" -> browse by Villa -> pick a villa)
+# without losing what was already chosen.
+#
+# The legacy `type`/`value` pair from the original single-filter
+# /drilldown is still accepted and folded into the same dict via
+# _legacy_type_value_to_filters() — purely for backward compatibility
+# with any caller that hasn't moved to the structured params.
+#
+# TERMINOLOGY: "Given Away" has been renamed "Forgone Revenue"
+# throughout (bucket value 'given_away' -> 'forgone_revenue', all
+# field/label names updated to match). Amenities and Services keep
+# their original complimentary-charge logic — only the name changed.
+# Villa's Forgone Revenue calculation methodology changed: it is no
+# longer derived from folios. It is now sourced from rate_details
+# (SUM(COALESCE(original_amount, 0)) where payment_type = 'Free'),
+# excluding Villa Lolita / Wonderland. See _villa_forgone_revenue_sql().
 # ─────────────────────────────────────────────────────────────────
 
 from fastapi import APIRouter, Query
@@ -47,6 +75,12 @@ AMENITY_CATS = (
     "F&B", "Golf", "Spa & Beauty", "Tennis", "Boutique",
     "Water Sports", "Equipment", "Cart Rental", "Events",
 )
+
+# Villas excluded from the free-villa Forgone Revenue calculation,
+# regardless of payment_type — these are non-rentable / placeholder
+# villa names, not real comped stays, and should never count toward
+# Villa Forgone Revenue.
+VILLA_FORGONE_EXCLUDED = ("Villa Lolita", "Wonderland")
 
 
 def _rows_to_dicts(result):
@@ -93,24 +127,27 @@ def _bucket_case_sql() -> str:
     Classifies a folio row by transaction_flow / payment_type into the
     same four buckets category-comp-breakdown already shows separately:
 
-      'collected'   — an actual paid charge. This is REVENUE.
-      'given_away'  — a comped/free charge. $0 was actually collected,
-                      even though the row carries a face-value amount.
-      'reversed'    — a refunded/voided charge.
-      'other'       — anything that isn't a Charge at all (payments
-                      against balance, adjustments, etc.) — NOT revenue.
+      'collected'        — an actual paid charge. This is REVENUE.
+      'forgone_revenue'  — a comped/free charge. $0 was actually
+                            collected, even though the row carries a
+                            face-value amount. (Renamed from
+                            'given_away' — label/value only, logic
+                            unchanged for Amenities/Services.)
+      'reversed'          — a refunded/voided charge.
+      'other'             — anything that isn't a Charge at all
+                            (payments against balance, adjustments,
+                            etc.) — NOT revenue.
 
     Only 'collected' rows should ever be summed into a revenue figure.
-    Previously this CASE only lived inline inside category_comp_breakdown
-    (which deliberately shows all four buckets, since that's its whole
-    point). It's pulled out here so /overview's Amenities/Services
-    revenue — and the matching /drilldown 'section' filter — apply the
-    EXACT same "what counts as revenue" rule, instead of re-deriving it
-    and accidentally summing all four buckets together (which is the
-    bug that produced a negative Services total: payments/adjustments/
-    reversals with no amenity-specific category fall into the 'Services'
-    catch-all via _section_case_sql()'s ELSE, and without this bucket
-    filter they were being added straight into "revenue").
+
+    IMPORTANT: For the Villa section, this bucket's 'forgone_revenue'
+    classification is no longer used to compute the Villa Forgone
+    Revenue figure shown to users — that now comes from rate_details
+    via _villa_forgone_revenue_sql(). This CASE is still used for
+    Villa's 'collected' / 'reversed' buckets (unchanged), and for the
+    full Amenities/Services breakdown (unchanged other than the label
+    rename), and for /overview's revenue filter (unchanged — revenue
+    only ever summed the 'collected' bucket, never 'forgone_revenue').
 
     Requires a LEFT JOIN business_source bs ON
     LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name)) in the query
@@ -123,7 +160,7 @@ def _bucket_case_sql() -> str:
             WHEN LOWER(
                 COALESCE(NULLIF(TRIM(f.payment_type), ''), NULLIF(TRIM(bs.payment_type), ''), '')
             ) ~ '(comp|free|complimentary|gratis|no charge)'
-                THEN 'given_away'
+                THEN 'forgone_revenue'
             ELSE 'collected'
         END
     """
@@ -173,6 +210,122 @@ def _villa_bookings_date_filter_sql() -> str:
     """
 
 
+def _rate_details_date_filter_sql() -> str:
+    """
+    Date-range overlap filter for rate_details (alias `rd`), matching
+    the same "does this stay overlap the requested period" semantics
+    as date_filter_sql() / _villa_bookings_date_filter_sql(), but
+    written against rate_details.check_in_date / rate_details.check_out_date.
+
+    This backs the new rate_details-sourced Villa Forgone Revenue
+    calculation (see _villa_forgone_revenue_sql()) so it honors the
+    same year / month / date / start_date / end_date filters every
+    other Finance endpoint does.
+
+    Expects the same bind params filter_params() already produces:
+    :year, :month, :date, :start_date, :end_date.
+    """
+    return """
+        AND (
+            CASE
+                WHEN :start_date IS NOT NULL OR :end_date IS NOT NULL THEN
+                    rd.check_in_date  <= COALESCE(:end_date, rd.check_in_date)
+                    AND rd.check_out_date >= COALESCE(:start_date, rd.check_out_date)
+                WHEN :date IS NOT NULL THEN
+                    rd.check_in_date  <= :date
+                    AND rd.check_out_date >= :date
+                WHEN :year IS NOT NULL AND :month IS NOT NULL THEN
+                    rd.check_in_date  <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::date
+                    AND rd.check_out_date >= MAKE_DATE(:year, :month, 1)
+                WHEN :year IS NOT NULL THEN
+                    rd.check_in_date  <= MAKE_DATE(:year, 12, 31)
+                    AND rd.check_out_date >= MAKE_DATE(:year, 1, 1)
+                ELSE TRUE
+            END
+        )
+    """
+
+
+def _villa_forgone_revenue_sql() -> str:
+    """
+    Villa Forgone Revenue — SOURCE OF TRUTH IS rate_details, not folios.
+
+    Forgone Revenue = SUM(COALESCE(original_amount, 0)) over
+    rate_details rows where payment_type = 'Free', excluding
+    VILLA_FORGONE_EXCLUDED (Villa Lolita / Wonderland).
+
+    Also returns:
+      missing_rate_count — rows where original_amount IS NULL (counted
+        as 0 in the sum per COALESCE, but tracked separately so the UI
+        can flag incomplete underlying data instead of silently
+        understating the figure).
+      total_free_rows    — total in-scope free-villa rows, used by the
+        caller to derive calculation_coverage =
+        (total_free_rows - missing_rate_count) / total_free_rows.
+      unique_accounts     — distinct member_number across in-scope rows.
+
+    {villa_filter} is interpolated by the caller — either empty, or
+    "AND rd.villa_name = :flt_villa" when a villa filter was supplied.
+    {date_sql} is _rate_details_date_filter_sql().
+
+    Requires :villa_exceptions (list) and the standard filter_params()
+    bind set (:year, :month, :date, :start_date, :end_date) in params.
+    """
+    return """
+        SELECT
+            COALESCE(SUM(COALESCE(rd.original_amount, 0)), 0)  AS forgone_revenue,
+            COUNT(*) FILTER (WHERE rd.original_amount IS NULL) AS missing_rate_count,
+            COUNT(*)                                            AS total_free_rows,
+            COUNT(DISTINCT rd.member_number)                   AS unique_accounts
+        FROM rate_details rd
+        WHERE rd.payment_type = 'Free'
+          AND NOT (rd.villa_name = ANY(:villa_exceptions))
+        {villa_filter}
+        {date_sql}
+    """
+
+
+def _villa_forgone_revenue_row(params: dict, villa: Optional[str] = None) -> dict:
+    """
+    Runs _villa_forgone_revenue_sql() and returns a dict with
+    forgoneRevenue, missingRateCount, totalFreeRows, uniqueAccounts,
+    and calculationCoverage (float in [0, 1], or None if there were
+    zero free villa rows in scope — avoids a divide-by-zero and lets
+    the frontend distinguish "0% covered" from "no free stays at all").
+
+    `params` must already contain the standard filter_params() bind
+    set (:year, :month, :date, :start_date, :end_date) — this function
+    adds :villa_exceptions and, if `villa` is given, :flt_villa on a
+    copy of that dict (never mutates the caller's params).
+    """
+    q_params = dict(params)
+    q_params["villa_exceptions"] = list(VILLA_FORGONE_EXCLUDED)
+    villa_filter = ""
+    if villa:
+        villa_filter = "AND rd.villa_name = :flt_villa"
+        q_params["flt_villa"] = villa
+
+    sql = text(_villa_forgone_revenue_sql().format(
+        villa_filter=villa_filter,
+        date_sql=_rate_details_date_filter_sql(),
+    ))
+
+    with engine.connect() as conn:
+        row = conn.execute(sql, q_params).mappings().fetchone()
+
+    total_free = int(row["total_free_rows"] or 0)
+    missing = int(row["missing_rate_count"] or 0)
+    coverage = ((total_free - missing) / total_free) if total_free else None
+
+    return {
+        "forgoneRevenue":      float(row["forgone_revenue"] or 0),
+        "missingRateCount":    missing,
+        "totalFreeRows":       total_free,
+        "uniqueAccounts":      int(row["unique_accounts"] or 0),
+        "calculationCoverage": coverage,
+    }
+
+
 # Shared FastAPI Query declarations for the 5 date-filter params, reused
 # (by re-declaration, since FastAPI needs them per-route-signature) on
 # every endpoint below. Centralized here only as a comment-level contract:
@@ -185,6 +338,119 @@ def _villa_bookings_date_filter_sql() -> str:
 #
 # All five are passed straight into filter_params(...) from
 # analytics_shared.py, which is the same call signature Visits & Rooms uses.
+
+
+# ══════════════════════════════════════════════════════════════════
+# COMPOSABLE DRILLDOWN FILTERS
+#
+# Single implementation of "what does each filter dimension mean in
+# SQL", shared by /drilldown (flat records) and /drilldown-breakdown
+# (grouped totals) so a stacked filter set means exactly the same
+# thing — and sums to exactly the same number — no matter which
+# endpoint produced the screen the user is looking at.
+# ══════════════════════════════════════════════════════════════════
+def _apply_common_filters(
+    where_clauses: list,
+    params: dict,
+    *,
+    source: Optional[str] = None,
+    villa: Optional[str] = None,
+    customer: Optional[str] = None,
+    payment: Optional[str] = None,
+    amenity: Optional[str] = None,
+    category: Optional[str] = None,
+    section: Optional[str] = None,
+) -> None:
+    """
+    Append AND-able WHERE clauses (+ matching bind params) for every
+    filter dimension that's actually set (non-None/non-empty).
+
+    Each dimension is independent and they compose with a plain AND —
+    e.g. payment='free' + villa='Solaria Villa' returns only the
+    free-of-charge folio rows for that villa. This is the mechanism
+    that makes "preserve filters while drilling deeper" possible: the
+    frontend just keeps merging new dimensions into the same dict
+    instead of replacing it.
+
+    Callers must already have `f` (folios) and a LEFT JOIN'd
+    `bs` (business_source) in scope, since `payment` and the default
+    `section` behavior both read bs.payment_type.
+
+    NOTE: this powers /drilldown and /drilldown-breakdown, both of
+    which still read from folios. It is NOT used by the rate_details-
+    sourced Villa Forgone Revenue calculation (see
+    _villa_forgone_revenue_sql()), which has its own filter handling.
+    """
+    if source:
+        where_clauses.append("AND f.source = :flt_source")
+        params["flt_source"] = source
+
+    if villa:
+        where_clauses.append("AND f.villa_name = :flt_villa")
+        params["flt_villa"] = villa
+
+    if customer == "Member":
+        where_clauses.append("AND (f.member_type IS NULL OR f.member_type != 'Guests')")
+    elif customer == "Guest":
+        where_clauses.append("AND f.member_type = 'Guests'")
+
+    if payment == "free":
+        where_clauses.append("AND bs.payment_type = 'Free'")
+    elif payment == "paid":
+        where_clauses.append("AND bs.payment_type = 'Paid'")
+
+    if amenity and amenity in AMENITY_KEYWORDS:
+        like_clauses = " OR ".join(
+            f"LOWER(f.description) LIKE '%{kw}%'" for kw in AMENITY_KEYWORDS[amenity]
+        )
+        where_clauses.append(f"AND ({like_clauses})")
+
+    if category:
+        where_clauses.append("AND f.transaction_category = :flt_category")
+        params["flt_category"] = category
+
+    if section in ("Amenities", "Services"):
+        where_clauses.append(f"AND ({_section_case_sql()}) = :flt_section")
+        params["amenity_cats"] = list(AMENITY_CATS)
+        params["flt_section"] = section
+        # /overview's Amenities/Services figures only count the
+        # 'collected' bucket (see _bucket_case_sql() docstring) — match
+        # that by default so a plain section drill sums to the card
+        # total. But if the caller has ALSO picked an explicit payment
+        # bucket (stacked filters, e.g. section='Amenities'&payment='free'),
+        # that explicit choice wins instead of silently zeroing the
+        # result out against the 'collected'-only default.
+        if not payment:
+            where_clauses.append(f"AND ({_bucket_case_sql()}) = 'collected'")
+
+
+def _legacy_type_value_to_filters(type_: Optional[str], value: Optional[str]) -> dict:
+    """
+    Maps the old single-dimension `type`/`value` query params onto the
+    new structured filter dict, purely for backward compatibility with
+    callers that haven't moved to the explicit param names (source /
+    villa / customer / payment / amenity / category / section).
+    """
+    if not type_:
+        return {}
+    if type_ == "source":
+        return {"source": value}
+    if type_ == "villa":
+        return {"villa": value}
+    if type_ == "customer":
+        return {"customer": value or "Member"}
+    if type_ == "paid":
+        return {"payment": "paid"}
+    if type_ in ("free", "complimentary"):
+        # 'complimentary' kept for backwards compat — maps to 'free'
+        return {"payment": "free"}
+    if type_ == "amenity":
+        return {"amenity": value}
+    if type_ == "category":
+        return {"category": value}
+    if type_ == "section":
+        return {"section": value}
+    return {}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -205,6 +471,10 @@ def _villa_bookings_date_filter_sql() -> str:
 # Total Revenue = Villas + Amenities + Services. There is no separate
 # "total revenue" SQL query — it's derived in Python from the other
 # three so there's exactly one revenue calculation path.
+#
+# Forgone Revenue is NOT part of this endpoint's response — it never
+# was. This endpoint is unaffected by the Forgone Revenue rename or
+# the Villa methodology change.
 # ══════════════════════════════════════════════════════════════════
 @router.get("/overview")
 def finance_overview(
@@ -302,6 +572,26 @@ def finance_overview(
     }
 
 
+# ══════════════════════════════════════════════════════════════════
+# 1b. CATEGORY / FORGONE-REVENUE BREAKDOWN
+#
+# Returns one row per (section, category, payment_type, bucket) with
+# an `amount`, used by the frontend's Collected vs. Forgone Revenue
+# cards.
+#
+# Villa section: the 'forgone_revenue' bucket is NOT computed from
+# folios. It's a single synthetic row sourced from rate_details (see
+# _villa_forgone_revenue_row()) — SUM(original_amount) where
+# payment_type = 'Free', excluding Villa Lolita / Wonderland. Villa's
+# 'collected' and 'reversed' buckets are unchanged (still folios).
+#
+# Amenities / Services: unchanged calculation, bucket value renamed
+# 'given_away' -> 'forgone_revenue'.
+#
+# An optional `villa` filter narrows the Villa forgone-revenue figure
+# (and, like every other Finance filter, doesn't affect Amenities /
+# Services, which have no villa dimension).
+# ══════════════════════════════════════════════════════════════════
 @router.get("/category-comp-breakdown")
 def category_comp_breakdown(
     year:       Optional[int]  = Query(None),
@@ -309,6 +599,7 @@ def category_comp_breakdown(
     date:       Optional[date] = Query(None),
     start_date: Optional[date] = Query(None),
     end_date:   Optional[date] = Query(None),
+    villa:      Optional[str]  = Query(None, description="Optional villa_name filter; narrows the Villa Forgone Revenue figure"),
 ):
     params = filter_params(
         year=year, month=month, date=date,
@@ -338,8 +629,15 @@ def category_comp_breakdown(
     with engine.connect() as conn:
         rows = conn.execute(sql, params).mappings().all()
 
-    return [
-        {
+    out = []
+    for r in rows:
+        # Villa's forgone_revenue bucket is no longer sourced from
+        # folios — drop it here, replaced below with the rate_details
+        # figure. Villa 'collected' / 'reversed' rows pass through
+        # unchanged, as does everything in Amenities/Services.
+        if r["section"] == "Villa" and r["bucket"] == "forgone_revenue":
+            continue
+        out.append({
             "section": r["section"],
             "category": r["category"],
             "PaymentType": r["payment_type"],
@@ -347,9 +645,56 @@ def category_comp_breakdown(
             "amount": float(r["amount"] or 0),
             "transactions": r["transactions"],
             "uniqueAccounts": r["unique_accounts"],
-        }
-        for r in rows
-    ]
+        })
+
+    # Villa Forgone Revenue — from rate_details, not folios. Excludes
+    # Villa Lolita / Wonderland. If `villa` is one of the excluded
+    # names, this correctly produces 0 revenue / 0 rows rather than
+    # silently ignoring the exclusion.
+    villa_forgone = _villa_forgone_revenue_row(params, villa=villa)
+    out.append({
+        "section": "Villa",
+        "category": "Villa",
+        "PaymentType": "Free",
+        "bucket": "forgone_revenue",
+        "amount": villa_forgone["forgoneRevenue"],
+        "transactions": villa_forgone["totalFreeRows"],
+        "uniqueAccounts": villa_forgone["uniqueAccounts"],
+        # Extra fields, present only on this synthetic row — data-
+        # quality companions to the figure, not part of the original
+        # contract. See /villa-forgone-coverage for a dedicated,
+        # always-available version of these same numbers.
+        "missingRateCount": villa_forgone["missingRateCount"],
+        "calculationCoverage": villa_forgone["calculationCoverage"],
+    })
+
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════
+# 1c. VILLA FORGONE REVENUE — DATA QUALITY / COVERAGE
+#
+# Dedicated companion to the Villa Forgone Revenue figure in
+# category-comp-breakdown: how many free-villa rate_details rows had
+# no original_amount to sum, and what fraction of in-scope free rows
+# were actually counted in the total. Same filters as every other
+# Finance endpoint, plus an optional villa filter.
+# ══════════════════════════════════════════════════════════════════
+@router.get("/villa-forgone-coverage")
+def finance_villa_forgone_coverage(
+    year:       Optional[int]  = Query(None),
+    month:      Optional[int]  = Query(None),
+    date:       Optional[date] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date:   Optional[date] = Query(None),
+    villa:      Optional[str]  = Query(None),
+):
+    params = filter_params(
+        year=year, month=month, date=date,
+        start_date=start_date, end_date=end_date,
+    )
+    return _villa_forgone_revenue_row(params, villa=villa)
+
 
 # ══════════════════════════════════════════════════════════════════
 # 2. REVENUE BY SOURCE
@@ -455,17 +800,32 @@ def finance_member_vs_guest(
 # ══════════════════════════════════════════════════════════════════
 # 4. VILLA REVENUE (breakdown table, by villa name)
 #
-# Out of scope for this change. Still uses visit_room_villa_summary
-# (unfiltered) / folios fallback (filtered) as before — this endpoint
-# powers the "Villa Revenue" breakdown TABLE further down the page, not
-# the new "Villas Revenue" OVERVIEW CARD (which now uses
-# overview_villa_bookings, see finance_overview() above).
+# Migrated off visit_room_villa_summary / folios onto the same trusted
+# source as the Villas Revenue overview card — overview_villa_bookings.
+# overview_villa_revenue — so this table's rows always sum to that
+# card's total, filtered or not. (Previously these read from different
+# sources and could disagree for a filtered period — see the prior
+# flag in finance_overview()'s history; this closes that gap.)
 #
-# ⚠️ KNOWN INCONSISTENCY: this means the Villas Revenue card total and
-# the sum of this table's rows can now disagree for a filtered period,
-# since they read from different sources. Wasn't asked to fix this
-# table, so leaving it as-is — flagging in case you want to migrate it
-# to overview_villa_bookings too in a follow-up for full consistency.
+# _villa_bookings_date_filter_sql() already resolves to "no
+# restriction" when no date params are supplied, so a single query now
+# covers both the unfiltered and filtered cases — no more has_filter
+# branching, no more empty-table fallback to folios.
+#
+# total_bookings uses COUNT(DISTINCT overview_conf_code) defensively,
+# in case a future schema change ever produces more than one row per
+# booking (e.g. a bedroom_count split like overview_villa_stats does)
+# — today it's expected to already be one row per booking.
+#
+# NOTE: this table has no payment-type (paid/free) breakdown, since
+# overview_villa_bookings doesn't carry that dimension. If you need a
+# payment-aware per-villa breakdown (e.g. "free villa stays only"),
+# use GET /finance/drilldown-breakdown?group_by=villa&payment=free
+# instead — it's sourced from folios and supports the full composable
+# filter set. This endpoint stays as-is for the always-visible Villa
+# Revenue table on the main Finance tab. (For Villa FORGONE REVENUE
+# specifically, see /finance/category-comp-breakdown or the dedicated
+# /finance/villa-forgone-coverage endpoint — both read rate_details.)
 # ══════════════════════════════════════════════════════════════════
 @router.get("/villa-revenue")
 def finance_villa_revenue(
@@ -479,48 +839,30 @@ def finance_villa_revenue(
         year=year, month=month, date=date,
         start_date=start_date, end_date=end_date,
     )
-    has_filter = any(v is not None for v in params.values())
 
-    rows = []
+    sql = text(f"""
+        SELECT
+            ovb.overview_villa_name                                  AS villa_name,
+            COALESCE(SUM(ovb.overview_villa_revenue), 0)             AS revenue,
+            COUNT(DISTINCT ovb.overview_conf_code)                   AS total_bookings,
+            COALESCE(SUM(ovb.overview_nights), 0)                    AS room_nights,
+            COALESCE(ROUND(AVG(ovb.overview_nights)::numeric, 1), 0) AS avg_stay,
+            COUNT(*) FILTER (
+                WHERE ovb.overview_member_or_guest = 'Member'
+                   OR ovb.overview_member_or_guest IS NULL
+            )                                                        AS member_bookings,
+            COUNT(*) FILTER (
+                WHERE ovb.overview_member_or_guest = 'Guest'
+            )                                                        AS guest_bookings
+        FROM overview_villa_bookings ovb
+        WHERE ovb.overview_villa_name IS NOT NULL
+        {_villa_bookings_date_filter_sql()}
+        GROUP BY ovb.overview_villa_name
+        ORDER BY revenue DESC NULLS LAST
+    """)
 
-    if not has_filter:
-        sql = text("""
-            SELECT
-                villa_name,
-                COALESCE(villa_rental_revenue, 0)  AS revenue,
-                COALESCE(total_bookings, 0)         AS total_bookings,
-                COALESCE(room_nights, 0)            AS room_nights,
-                COALESCE(avg_stay, 0)               AS avg_stay,
-                COALESCE(member_bookings, 0)        AS member_bookings,
-                COALESCE(guest_bookings, 0)         AS guest_bookings
-            FROM visit_room_villa_summary
-            WHERE villa_name IS NOT NULL
-            ORDER BY revenue DESC NULLS LAST
-        """)
-        with engine.connect() as conn:
-            rows = _rows_to_dicts(conn.execute(sql))
-
-    if not rows:
-        # Date-filtered (or summary table empty) — derive villa revenue
-        # straight from folios using the shared date filter pattern.
-        date_sql = date_filter_sql()  # alias="f", column="check_in_date"
-        sql2 = text(f"""
-            SELECT
-                COALESCE(f.villa_name, 'Unknown') AS villa_name,
-                SUM(f.amount)                     AS revenue,
-                COUNT(DISTINCT f.conf_code)       AS total_bookings,
-                0                                 AS room_nights,
-                0                                 AS avg_stay,
-                0                                 AS member_bookings,
-                0                                 AS guest_bookings
-            FROM folios f
-            WHERE f.amount IS NOT NULL AND f.villa_name IS NOT NULL
-            {date_sql}
-            GROUP BY f.villa_name
-            ORDER BY revenue DESC
-        """)
-        with engine.connect() as conn:
-            rows = _rows_to_dicts(conn.execute(sql2, params))
+    with engine.connect() as conn:
+        rows = _rows_to_dicts(conn.execute(sql, params))
 
     return [
         {
@@ -643,21 +985,31 @@ def finance_amenity_revenue(
 # 6. DRILL-DOWN — underlying folio records
 # Enriched with member contact details from members + member_addresses + member_phones
 # Ordered highest amount first
-# Supports type/value filters plus year / month / date / start_date / end_date
-# via the shared date_filter_sql() + filter_params() pattern (replaces the
-# previous ad hoc EXTRACT(YEAR/MONTH FROM f.transaction_date) filters).
-# payment_type filtering uses 'Free' / 'Paid' string values directly
+# Supports the full composable filter set (see module docstring) plus
+# year / month / date / start_date / end_date via the shared
+# date_filter_sql() + filter_params() pattern.
 #
-# NEW: type="section" (value "Amenities" | "Services") — backs the new
-# Amenities Revenue / Services Revenue overview cards. Reuses
-# _section_case_sql(), the same bucketing category-comp-breakdown and
-# the /overview endpoint use, so the records shown here always agree
-# with the totals on those cards.
+# `type`/`value` are accepted only for backward compatibility — see
+# _legacy_type_value_to_filters(). New callers should pass the
+# structured params (source / villa / customer / payment / amenity /
+# category / section) directly, and can pass MULTIPLE of them at once
+# to stack filters (e.g. payment=free&category=Villa).
+#
+# NOTE: this endpoint still reads from folios, unchanged by the
+# Villa Forgone Revenue methodology change — it shows the underlying
+# folio line items, not the rate_details-sourced forgone figure.
 # ══════════════════════════════════════════════════════════════════
 @router.get("/drilldown")
 def finance_drilldown(
-    type:       str           = Query(...),
-    value:      Optional[str] = Query(None),
+    type:       Optional[str] = Query(None, description="Legacy single-filter key — back-compat only"),
+    value:      Optional[str] = Query(None, description="Legacy single-filter value — back-compat only"),
+    source:     Optional[str] = Query(None),
+    villa:      Optional[str] = Query(None),
+    customer:   Optional[str] = Query(None, description="'Member' | 'Guest'"),
+    payment:    Optional[str] = Query(None, description="'paid' | 'free'"),
+    amenity:    Optional[str] = Query(None),
+    category:   Optional[str] = Query(None),
+    section:    Optional[str] = Query(None, description="'Amenities' | 'Services'"),
     limit:      int           = Query(200, le=500),
     year:       Optional[int]  = Query(None),
     month:      Optional[int]  = Query(None),
@@ -665,6 +1017,21 @@ def finance_drilldown(
     start_date: Optional[date] = Query(None),
     end_date:   Optional[date] = Query(None),
 ):
+    # Fold the legacy type/value pair in as one more dimension — it
+    # only fills a slot that isn't already explicitly set, so a caller
+    # mixing both styles (e.g. a not-yet-migrated child component still
+    # sending type=villa&value=X alongside an explicit payment=free
+    # added by the drawer) gets both applied rather than one clobbering
+    # the other.
+    legacy = _legacy_type_value_to_filters(type, value)
+    source   = source   or legacy.get("source")
+    villa    = villa    or legacy.get("villa")
+    customer = customer or legacy.get("customer")
+    payment  = payment  or legacy.get("payment")
+    amenity  = amenity  or legacy.get("amenity")
+    category = category or legacy.get("category")
+    section  = section  or legacy.get("section")
+
     base = """
         SELECT
             f.folio_key,
@@ -709,50 +1076,11 @@ def finance_drilldown(
     )
     where_clauses: list = [date_filter_sql()]  # alias="f", column="check_in_date"
 
-    # ── type-based filter ─────────────────────────────────────────
-    if type == "source" and value:
-        where_clauses.append("AND f.source = :val")
-        params["val"] = value
-
-    elif type == "villa" and value:
-        where_clauses.append("AND f.villa_name = :val")
-        params["val"] = value
-
-    elif type == "customer":
-        if value == "Member":
-            where_clauses.append("AND (f.member_type IS NULL OR f.member_type != 'Guests')")
-        else:
-            where_clauses.append("AND f.member_type = 'Guests'")
-
-    elif type == "paid":
-        where_clauses.append("AND bs.payment_type = 'Paid'")
-
-    elif type == "complimentary":
-        # kept for backwards compat — maps to Free
-        where_clauses.append("AND bs.payment_type = 'Free'")
-
-    elif type == "free":
-        where_clauses.append("AND bs.payment_type = 'Free'")
-
-    elif type == "amenity" and value and value in AMENITY_KEYWORDS:
-        kws = AMENITY_KEYWORDS[value]
-        like_clauses = " OR ".join(
-            f"LOWER(f.description) LIKE '%{kw}%'" for kw in kws
-        )
-        where_clauses.append(f"AND ({like_clauses})")
-
-    elif type == "category" and value:
-        where_clauses.append("AND f.transaction_category = :val")
-        params["val"] = value
-
-    elif type == "section" and value in ("Amenities", "Services"):
-        # Matches finance_overview()'s revenue figure exactly: collected
-        # charges only, so the records shown here sum to the card total
-        # (no payments/adjustments/reversals mixed in).
-        where_clauses.append(f"AND ({_section_case_sql()}) = :val")
-        where_clauses.append(f"AND ({_bucket_case_sql()}) = 'collected'")
-        params["amenity_cats"] = list(AMENITY_CATS)
-        params["val"] = value
+    _apply_common_filters(
+        where_clauses, params,
+        source=source, villa=villa, customer=customer, payment=payment,
+        amenity=amenity, category=category, section=section,
+    )
 
     where_str = "\n        ".join(where_clauses)
     order = "ORDER BY f.amount DESC NULLS LAST, f.transaction_date DESC NULLS LAST"
@@ -784,6 +1112,118 @@ def finance_drilldown(
             "memberPhone":       r["member_phone"],
             "memberCity":        r["member_city"],
             "memberCountry":     r["member_country"],
+        }
+        for r in rows
+    ]
+
+
+# ══════════════════════════════════════════════════════════════════
+# 7. DRILL-DOWN BREAKDOWN — grouped totals for a given dimension,
+#    scoped by every OTHER active filter.
+#
+# Powers the drawer's mid-level "browse by…" breakdown lists (e.g.
+# drilling into "Free" and then choosing to see it broken down by
+# villa) using the exact same _apply_common_filters() logic /drilldown
+# uses, so the numbers shown here always sum to what /drilldown's flat
+# record list returns for the same accumulated filter set. This is
+# what makes "Free -> Villas" show free-of-charge revenue PER VILLA
+# instead of each villa's all-time total.
+#
+# The dimension passed as `group_by` is intentionally excluded from
+# its own filter — e.g. group_by=villa ignores an incoming villa=
+# filter, since grouping by a dimension you've already pinned to one
+# value would just produce a single row.
+#
+# NOTE: unchanged by the Villa Forgone Revenue methodology change —
+# this still reads folios, same as /drilldown.
+# ══════════════════════════════════════════════════════════════════
+_BREAKDOWN_GROUPS = {
+    "villa":    {"expr": "f.villa_name", "requires_not_null": True},
+    "source":   {"expr": "COALESCE(NULLIF(TRIM(f.source), ''), 'Unknown')", "requires_not_null": False},
+    "category": {"expr": "COALESCE(NULLIF(TRIM(f.transaction_category), ''), 'Uncategorized')", "requires_not_null": False},
+    "customer": {"expr": "CASE WHEN f.member_type = 'Guests' THEN 'Guest' ELSE 'Member' END", "requires_not_null": False},
+    "amenity":  {"expr": _amenity_case_sql(), "requires_not_null": False},
+}
+
+
+@router.get("/drilldown-breakdown")
+def finance_drilldown_breakdown(
+    group_by:   str           = Query(..., pattern="^(villa|source|category|customer|amenity)$"),
+    type:       Optional[str] = Query(None),
+    value:      Optional[str] = Query(None),
+    source:     Optional[str] = Query(None),
+    villa:      Optional[str] = Query(None),
+    customer:   Optional[str] = Query(None),
+    payment:    Optional[str] = Query(None),
+    amenity:    Optional[str] = Query(None),
+    category:   Optional[str] = Query(None),
+    section:    Optional[str] = Query(None),
+    limit:      int           = Query(50, le=200),
+    year:       Optional[int]  = Query(None),
+    month:      Optional[int]  = Query(None),
+    date:       Optional[date] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date:   Optional[date] = Query(None),
+):
+    legacy = _legacy_type_value_to_filters(type, value)
+    source   = source   or legacy.get("source")
+    villa    = villa    or legacy.get("villa")
+    customer = customer or legacy.get("customer")
+    payment  = payment  or legacy.get("payment")
+    amenity  = amenity  or legacy.get("amenity")
+    category = category or legacy.get("category")
+    section  = section  or legacy.get("section")
+
+    group_cfg  = _BREAKDOWN_GROUPS[group_by]
+    group_expr = group_cfg["expr"]
+
+    params: dict = filter_params(
+        year=year, month=month, date=date,
+        start_date=start_date, end_date=end_date,
+    )
+    where_clauses: list = [date_filter_sql()]
+
+    _apply_common_filters(
+        where_clauses, params,
+        source=source if group_by != "source" else None,
+        villa=villa if group_by != "villa" else None,
+        customer=customer if group_by != "customer" else None,
+        payment=payment,
+        amenity=amenity if group_by != "amenity" else None,
+        category=category if group_by != "category" else None,
+        section=section,
+    )
+
+    if group_cfg["requires_not_null"]:
+        where_clauses.append(f"AND {group_expr} IS NOT NULL")
+
+    where_str = "\n        ".join(where_clauses)
+    sql = text(f"""
+        SELECT
+            {group_expr}                       AS group_label,
+            SUM(f.amount)                       AS revenue,
+            COUNT(*)                            AS transactions,
+            COUNT(DISTINCT f.member_number)     AS unique_accounts
+        FROM folios f
+        LEFT JOIN business_source bs
+          ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
+        WHERE f.amount IS NOT NULL
+        {where_str}
+        GROUP BY 1
+        ORDER BY revenue DESC NULLS LAST
+        LIMIT :flt_limit
+    """)
+    params["flt_limit"] = limit
+
+    with engine.connect() as conn:
+        rows = _rows_to_dicts(conn.execute(sql, params))
+
+    return [
+        {
+            "label":          r["group_label"],
+            "revenue":        float(r["revenue"] or 0),
+            "transactions":   int(r["transactions"] or 0),
+            "uniqueAccounts": int(r["unique_accounts"] or 0),
         }
         for r in rows
     ]

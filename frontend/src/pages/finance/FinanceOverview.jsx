@@ -79,7 +79,7 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Total Revenue",
       value: money(data.totalRevenue),
-      sub:   `${(data.totalTransactions ?? 0).toLocaleString()} transactions: paid villa stays + amenities + services`,
+      sub:   `${(data.totalTransactions ?? 0).toLocaleString()} folio charges — villa stays, amenities, and all other services`,
       icon:  TrendingUp,
       accent: C.accent,
       // Special-cased in FinanceTab's handleOverviewCardClick — opens a
@@ -91,7 +91,7 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Villas Revenue",
       value: money(data.villasRevenue),
-      sub:   "Villa rental bookings",
+      sub:   "Folio lines classified as villa stays — covers both paid and comped rooms that generated a charge",
       icon:  Home,
       accent: "#2D8A5F",
       // transaction_category = 'Villa' — same /drilldown "category"
@@ -102,7 +102,7 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Amenities Revenue",
       value: money(data.amenitiesRevenue),
-      sub:   "Spa, golf, dining & more",
+      sub:   "Spa, golf, F&B, tennis, boutique, and other amenity charges across all folios",
       icon:  Sparkles,
       accent: "#D98C2B",
       drillType: "section",
@@ -111,7 +111,7 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Services Revenue",
       value: money(data.servicesRevenue),
-      sub:   "All other service charges",
+      sub:   "Commissary, adjustments, and other service lines outside villa and amenity categories",
       icon:  Briefcase,
       accent: C.accent2,
       drillType: "section",

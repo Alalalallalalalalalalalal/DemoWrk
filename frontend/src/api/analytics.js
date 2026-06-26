@@ -57,11 +57,15 @@ export const analyticsApi = {
       ),
     ),
 
-  newVsRepeatVisitorDetails: (year, visitorStatus) =>
+  newVsRepeatVisitors: (params = {}) =>
+    fetchData(withQuery("/analytics/new-vs-repeat-visitors", params)),
+
+  newVsRepeatVisitorDetails: ({ visitorStatus, periodStart, periodEnd }) =>
     fetchData(
-      withQuery(`/analytics/new-vs-repeat-visitors/details`, {
-        year,
+      withQuery("/analytics/new-vs-repeat-visitors/details", {
         visitor_status: visitorStatus,
+        start_date: periodStart,
+        end_date: periodEnd,
       }),
     ),
 
@@ -168,4 +172,14 @@ export const analyticsApi = {
 
   villaSourceBedroomBreakdown: (params = {}) =>
     fetchData(withQuery("/analytics/villa-source-bedroom-breakdown", params)),
+
+  marketingCampaigns: () => fetchData("/analytics/ml/marketing-campaigns"),
+
+  marketingCampaignMembers: (campaignKey, params = {}) =>
+    fetchData(
+      withQuery(
+        `/analytics/ml/marketing-campaigns/${encodeURIComponent(campaignKey)}/members`,
+        params,
+      ),
+    ),
 };

@@ -1188,16 +1188,7 @@ function BedroomIntelligenceCard({
             sub: `${fmt(mostFreeBed?.free)} free/comp bookings`,
             meta: "Most complimentary stays",
           },
-          {
-            icon: TrendingUp,
-            label: "Highest Comp %",
-            value:
-              highestCompPct?.bedroom_count != null
-                ? `${highestCompPct.bedroom_count} bed`
-                : "—",
-            sub: `${pct(highestCompPct?.free, (highestCompPct?.paid || 0) + (highestCompPct?.free || 0))} comp rate`,
-            meta: "Size with highest free/comp ratio",
-          },
+
           {
             icon: DollarSign,
             label: "Paid Revenue",
@@ -3169,416 +3160,456 @@ export default function VillaSourceBreakdown({ years, months }) {
         </div>
       </div>
 
-      {/* Source breakdown for selected villa */}
+      {/* Source breakdown side modal for selected villa */}
       {selectedVilla && (
-        <div className="dashboard-card">
-          <div
+        <div
+          onClick={() => setSelectedVilla(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            background: "rgba(8,18,32,0.48)",
+            backdropFilter: "blur(3px)",
+            display: "flex",
+            justifyContent: "flex-end",
+          }}
+        >
+          <aside
+            onClick={(e) => e.stopPropagation()}
             style={{
+              width: "min(920px, 94vw)",
+              height: "100vh",
+              background: C.bg,
+              borderLeft: `1px solid ${C.border}`,
+              boxShadow: "-24px 0 60px rgba(0,0,0,0.22)",
+              overflowY: "auto",
               display: "flex",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-              marginBottom: 16,
+              flexDirection: "column",
             }}
           >
-            <div>
-              <div className="dashboard-eyebrow">Selected villa</div>
-              <h2 className="dashboard-card-title" style={{ marginBottom: 2 }}>
-                {selectedVilla} — Source Breakdown
-              </h2>
-              <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>
-                Rows reflect this table's own date filter plus the active source
-                and paid/free filters.
-              </p>
-              <div style={{ marginTop: 8 }}>
-                <PeriodPill filter={selectedVillaDateFilter} />
-              </div>
-            </div>
             <div
+              className="dashboard-card"
               style={{
-                display: "flex",
-                gap: 10,
-                alignItems: "center",
-                flexWrap: "wrap",
-                justifyContent: "flex-end",
+                border: "none",
+                borderRadius: 0,
+                minHeight: "100vh",
+                boxShadow: "none",
               }}
             >
-              <DateFilterBar
-                value={selectedVillaDateFilter}
-                onChange={setSelectedVillaDateFilter}
-                years={years}
-                months={months}
-              />
-              <ExportMenu
-                rows={breakdownExportRows}
-                filenameBase={breakdownFilename}
-                disabled={!breakdownExportRows.length}
-              />
-              <button
-                onClick={() => setSelectedVilla(null)}
+              <div
                 style={{
-                  background: "none",
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 999,
-                  width: 32,
-                  height: 32,
-                  cursor: "pointer",
-                  color: C.muted,
                   display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  marginBottom: 16,
                 }}
               >
-                <X size={14} />
-              </button>
-            </div>
-          </div>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(165px,1fr))",
-              gap: 12,
-              marginBottom: 14,
-            }}
-          >
-            <KpiTile
-              icon={BedDouble}
-              label="Villa Bookings"
-              value={fmt(selectedVillaTotals.totalBookings)}
-              sub="Paid + free/comp"
-              meta={`${pct(selectedVillaTotals.paidBookings, selectedVillaTotals.totalBookings)} paid · ${pct(selectedVillaTotals.freeBookings, selectedVillaTotals.totalBookings)} free/comp`}
-              onClick={() => openModal(selectedVilla, sourceFilter, null)}
-              active={
-                modalOpen &&
-                modalVilla === selectedVilla &&
-                modalIsFree === null
-              }
-            />
-            <KpiTile
-              icon={DollarSign}
-              label="Villa Paid"
-              value={fmt(selectedVillaTotals.paidBookings)}
-              sub={money(selectedVillaTotals.revenue)}
-              meta="Paid booking records"
-              onClick={() => openModal(selectedVilla, sourceFilter, false)}
-              active={
-                modalOpen &&
-                modalVilla === selectedVilla &&
-                modalIsFree === false
-              }
-            />
-            <KpiTile
-              icon={Gift}
-              label="Villa Free / Comp"
-              value={fmt(selectedVillaTotals.freeBookings)}
-              sub={money(selectedVillaTotals.freeValue)}
-              meta="Free/comp booking records"
-              active={
-                modalOpen &&
-                modalVilla === selectedVilla &&
-                modalIsFree === true
-              }
-              onClick={() => openModal(selectedVilla, sourceFilter, true)}
-            />
-            <KpiTile
-              icon={Users}
-              label="Villa Nights"
-              value={fmt(selectedVillaTotals.nights)}
-              sub="Paid + free/comp nights"
-              meta="Occupancy total"
-              onClick={() => openModal(selectedVilla, sourceFilter, null)}
-              active={
-                modalOpen &&
-                modalVilla === selectedVilla &&
-                modalIsFree === null
-              }
-            />
-          </div>
-          <div style={{ marginBottom: 14 }}>
-            <MiniSplitBar
-              paid={selectedVillaTotals.paidBookings}
-              free={selectedVillaTotals.freeBookings}
-            />
-          </div>
-
-          <ScrollTableShell maxHeight={420}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 12,
-              }}
-            >
-              <thead>
-                <tr className="dashboard-eyebrow">
-                  {[
-                    "Source",
-                    "Payment Type",
-                    "Type",
-                    "Bookings",
-                    "Avg Beds",
-                    "Bed Dist.",
-                    "Nights",
-                    "Revenue",
-                    "Comp Value",
-                    "Members",
-                  ].map((h) => (
-                    <th
-                      key={h}
-                      style={{
-                        textAlign: [
-                          "Source",
-                          "Payment Type",
-                          "Bed Dist.",
-                        ].includes(h)
-                          ? "left"
-                          : "right",
-                        padding: "10px 10px",
-                        borderBottom: `1px solid ${C.border}`,
-                        fontWeight: 600,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {villaSourceRows.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={10}
-                      style={{
-                        padding: 20,
-                        textAlign: "center",
-                        color: C.muted,
-                      }}
-                    >
-                      No records for current filter
-                    </td>
-                  </tr>
-                )}
-                {villaSourceRows.map((r, i) => (
-                  <tr
-                    key={`${r.source}-${r.payment_type}-${r.is_free}-${i}`}
-                    onClick={() =>
-                      openModal(selectedVilla, r.source, r.is_free)
-                    }
-                    style={{
-                      borderBottom: `1px solid ${C.border}`,
-                      background: "transparent",
-                      cursor: "pointer",
-                      transition: "background 0.15s",
-                    }}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.background = C.panel)
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.background = "transparent")
-                    }
+                <div>
+                  <div className="dashboard-eyebrow">Selected villa</div>
+                  <h2
+                    className="dashboard-card-title"
+                    style={{ marginBottom: 2 }}
                   >
-                    <td
-                      style={{
-                        padding: "10px 10px",
-                        color: C.text,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {r.source}
-                    </td>
-                    <td style={{ padding: "10px 10px", color: C.soft }}>
-                      {r.payment_type}
-                    </td>
-                    <td style={{ padding: "10px 10px" }}>
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "3px 8px",
-                          borderRadius: 999,
-                          fontSize: 10,
-                          fontWeight: 800,
-                          textTransform: "uppercase",
-                          background: r.is_free
-                            ? "rgba(210,80,50,0.12)"
-                            : "rgba(30,80,150,0.10)",
-                          color: r.is_free ? C.accent3 : C.accent,
-                        }}
-                      >
-                        {r.is_free ? (
-                          <Gift size={9} />
-                        ) : (
-                          <DollarSign size={9} />
-                        )}
-                        {r.is_free ? "Free" : "Paid"}
-                      </span>
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px 10px",
-                        textAlign: "right",
-                        color: C.soft,
-                      }}
-                    >
-                      {fmt(r.bookings)}
-                    </td>
-                    {/* NEW: avg bedrooms */}
-                    <td
-                      style={{
-                        padding: "10px 10px",
-                        textAlign: "right",
-                        color: C.soft,
-                      }}
-                    >
-                      {r.avg_bedrooms != null ? num(r.avg_bedrooms) : "—"}
-                    </td>
-                    {/* NEW: bedroom distribution bar */}
-                    <td style={{ padding: "10px 10px", minWidth: 100 }}>
-                      <BedroomDistBar distribution={r.bedroom_distribution} />
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px 10px",
-                        textAlign: "right",
-                        color: C.soft,
-                      }}
-                    >
-                      {fmt(r.total_nights)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px 10px",
-                        textAlign: "right",
-                        color: r.is_free ? C.muted : C.text,
-                        fontWeight: r.is_free ? 400 : 700,
-                      }}
-                    >
-                      {r.is_free ? "—" : money(r.revenue)}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px 10px",
-                        textAlign: "right",
-                        color: r.is_free ? C.accent3 : C.muted,
-                        fontWeight: r.is_free ? 700 : 400,
-                      }}
-                    >
-                      {r.is_free ? money(r.free_value) : "—"}
-                    </td>
-                    <td
-                      style={{
-                        padding: "10px 10px",
-                        textAlign: "right",
-                        color: C.soft,
-                      }}
-                    >
-                      {fmt(r.unique_members)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              {villaSourceRows.length > 0 &&
-                (() => {
-                  const paid = villaSourceRows.filter((r) => !r.is_free);
-                  const free = villaSourceRows.filter((r) => r.is_free);
-                  return (
-                    <tfoot>
-                      <tr
-                        style={{
-                          background: C.panelAlt,
-                          borderTop: `2px solid ${C.border}`,
-                          fontWeight: 800,
-                        }}
-                      >
-                        <td
-                          style={{ padding: "10px 10px", color: C.text }}
-                          colSpan={3}
-                        >
-                          Totals
-                        </td>
-                        <td
+                    {selectedVilla} — Source Breakdown
+                  </h2>
+                  <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>
+                    Rows reflect this table's own date filter plus the active
+                    source and paid/free filters.
+                  </p>
+                  <div style={{ marginTop: 8 }}>
+                    <PeriodPill filter={selectedVillaDateFilter} />
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    justifyContent: "flex-end",
+                  }}
+                >
+                  <DateFilterBar
+                    value={selectedVillaDateFilter}
+                    onChange={setSelectedVillaDateFilter}
+                    years={years}
+                    months={months}
+                  />
+                  <ExportMenu
+                    rows={breakdownExportRows}
+                    filenameBase={breakdownFilename}
+                    disabled={!breakdownExportRows.length}
+                  />
+                  <button
+                    onClick={() => setSelectedVilla(null)}
+                    style={{
+                      background: "none",
+                      border: `1px solid ${C.border}`,
+                      borderRadius: 999,
+                      width: 32,
+                      height: 32,
+                      cursor: "pointer",
+                      color: C.muted,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(165px,1fr))",
+                  gap: 12,
+                  marginBottom: 14,
+                }}
+              >
+                <KpiTile
+                  icon={BedDouble}
+                  label="Villa Bookings"
+                  value={fmt(selectedVillaTotals.totalBookings)}
+                  sub="Paid + free/comp"
+                  meta={`${pct(selectedVillaTotals.paidBookings, selectedVillaTotals.totalBookings)} paid · ${pct(selectedVillaTotals.freeBookings, selectedVillaTotals.totalBookings)} free/comp`}
+                  onClick={() => openModal(selectedVilla, sourceFilter, null)}
+                  active={
+                    modalOpen &&
+                    modalVilla === selectedVilla &&
+                    modalIsFree === null
+                  }
+                />
+                <KpiTile
+                  icon={DollarSign}
+                  label="Villa Paid"
+                  value={fmt(selectedVillaTotals.paidBookings)}
+                  sub={money(selectedVillaTotals.revenue)}
+                  meta="Paid booking records"
+                  onClick={() => openModal(selectedVilla, sourceFilter, false)}
+                  active={
+                    modalOpen &&
+                    modalVilla === selectedVilla &&
+                    modalIsFree === false
+                  }
+                />
+                <KpiTile
+                  icon={Gift}
+                  label="Villa Free / Comp"
+                  value={fmt(selectedVillaTotals.freeBookings)}
+                  sub={money(selectedVillaTotals.freeValue)}
+                  meta="Free/comp booking records"
+                  active={
+                    modalOpen &&
+                    modalVilla === selectedVilla &&
+                    modalIsFree === true
+                  }
+                  onClick={() => openModal(selectedVilla, sourceFilter, true)}
+                />
+                <KpiTile
+                  icon={Users}
+                  label="Villa Nights"
+                  value={fmt(selectedVillaTotals.nights)}
+                  sub="Paid + free/comp nights"
+                  meta="Occupancy total"
+                  onClick={() => openModal(selectedVilla, sourceFilter, null)}
+                  active={
+                    modalOpen &&
+                    modalVilla === selectedVilla &&
+                    modalIsFree === null
+                  }
+                />
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <MiniSplitBar
+                  paid={selectedVillaTotals.paidBookings}
+                  free={selectedVillaTotals.freeBookings}
+                />
+              </div>
+
+              <ScrollTableShell maxHeight={420}>
+                <table
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 12,
+                  }}
+                >
+                  <thead>
+                    <tr className="dashboard-eyebrow">
+                      {[
+                        "Source",
+                        "Payment Type",
+                        "Type",
+                        "Bookings",
+                        "Avg Beds",
+                        "Bed Dist.",
+                        "Nights",
+                        "Revenue",
+                        "Comp Value",
+                        "Members",
+                      ].map((h) => (
+                        <th
+                          key={h}
                           style={{
+                            textAlign: [
+                              "Source",
+                              "Payment Type",
+                              "Bed Dist.",
+                            ].includes(h)
+                              ? "left"
+                              : "right",
                             padding: "10px 10px",
-                            textAlign: "right",
-                            color: C.text,
+                            borderBottom: `1px solid ${C.border}`,
+                            fontWeight: 600,
+                            whiteSpace: "nowrap",
                           }}
                         >
-                          {fmt(
-                            villaSourceRows.reduce(
-                              (s, r) => s + Number(r.bookings ?? 0),
-                              0,
-                            ),
-                          )}
-                        </td>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {villaSourceRows.length === 0 && (
+                      <tr>
                         <td
+                          colSpan={10}
                           style={{
-                            padding: "10px 10px",
-                            textAlign: "right",
+                            padding: 20,
+                            textAlign: "center",
                             color: C.muted,
                           }}
                         >
-                          —
-                        </td>
-                        <td style={{ padding: "10px 10px" }}></td>
-                        <td
-                          style={{
-                            padding: "10px 10px",
-                            textAlign: "right",
-                            color: C.text,
-                          }}
-                        >
-                          {fmt(
-                            villaSourceRows.reduce(
-                              (s, r) => s + Number(r.total_nights ?? 0),
-                              0,
-                            ),
-                          )}
-                        </td>
-                        <td
-                          style={{
-                            padding: "10px 10px",
-                            textAlign: "right",
-                            color: C.text,
-                          }}
-                        >
-                          {money(
-                            paid.reduce(
-                              (s, r) => s + Number(r.revenue ?? 0),
-                              0,
-                            ),
-                          )}
-                        </td>
-                        <td
-                          style={{
-                            padding: "10px 10px",
-                            textAlign: "right",
-                            color: C.accent3,
-                          }}
-                        >
-                          {money(
-                            free.reduce(
-                              (s, r) => s + Number(r.free_value ?? 0),
-                              0,
-                            ),
-                          )}
-                        </td>
-                        <td
-                          style={{
-                            padding: "10px 10px",
-                            textAlign: "right",
-                            color: C.text,
-                          }}
-                        >
-                          —
+                          No records for current filter
                         </td>
                       </tr>
-                    </tfoot>
-                  );
-                })()}
-            </table>
-          </ScrollTableShell>
+                    )}
+                    {villaSourceRows.map((r, i) => (
+                      <tr
+                        key={`${r.source}-${r.payment_type}-${r.is_free}-${i}`}
+                        onClick={() =>
+                          openModal(selectedVilla, r.source, r.is_free)
+                        }
+                        style={{
+                          borderBottom: `1px solid ${C.border}`,
+                          background: "transparent",
+                          cursor: "pointer",
+                          transition: "background 0.15s",
+                        }}
+                        onMouseEnter={(e) =>
+                          (e.currentTarget.style.background = C.panel)
+                        }
+                        onMouseLeave={(e) =>
+                          (e.currentTarget.style.background = "transparent")
+                        }
+                      >
+                        <td
+                          style={{
+                            padding: "10px 10px",
+                            color: C.text,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {r.source}
+                        </td>
+                        <td style={{ padding: "10px 10px", color: C.soft }}>
+                          {r.payment_type}
+                        </td>
+                        <td style={{ padding: "10px 10px" }}>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "3px 8px",
+                              borderRadius: 999,
+                              fontSize: 10,
+                              fontWeight: 800,
+                              textTransform: "uppercase",
+                              background: r.is_free
+                                ? "rgba(210,80,50,0.12)"
+                                : "rgba(30,80,150,0.10)",
+                              color: r.is_free ? C.accent3 : C.accent,
+                            }}
+                          >
+                            {r.is_free ? (
+                              <Gift size={9} />
+                            ) : (
+                              <DollarSign size={9} />
+                            )}
+                            {r.is_free ? "Free" : "Paid"}
+                          </span>
+                        </td>
+                        <td
+                          style={{
+                            padding: "10px 10px",
+                            textAlign: "right",
+                            color: C.soft,
+                          }}
+                        >
+                          {fmt(r.bookings)}
+                        </td>
+                        {/* NEW: avg bedrooms */}
+                        <td
+                          style={{
+                            padding: "10px 10px",
+                            textAlign: "right",
+                            color: C.soft,
+                          }}
+                        >
+                          {r.avg_bedrooms != null ? num(r.avg_bedrooms) : "—"}
+                        </td>
+                        {/* NEW: bedroom distribution bar */}
+                        <td style={{ padding: "10px 10px", minWidth: 100 }}>
+                          <BedroomDistBar
+                            distribution={r.bedroom_distribution}
+                          />
+                        </td>
+                        <td
+                          style={{
+                            padding: "10px 10px",
+                            textAlign: "right",
+                            color: C.soft,
+                          }}
+                        >
+                          {fmt(r.total_nights)}
+                        </td>
+                        <td
+                          style={{
+                            padding: "10px 10px",
+                            textAlign: "right",
+                            color: r.is_free ? C.muted : C.text,
+                            fontWeight: r.is_free ? 400 : 700,
+                          }}
+                        >
+                          {r.is_free ? "—" : money(r.revenue)}
+                        </td>
+                        <td
+                          style={{
+                            padding: "10px 10px",
+                            textAlign: "right",
+                            color: r.is_free ? C.accent3 : C.muted,
+                            fontWeight: r.is_free ? 700 : 400,
+                          }}
+                        >
+                          {r.is_free ? money(r.free_value) : "—"}
+                        </td>
+                        <td
+                          style={{
+                            padding: "10px 10px",
+                            textAlign: "right",
+                            color: C.soft,
+                          }}
+                        >
+                          {fmt(r.unique_members)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {villaSourceRows.length > 0 &&
+                    (() => {
+                      const paid = villaSourceRows.filter((r) => !r.is_free);
+                      const free = villaSourceRows.filter((r) => r.is_free);
+                      return (
+                        <tfoot>
+                          <tr
+                            style={{
+                              background: C.panelAlt,
+                              borderTop: `2px solid ${C.border}`,
+                              fontWeight: 800,
+                            }}
+                          >
+                            <td
+                              style={{ padding: "10px 10px", color: C.text }}
+                              colSpan={3}
+                            >
+                              Totals
+                            </td>
+                            <td
+                              style={{
+                                padding: "10px 10px",
+                                textAlign: "right",
+                                color: C.text,
+                              }}
+                            >
+                              {fmt(
+                                villaSourceRows.reduce(
+                                  (s, r) => s + Number(r.bookings ?? 0),
+                                  0,
+                                ),
+                              )}
+                            </td>
+                            <td
+                              style={{
+                                padding: "10px 10px",
+                                textAlign: "right",
+                                color: C.muted,
+                              }}
+                            >
+                              —
+                            </td>
+                            <td style={{ padding: "10px 10px" }}></td>
+                            <td
+                              style={{
+                                padding: "10px 10px",
+                                textAlign: "right",
+                                color: C.text,
+                              }}
+                            >
+                              {fmt(
+                                villaSourceRows.reduce(
+                                  (s, r) => s + Number(r.total_nights ?? 0),
+                                  0,
+                                ),
+                              )}
+                            </td>
+                            <td
+                              style={{
+                                padding: "10px 10px",
+                                textAlign: "right",
+                                color: C.text,
+                              }}
+                            >
+                              {money(
+                                paid.reduce(
+                                  (s, r) => s + Number(r.revenue ?? 0),
+                                  0,
+                                ),
+                              )}
+                            </td>
+                            <td
+                              style={{
+                                padding: "10px 10px",
+                                textAlign: "right",
+                                color: C.accent3,
+                              }}
+                            >
+                              {money(
+                                free.reduce(
+                                  (s, r) => s + Number(r.free_value ?? 0),
+                                  0,
+                                ),
+                              )}
+                            </td>
+                            <td
+                              style={{
+                                padding: "10px 10px",
+                                textAlign: "right",
+                                color: C.text,
+                              }}
+                            >
+                              —
+                            </td>
+                          </tr>
+                        </tfoot>
+                      );
+                    })()}
+                </table>
+              </ScrollTableShell>
+            </div>
+          </aside>
         </div>
       )}
 

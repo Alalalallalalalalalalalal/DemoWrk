@@ -52,6 +52,7 @@ import {
 import SeasonFilterBar from "./mltab/SeasonFilterBar";
 import AmenitySeasonPanel from "./mltab/AmenitySeasonPanel";
 import SegmentationPanel from "./mltab/Segmentationpanel";
+import MarketingTargetingPanel from "./mltab/MarketingTargetingPanel";
 import "./styles/styles.css";
 import VisitsRoomsTab from "./visits/VisitsRoomsTab";
 import DemographicsTab from "./demographics/DemographicsTab";
@@ -115,10 +116,9 @@ export default function Dashboard() {
   const [totalAmountDue, setTotalAmountDue] = useState(null);
   const [amountDueByPeriod, setAmountDueByPeriod] = useState([]);
   const [totalDependents, setTotalDependents] = useState(null);
-  const [dependentsPerHousehold, setDependentsPerHousehold,] = useState([]);
+  const [dependentsPerHousehold, setDependentsPerHousehold] = useState([]);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
   const [dependentsPerMember, setDependentsPerMember] = useState([]);
-  const [newVsRepeatVisitors, setNewVsRepeatVisitors] = useState([]);
   const [availableTables, setAvailableTables] = useState([]);
   const [selectedTable, setSelectedTable] = useState("");
   const [tableRows, setTableRows] = useState([]);
@@ -140,10 +140,22 @@ export default function Dashboard() {
   const [bedroomBookings, setBedroomBookings] = useState([]);
   const [villaRevenue, setVillaRevenue] = useState([]);
   const [monthlyRevenue, setMonthlyRevenue] = useState([]);
-  const [transactionFinanceSummary, setTransactionFinanceSummary] = useState([]);
-  const [transactionMemberVsGuestRevenue, setTransactionMemberVsGuestRevenue] = useState([]);
+  const [transactionFinanceSummary, setTransactionFinanceSummary] = useState(
+    [],
+  );
+  const [transactionMemberVsGuestRevenue, setTransactionMemberVsGuestRevenue] =
+    useState([]);
+  const [
+    transactionMemberVsGuestRevenueByCategory,
+    setTransactionMemberVsGuestRevenueByCategory,
+  ] = useState([]);
   const [villaAmenityRevenue, setVillaAmenityRevenue] = useState([]);
   const [monthlyRevenueByCategory, setMonthlyRevenueByCategory] = useState([]);
+  const [reversalsSummary, setReversalsSummary] = useState(null);
+  const [villaRackRateFree, setVillaRackRateFree] = useState([]);
+  const [cashAdvanceSummary, setCashAdvanceSummary] = useState(null);
+  const [anomaliesSummary, setAnomaliesSummary] = useState(null);
+  const [anomalies, setAnomalies] = useState([]);
 
   useEffect(() => {
     // ── Non-Overview data: members by country/state/gender/age, dependents
@@ -173,26 +185,12 @@ export default function Dashboard() {
         setTopSpendDescriptions(data.topSpendDescriptions ?? []);
         setDependentsByAgeGroup(data.dependentsByAgeGroup ?? []);
         setDependentsPerMember(data.dependentsPerMember ?? []);
-        setDependentsPerHousehold(data.dependentsPerHousehold ?? [],);
+        setDependentsPerHousehold(data.dependentsPerHousehold ?? []);
         // NOTE: totalAmountDue, amountDueByPeriod, and totalDependents are
         // intentionally NOT set here anymore — they now come from
         // /overview/summary below, so there's only one writer for each.
       })
       .catch(console.error);
-
-    analyticsApi
-      .demographicsSummary()
-      .then((data) => {
-        setNewVsRepeatVisitors(
-          data.newVsRepeatVisitors ?? [],
-        );
-      })
-      .catch((error) => {
-        console.error(
-          "Failed to load demographics summary:",
-          error,
-        );
-    });
 
     analyticsApi.getTables().then(setAvailableTables).catch(console.error);
     // ── Overview tab: single bundled fetch from the standalone overview
@@ -207,7 +205,10 @@ export default function Dashboard() {
     // Also includes the newer TRANSACTION-LEVEL (per net line-item, villa +
     // amenity combined) Paid/Free data used by the Finance at a glance and
     // Member vs guest revenue cards — see overview_transaction_lines in
-    // overview_views.sql for what powers these.
+    // overview_views.sql for what powers these. As of 2026-06-25 also
+    // includes overviewReversalsSummary — the gross $ amount + count of
+    // charges that were charged then fully reversed (excluded from every
+    // other Paid/Free total on the tab; see that view's docstring).
     // ────────────────────────────────────────────────────────────────
     fetch(`${API_BASE}/overview/summary`)
       .then((r) => r.json())
@@ -217,13 +218,27 @@ export default function Dashboard() {
         setBedroomBookings(data.overviewBookingsByBedroom ?? []);
         setMonthlyRevenue(data.overviewMonthlyRevenue ?? []);
         setMemberVsGuestRevenue(data.overviewMemberVsGuestRevenue ?? []);
-        setTransactionFinanceSummary(data.overviewTransactionFinanceSummary ?? []);
-        setTransactionMemberVsGuestRevenue(data.overviewTransactionMemberVsGuestRevenue ?? []);
+        setTransactionFinanceSummary(
+          data.overviewTransactionFinanceSummary ?? [],
+        );
+        setTransactionMemberVsGuestRevenue(
+          data.overviewTransactionMemberVsGuestRevenue ?? [],
+        );
+        setTransactionMemberVsGuestRevenueByCategory(
+          data.overviewTransactionMemberVsGuestRevenueByCategory ?? [],
+        );
         setVillaAmenityRevenue(data.overviewVillaAmenityRevenue ?? []);
-        setMonthlyRevenueByCategory(data.overviewMonthlyRevenueByCategory ?? []);
+        setMonthlyRevenueByCategory(
+          data.overviewMonthlyRevenueByCategory ?? [],
+        );
         setTotalAmountDue(data.overviewAmountDue ?? null);
         setAmountDueByPeriod(data.overviewAmountDueByPeriod ?? []);
         setTotalDependents(data.overviewDependents ?? null);
+        setReversalsSummary(data.overviewReversalsSummary ?? null);
+        setVillaRackRateFree(data.overviewVillaRackRateFree ?? []);
+        setCashAdvanceSummary(data.overviewCashAdvanceSummary ?? null);
+        setAnomaliesSummary(data.overviewAnomaliesSummary ?? null);
+        setAnomalies(data.overviewAnomalies ?? []);
         // villaRevenue (rental-revenue-per-villa) is no longer fetched —
         // "Top villas by revenue" now uses villaAmenityRevenue instead.
         setVillaRevenue([]);
@@ -316,9 +331,9 @@ export default function Dashboard() {
     rowLimit === "all"
       ? sortedRows
       : sortedRows.slice(
-        (page - 1) * Number(rowLimit),
-        page * Number(rowLimit),
-      );
+          (page - 1) * Number(rowLimit),
+          page * Number(rowLimit),
+        );
 
   const getExportRows = () =>
     sortedRows.map((row) => {
@@ -446,8 +461,16 @@ export default function Dashboard() {
             monthlyRevenue={monthlyRevenue}
             transactionFinanceSummary={transactionFinanceSummary}
             transactionMemberVsGuestRevenue={transactionMemberVsGuestRevenue}
+            transactionMemberVsGuestRevenueByCategory={
+              transactionMemberVsGuestRevenueByCategory
+            }
             villaAmenityRevenue={villaAmenityRevenue}
             monthlyRevenueByCategory={monthlyRevenueByCategory}
+            reversalsSummary={reversalsSummary}
+            villaRackRateFree={villaRackRateFree}
+            cashAdvanceSummary={cashAdvanceSummary}
+            anomaliesSummary={anomaliesSummary}
+            anomalies={anomalies}
           />
         )}
 
@@ -462,7 +485,6 @@ export default function Dashboard() {
             membersByStatus={membersByStatus}
             membersByMaritalStatus={membersByMaritalStatus}
             newMembersPerYear={newMembersPerYear}
-            newVsRepeatVisitors={newVsRepeatVisitors}
             totalDependents={totalDependents}
             dependentsByAgeGroup={dependentsByAgeGroup}
             dependentsPerHousehold={dependentsPerHousehold}
@@ -1055,6 +1077,10 @@ export default function Dashboard() {
             <SectionLabel>Amenity Season Analysis</SectionLabel>
             <ErrorBoundary title="Amenity Season Insights">
               <AmenitySeasonPanel seasonGroupId={activeSeasonGroup?.id} />
+            </ErrorBoundary>
+            <SectionLabel>Marketing Targeting</SectionLabel>
+            <ErrorBoundary title="Marketing Targeting ">
+              <MarketingTargetingPanel />
             </ErrorBoundary>
           </div>
         )}

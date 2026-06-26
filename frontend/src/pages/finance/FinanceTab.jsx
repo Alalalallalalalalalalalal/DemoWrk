@@ -116,10 +116,19 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
   const [errorMap, setErrorMap] = useState({});
 
   // ── drawer state ───────────────────────────────────────────────
+  // `filters` lets a caller seed MULTIPLE filter dimensions at once
+  // (e.g. a future CategoryCompBreakdown row representing category +
+  // payment bucket together). `drillType`/`drillValue` stay supported
+  // for every existing single-dimension call site (villa rows, source
+  // rows, customer rows, amenity rows, category/section cards) — the
+  // drawer merges both into the same accumulating filter set, and from
+  // there the user can pivot ("Browse by…") into further dimensions
+  // without losing what's already active.
   const [drawer, setDrawer] = useState({
     open:       false,
     drillType:  null,
     drillValue: null,
+    filters:    null,
     midItems:   null,
   });
 
@@ -174,8 +183,8 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
   }, [period]);
 
   // ── drawer helpers ─────────────────────────────────────────────
-  const openDrawer = useCallback(({ drillType, drillValue, midItems = null }) => {
-    setDrawer({ open: true, drillType, drillValue, midItems });
+  const openDrawer = useCallback(({ drillType, drillValue, filters = null, midItems = null }) => {
+    setDrawer({ open: true, drillType, drillValue, filters, midItems });
   }, []);
 
   const closeDrawer = useCallback(() => {
@@ -191,21 +200,21 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
     return [
       {
         label:      "Villas Revenue",
-        sub:        "Villa rental bookings",
+        sub:        "All folio lines classified as villa stays — click to drill into individual charges",
         revenue:    overview.villasRevenue,
         drillType:  "category",
         drillValue: "Villa",
       },
       {
         label:      "Amenities Revenue",
-        sub:        "Spa, golf, dining & more",
+        sub:        "Spa, golf, F&B, tennis, boutique, and other amenity charges — click to see folio lines",
         revenue:    overview.amenitiesRevenue,
         drillType:  "section",
         drillValue: "Amenities",
       },
       {
         label:      "Services Revenue",
-        sub:        "All other service charges",
+        sub:        "Commissary, adjustments, and other service lines — click to inspect underlying records",
         revenue:    overview.servicesRevenue,
         drillType:  "section",
         drillValue: "Services",
@@ -213,28 +222,25 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
     ];
   }
 
-  // Build villa mid-items from the Villa Revenue breakdown table data
-  // (kept for any UI that wants a per-villa breakdown before drilling
-  // into a single villa's folio records — currently unused by the
-  // overview cards, which drill straight to the flat "Villa" category
-  // list, but left in place in case a future row wants the richer view).
-  function buildVillaMidItems() {
-    return villaRevenue.map((v) => ({
-      label:      v.villaName,
-      sub:        `${(v.totalBookings ?? 0).toLocaleString()} bookings · ${(v.roomNights ?? 0).toLocaleString()} nights`,
-      revenue:    v.revenue,
-      count:      v.totalBookings,
-      drillType:  "villa",
-      drillValue: v.villaName,
-    }));
-  }
+  // NOTE: a per-villa "mid items" list used to be hand-built here from
+  // the (unfiltered) Villa Revenue table data, but it's gone now —
+  // RevenueBreakdownDrawer's "Browse by Villa" pivot replaces it with
+  // something strictly better: it calls /finance/drilldown-breakdown
+  // scoped to whatever filters are already active (payment, category,
+  // source, etc.), so the per-villa numbers shown are always correct
+  // for the current drill-down, not just the lifetime villa totals.
+  // That pivot is available automatically on every flat-record screen
+  // the drawer shows, from every entry point in this file — clicking
+  // "Villas Revenue" goes straight to flat category=Villa records, and
+  // from there "Browse by → Villa" gives the same filtered per-villa
+  // breakdown buildVillaMidItems() used to hand-roll.
 
   // Handle overview card click
   function handleOverviewCardClick({ drillType, drillValue }) {
     if (drillType === "total") {
       openDrawer({ drillType: "total", drillValue, midItems: buildTotalMidItems() });
     } else {
-      openDrawer({ drillType, drillValue, midItems: null });
+      openDrawer({ drillType, drillValue });
     }
   }
 
@@ -262,7 +268,7 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
       )}
 
       {/* ── 1.5 Category Comp Breakdown ──────────────────────────────── */}
-      <SectionLabel>Collected .vs. Given Away</SectionLabel>
+      <SectionLabel>Collected .vs. Forgone Revenue</SectionLabel>
       
       {loadingMap.category ? (
         <Skeleton height={360} />
@@ -271,9 +277,10 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
       ) : (
         <CategoryCompBreakdown
           data={categoryBreakdown}
-          onRowClick={({ drillType, drillValue }) => 
-          openDrawer({ drillType, drillValue })
-        }/>
+          onRowClick={({ drillType, drillValue, filters }) =>
+            openDrawer({ drillType, drillValue, filters })
+          }
+        />
       )}
 
       {/* ── 2. Revenue by Source ──────────────────────────────── */}
@@ -344,6 +351,7 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
         onClose={closeDrawer}
         drillType={drawer.drillType}
         drillValue={drawer.drillValue}
+        filters={drawer.filters}
         midItems={drawer.midItems}
         period={period}
       />
