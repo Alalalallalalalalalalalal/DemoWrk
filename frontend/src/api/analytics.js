@@ -39,7 +39,7 @@ export const analyticsApi = {
 
   // Demographics detail endpoints
   demographicsSummary: (params = {}) =>
-    fetchData(withQuery("/analytics/demographics-summary", params,),),
+    fetchData(withQuery("/analytics/demographics-summary", params)),
 
   stateAccounts: (stateCode, params = {}) =>
     fetchData(
@@ -58,27 +58,15 @@ export const analyticsApi = {
     ),
 
   newVsRepeatVisitors: (params = {}) =>
-    fetchData(
-      withQuery(
-        "/analytics/new-vs-repeat-visitors",
-        params,
-      ),
-    ),
+    fetchData(withQuery("/analytics/new-vs-repeat-visitors", params)),
 
-  newVsRepeatVisitorDetails: ({
-    visitorStatus,
-    periodStart,
-    periodEnd,
-  }) =>
+  newVsRepeatVisitorDetails: ({ visitorStatus, periodStart, periodEnd }) =>
     fetchData(
-      withQuery(
-        "/analytics/new-vs-repeat-visitors/details",
-        {
-          visitor_status: visitorStatus,
-          start_date: periodStart,
-          end_date: periodEnd,
-        },
-      ),
+      withQuery("/analytics/new-vs-repeat-visitors/details", {
+        visitor_status: visitorStatus,
+        start_date: periodStart,
+        end_date: periodEnd,
+      }),
     ),
 
   demographicAccountDetails: ({ dimension, value, category, ...params }) => {
@@ -184,4 +172,14 @@ export const analyticsApi = {
 
   villaSourceBedroomBreakdown: (params = {}) =>
     fetchData(withQuery("/analytics/villa-source-bedroom-breakdown", params)),
+
+  marketingCampaigns: () => fetchData("/analytics/ml/marketing-campaigns"),
+
+  marketingCampaignMembers: (campaignKey, params = {}) =>
+    fetchData(
+      withQuery(
+        `/analytics/ml/marketing-campaigns/${encodeURIComponent(campaignKey)}/members`,
+        params,
+      ),
+    ),
 };

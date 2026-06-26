@@ -52,6 +52,7 @@ import {
 import SeasonFilterBar from "./mltab/SeasonFilterBar";
 import AmenitySeasonPanel from "./mltab/AmenitySeasonPanel";
 import SegmentationPanel from "./mltab/Segmentationpanel";
+import MarketingTargetingPanel from "./mltab/MarketingTargetingPanel";
 import "./styles/styles.css";
 import VisitsRoomsTab from "./visits/VisitsRoomsTab";
 import DemographicsTab from "./demographics/DemographicsTab";
@@ -115,7 +116,7 @@ export default function Dashboard() {
   const [totalAmountDue, setTotalAmountDue] = useState(null);
   const [amountDueByPeriod, setAmountDueByPeriod] = useState([]);
   const [totalDependents, setTotalDependents] = useState(null);
-  const [dependentsPerHousehold, setDependentsPerHousehold,] = useState([]);
+  const [dependentsPerHousehold, setDependentsPerHousehold] = useState([]);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
   const [dependentsPerMember, setDependentsPerMember] = useState([]);
   const [availableTables, setAvailableTables] = useState([]);
@@ -139,9 +140,15 @@ export default function Dashboard() {
   const [bedroomBookings, setBedroomBookings] = useState([]);
   const [villaRevenue, setVillaRevenue] = useState([]);
   const [monthlyRevenue, setMonthlyRevenue] = useState([]);
-  const [transactionFinanceSummary, setTransactionFinanceSummary] = useState([]);
-  const [transactionMemberVsGuestRevenue, setTransactionMemberVsGuestRevenue] = useState([]);
-  const [transactionMemberVsGuestRevenueByCategory, setTransactionMemberVsGuestRevenueByCategory] = useState([]);
+  const [transactionFinanceSummary, setTransactionFinanceSummary] = useState(
+    [],
+  );
+  const [transactionMemberVsGuestRevenue, setTransactionMemberVsGuestRevenue] =
+    useState([]);
+  const [
+    transactionMemberVsGuestRevenueByCategory,
+    setTransactionMemberVsGuestRevenueByCategory,
+  ] = useState([]);
   const [villaAmenityRevenue, setVillaAmenityRevenue] = useState([]);
   const [monthlyRevenueByCategory, setMonthlyRevenueByCategory] = useState([]);
   const [reversalsSummary, setReversalsSummary] = useState(null);
@@ -178,7 +185,7 @@ export default function Dashboard() {
         setTopSpendDescriptions(data.topSpendDescriptions ?? []);
         setDependentsByAgeGroup(data.dependentsByAgeGroup ?? []);
         setDependentsPerMember(data.dependentsPerMember ?? []);
-        setDependentsPerHousehold(data.dependentsPerHousehold ?? [],);
+        setDependentsPerHousehold(data.dependentsPerHousehold ?? []);
         // NOTE: totalAmountDue, amountDueByPeriod, and totalDependents are
         // intentionally NOT set here anymore — they now come from
         // /overview/summary below, so there's only one writer for each.
@@ -211,11 +218,19 @@ export default function Dashboard() {
         setBedroomBookings(data.overviewBookingsByBedroom ?? []);
         setMonthlyRevenue(data.overviewMonthlyRevenue ?? []);
         setMemberVsGuestRevenue(data.overviewMemberVsGuestRevenue ?? []);
-        setTransactionFinanceSummary(data.overviewTransactionFinanceSummary ?? []);
-        setTransactionMemberVsGuestRevenue(data.overviewTransactionMemberVsGuestRevenue ?? []);
-        setTransactionMemberVsGuestRevenueByCategory(data.overviewTransactionMemberVsGuestRevenueByCategory ?? []);
+        setTransactionFinanceSummary(
+          data.overviewTransactionFinanceSummary ?? [],
+        );
+        setTransactionMemberVsGuestRevenue(
+          data.overviewTransactionMemberVsGuestRevenue ?? [],
+        );
+        setTransactionMemberVsGuestRevenueByCategory(
+          data.overviewTransactionMemberVsGuestRevenueByCategory ?? [],
+        );
         setVillaAmenityRevenue(data.overviewVillaAmenityRevenue ?? []);
-        setMonthlyRevenueByCategory(data.overviewMonthlyRevenueByCategory ?? []);
+        setMonthlyRevenueByCategory(
+          data.overviewMonthlyRevenueByCategory ?? [],
+        );
         setTotalAmountDue(data.overviewAmountDue ?? null);
         setAmountDueByPeriod(data.overviewAmountDueByPeriod ?? []);
         setTotalDependents(data.overviewDependents ?? null);
@@ -316,9 +331,9 @@ export default function Dashboard() {
     rowLimit === "all"
       ? sortedRows
       : sortedRows.slice(
-        (page - 1) * Number(rowLimit),
-        page * Number(rowLimit),
-      );
+          (page - 1) * Number(rowLimit),
+          page * Number(rowLimit),
+        );
 
   const getExportRows = () =>
     sortedRows.map((row) => {
@@ -446,7 +461,9 @@ export default function Dashboard() {
             monthlyRevenue={monthlyRevenue}
             transactionFinanceSummary={transactionFinanceSummary}
             transactionMemberVsGuestRevenue={transactionMemberVsGuestRevenue}
-            transactionMemberVsGuestRevenueByCategory={transactionMemberVsGuestRevenueByCategory}
+            transactionMemberVsGuestRevenueByCategory={
+              transactionMemberVsGuestRevenueByCategory
+            }
             villaAmenityRevenue={villaAmenityRevenue}
             monthlyRevenueByCategory={monthlyRevenueByCategory}
             reversalsSummary={reversalsSummary}
@@ -1060,6 +1077,10 @@ export default function Dashboard() {
             <SectionLabel>Amenity Season Analysis</SectionLabel>
             <ErrorBoundary title="Amenity Season Insights">
               <AmenitySeasonPanel seasonGroupId={activeSeasonGroup?.id} />
+            </ErrorBoundary>
+            <SectionLabel>Marketing Targeting</SectionLabel>
+            <ErrorBoundary title="Marketing Targeting ">
+              <MarketingTargetingPanel />
             </ErrorBoundary>
           </div>
         )}
