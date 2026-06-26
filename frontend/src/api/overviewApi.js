@@ -61,16 +61,73 @@ export const overviewApi = {
         get("/villa-stats", { overview_payment_type: paymentType }),
 
     // [overview] TRANSACTION-level finance summary, grouped by category
-    // (Villa/Amenity) x status (Paid/Free — Anomaly rows excluded).
+    // (Villa/Amenity) x status (Paid/Free — Anomaly AND Reversed rows
+    // excluded, see overview_analytics.py's docstring on this endpoint).
     // Filterable by booking-level Paid/Free villa-stay type.
     // Backend route: GET /overview/transaction-finance-summary
     transactionFinanceSummary: (paymentType) =>
         get("/transaction-finance-summary", { overview_payment_type: paymentType }),
 
+    // [overview] Same shape as transactionMemberVsGuestRevenue (below),
+    // but split by line_category (Villa/Amenity) too — powers the
+    // stacked Villa/Amenity bar on "Member vs guest revenue", matching
+    // the convention already used by "Revenue by month". Headline totals
+    // (transactions/uniqueAccounts) still come from
+    // transactionMemberVsGuestRevenue, not this one — see
+    // overview_analytics.py's docstring on this endpoint for why.
+    // Backend route: GET /overview/transaction-member-vs-guest-revenue-by-category
+    transactionMemberVsGuestRevenueByCategory: (lineStatus) =>
+        get("/transaction-member-vs-guest-revenue-by-category", { overview_line_status: lineStatus }),
+
+    // [overview] Total $ + count of charges that were fully reversed in a
+    // clean, mutually-unique charge+reversal pair within the same
+    // booking — these are excluded from every other Paid/Free total on
+    // the page (net cost to the guest was $0), so this is the one place
+    // the gross reversed amount is still visible. Powers the "Reversed
+    // charges" line on the Finance at a glance card.
+    // Backend route: GET /overview/reversals-summary
+    // No query params — this isn't filterable by payment type, since a
+    // reversal pair's booking-level Paid/Free status doesn't change
+    // whether the underlying charge+reversal happened.
+    reversalsSummary: () => get("/reversals-summary"),
+
+    // [overview] For FREE villa bookings only: total rack rate (full list
+    // price) of nights given away, per villa — NOT money collected. Used
+    // by "Top villas by revenue" to show a negative "value given away"
+    // figure on the Villa rental revenue metric, for the Free-filtered
+    // slice only. The frontend takes max(rack rate, actual revenue
+    // collected) before negating, so the rare booking charged at or
+    // above rack rate still shows its real dollar value instead of a
+    // misleading rack-rate-only number — see OverviewTab.jsx.
+    // Backend route: GET /overview/villa-rack-rate-free
+    villaRackRateFree: () => get("/villa-rack-rate-free"),
+
+    // [overview] Net total + count of cash advance lines (any line whose
+    // description mentions "cash advance") — NOT product/service revenue,
+    // so excluded from every Paid/Free/Amenity total elsewhere on the
+    // page. Powers the "Cash advance" line on the Finance at a glance
+    // card, the same pattern as reversalsSummary above.
+    // Backend route: GET /overview/cash-advance-summary
+    cashAdvanceSummary: () => get("/cash-advance-summary"),
+
+    // [overview] Net total + count of 'Anomaly' lines (credits/refunds
+    // that couldn't be matched cleanly enough to call Reversed) — already
+    // excluded from every revenue total elsewhere; powers the
+    // "Unexplained anomalies" line on Finance at a glance.
+    // Backend route: GET /overview/anomalies-summary
+    anomaliesSummary: () => get("/anomalies-summary"),
+
+    // [overview] The individual Anomaly lines themselves, for a
+    // reviewable table — see overview_analytics.py's docstring.
+    // Backend route: GET /overview/anomalies
+    anomalies: () => get("/anomalies"),
+
     // [overview] One bundled call that returns every dataset the
     // Overview tab needs in a single round trip — this is what
     // dashboard.jsx actually uses today, rather than calling the
-    // individual endpoints above one at a time.
+    // individual endpoints above one at a time. Includes
+    // overviewReversalsSummary, overviewCashAdvanceSummary, and
+    // overviewVillaRackRateFree as of 2026-06-25.
     // Backend route: GET /overview/summary
     summary: () => get("/summary"),
 

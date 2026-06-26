@@ -13,12 +13,6 @@
 # Reads from the dedicated `overview_*` SQL views (see overview_views.sql).
 # Run overview_views.sql against your Postgres database before using this
 # router.
-#
-# To wire this into the app later (not done yet, per your request to keep
-# it isolated until you're ready to integrate):
-#
-#   from postgres.overview_analytics import router as overview_router
-#   app.include_router(overview_router, prefix="/overview", tags=["Overview"])
 # ════════════════════════════════════════════════════════════════════════
 
 from fastapi import APIRouter, Depends, Query
@@ -65,27 +59,6 @@ def overview_payment_type_filter_sql(alias: str = "ovb"):
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/villa-amenity-revenue
-#
-# Ranks villas by AMENITY revenue (commissary, golf, wine, transportation,
-# etc. — everything that is NOT the villa rental charge itself) generated
-# during stays at that villa. This is intentionally different from
-# /overview/villa-stats, which ranks villas by RENTAL revenue.
-#
-# Sourced from overview_transaction_lines (overview_line_category =
-# 'Amenity', overview_line_status = 'Paid' only — Free/comped amenity
-# lines net to $0 by definition, so they'd contribute nothing to a
-# revenue ranking regardless). Each row carries villa_payment_type — the
-# BOOKING-level Paid/Free villa-stay type — alongside it, the same way
-# /overview/villa-stats does, so the frontend can either use the combined
-# rows directly (client-side filtering, consistent with every other card
-# on the Overview tab) or call this endpoint with ?overview_payment_type=
-# to have the server filter instead.
-#
-# Query params:
-#   overview_payment_type — 'Paid' or 'Free' to filter by booking-level
-#                            villa payment type server-side; omit for both
-#                            combined (each row still carries its own
-#                            villa_payment_type for client-side filtering).
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/villa-amenity-revenue")
 def overview_villa_amenity_revenue(
@@ -114,10 +87,6 @@ def overview_villa_amenity_revenue(
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/villa-stats
-#
-# One row per villa + bedroom_count + payment_type. The frontend can filter
-# client-side by overview_payment_type ('Paid' / 'Free' / 'Unknown') and
-# re-aggregate across bedroom_count if it wants one row per villa.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/villa-stats")
 def overview_villa_stats(
@@ -146,8 +115,6 @@ def overview_villa_stats(
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/bookings-by-bedroom
-#
-# Bookings + avg stay grouped by bedroom count and payment type.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/bookings-by-bedroom")
 def overview_bookings_by_bedroom(
@@ -171,8 +138,6 @@ def overview_bookings_by_bedroom(
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/monthly-revenue
-#
-# Revenue + bookings grouped by check-in month and payment type.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/monthly-revenue")
 def overview_monthly_revenue(
@@ -196,29 +161,6 @@ def overview_monthly_revenue(
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/monthly-revenue-by-category
-#
-# Like /overview/monthly-revenue, but TRANSACTION-level and split by
-# Villa vs Amenity (overview_line_category), instead of booking-level
-# villa-rental-only revenue. Powers the stacked Villa/Amenity bars on the
-# "Revenue by month" card.
-#
-# Month is attributed from the booking's check-in date (joined from
-# overview_villa_bookings), the same convention /overview/monthly-revenue
-# already uses — overview_transaction_lines itself has no date column,
-# since individual amenity charges can land on any day of a multi-day
-# stay and there's no single "transaction date" that's more meaningful
-# than check-in month for a monthly rollup.
-#
-# Only Paid lines are summed (Free/comped lines are $0 by definition, see
-# overview_transaction_lines's docstring; Anomaly lines are excluded the
-# same way they are everywhere else on the Overview tab).
-#
-# Query params:
-#   overview_payment_type — 'Paid' or 'Free' to filter by booking-level
-#                            villa payment type; omit for both combined
-#                            (each row still carries villa_payment_type
-#                            for client-side filtering, same pattern as
-#                            /overview/villa-amenity-revenue).
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/monthly-revenue-by-category")
 def overview_monthly_revenue_by_category(
@@ -248,9 +190,15 @@ def overview_monthly_revenue_by_category(
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/visits-summary
 #
-# Single rollup of booking counts, stay length, party size, and revenue.
-# Pass overview_payment_type to get the Paid-only or Free-only slice;
-# omit it (or pass nothing) to get the overall, unfiltered totals.
+# total_bookings (added 2026-06-25) is COUNT(*) — actual reservations,
+# one per row of overview_villa_bookings. total_members_booked +
+# total_guests_booked deliberately does NOT equal this: those are
+# COUNT(DISTINCT member_number), so a member/guest with more than one
+# booking is counted once there but contributes one row each here. The
+# "Bookings at a glance" card's "Total bookings" stat was incorrectly
+# using the members+guests sum before this fix, undercounting whenever
+# someone had repeat bookings (confirmed: 112 actual bookings showing as
+# 110, because two people had booked twice each).
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/visits-summary")
 def overview_visits_summary(
@@ -259,6 +207,7 @@ def overview_visits_summary(
 ):
     return overview_one(db, f"""
         SELECT
+            COUNT(*)                                              AS total_bookings,
             COUNT(DISTINCT overview_member_number) FILTER (
                 WHERE overview_member_or_guest = 'Member'
                    OR overview_member_or_guest IS NULL
@@ -280,15 +229,12 @@ def overview_visits_summary(
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/visits-summary-by-payment-type
-#
-# Convenience endpoint: returns the overall totals AND the Paid/Free/Unknown
-# breakdown in one call, so the frontend doesn't need 3 separate requests
-# just to populate the "Overall / Paid Villa / Free Villa" toggle.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/visits-summary-by-payment-type")
 def overview_visits_summary_by_payment_type(db: Session = Depends(overview_get_db)):
     overview_overall_summary = overview_one(db, """
         SELECT
+            COUNT(*)                                              AS total_bookings,
             COUNT(DISTINCT overview_member_number) FILTER (
                 WHERE overview_member_or_guest = 'Member'
                    OR overview_member_or_guest IS NULL
@@ -306,6 +252,7 @@ def overview_visits_summary_by_payment_type(db: Session = Depends(overview_get_d
     overview_summary_by_type = overview_rows(db, """
         SELECT
             overview_payment_type AS villa_payment_type,
+            COUNT(*)                                              AS total_bookings,
             COUNT(DISTINCT overview_member_number) FILTER (
                 WHERE overview_member_or_guest = 'Member'
                    OR overview_member_or_guest IS NULL
@@ -329,8 +276,6 @@ def overview_visits_summary_by_payment_type(db: Session = Depends(overview_get_d
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/member-status
-#
-# Active/Inactive (etc) account counts, split by member vs guest.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/member-status")
 def overview_member_status(db: Session = Depends(overview_get_db)):
@@ -347,8 +292,6 @@ def overview_member_status(db: Session = Depends(overview_get_db)):
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/member-type
-#
-# Account counts grouped by member_type (Regular, Honorary, Guests, etc).
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/member-type")
 def overview_member_type(db: Session = Depends(overview_get_db)):
@@ -363,8 +306,6 @@ def overview_member_type(db: Session = Depends(overview_get_db)):
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/amount-due
-#
-# Single-row rollup of total outstanding dues across all members.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/amount-due")
 def overview_amount_due(db: Session = Depends(overview_get_db)):
@@ -376,8 +317,6 @@ def overview_amount_due(db: Session = Depends(overview_get_db)):
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/amount-due-by-period
-#
-# Outstanding dues grouped by statement period.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/amount-due-by-period")
 def overview_amount_due_by_period(db: Session = Depends(overview_get_db)):
@@ -392,8 +331,6 @@ def overview_amount_due_by_period(db: Session = Depends(overview_get_db)):
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/dependents
-#
-# Single-row rollup of total dependents on file.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/dependents")
 def overview_dependents(db: Session = Depends(overview_get_db)):
@@ -405,20 +342,6 @@ def overview_dependents(db: Session = Depends(overview_get_db)):
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/member-vs-guest-revenue
-#
-# Villa revenue split by customerType ('Member' / 'Guests') AND by
-# overview_payment_type ('Paid' / 'Free' / 'Unknown'), so the frontend's
-# "Member vs guest revenue" card and its Paid/Free toggle both work off
-# one endpoint.
-#
-# NOTE: customerType is deliberately 'Guests' (plural) for the guest row to
-# match the exact string OverviewTab.jsx checks for
-# (r.customerType === "Guests"), even though the underlying members table
-# stores the singular 'Guest' in member_or_guest. This was a pre-existing
-# mismatch in the frontend; aliasing it here avoids a silent broken card.
-#
-# "transactions" = number of bookings (conf_codes) attributed to that
-# customer type. "uniqueAccounts" = distinct member_numbers.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/member-vs-guest-revenue")
 def overview_member_vs_guest_revenue(
@@ -449,19 +372,6 @@ def overview_member_vs_guest_revenue(
 
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/member-vs-guest-revenue-by-payment-type
-#
-# Convenience endpoint: returns member-vs-guest revenue for ALL payment
-# types in one call, pre-grouped by overview_payment_type, so the frontend
-# can switch the Paid/Free/Overall toggle without refetching.
-#
-# Shape:
-# {
-#   "overall": [ {customerType, revenue, transactions, uniqueAccounts}, ... ],
-#   "by_payment_type": {
-#       "Paid": [ {customerType, revenue, transactions, uniqueAccounts}, ... ],
-#       "Free": [ ... ]
-#   }
-# }
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/member-vs-guest-revenue-by-payment-type")
 def overview_member_vs_guest_revenue_by_payment_type(db: Session = Depends(overview_get_db)):
@@ -516,10 +426,7 @@ def overview_member_vs_guest_revenue_by_payment_type(db: Session = Depends(overv
 # /overview/transaction-finance-summary
 #
 # TRANSACTION-LEVEL Paid/Free finance summary, sourced from
-# overview_transaction_lines (NOT overview_villa_bookings). This answers
-# "how much was actually paid vs. comped, across both villa rental AND
-# amenities, per transaction" — a different and more granular question
-# than overview_villa_bookings' booking-level Paid/Free split.
+# overview_transaction_lines (NOT overview_villa_bookings).
 #
 # Returns one row per (overview_line_category, overview_line_status)
 # combination, e.g.:
@@ -527,8 +434,17 @@ def overview_member_vs_guest_revenue_by_payment_type(db: Session = Depends(overv
 #   Villa   / Free  -> revenue (always 0 by definition), transaction count
 #   Amenity / Paid  -> revenue, transaction count
 #   Amenity / Free  -> revenue (always 0), transaction count
-#   (Anomaly rows are EXCLUDED here on purpose — see the docstring below
-#    for why)
+#   (Anomaly, Reversed, AND CashAdvance rows are EXCLUDED here on purpose
+#    — Anomaly because they don't cleanly resolve to "guest paid" or
+#    "guest didn't pay"; Reversed because their net effect on the guest
+#    is already $0; CashAdvance because cash handed to a guest isn't
+#    product/service revenue at all, regardless of its net amount.
+#    Folding any of these in here would just re-add the noise this
+#    summary is supposed to avoid. The gross reversed amount and the net
+#    cash-advance amount are each reported on their own via
+#    /overview/reversals-summary and /overview/cash-advance-summary —
+#    see those endpoints and overview_views.sql's docstring on the
+#    'Reversed'/'CashAdvance' statuses.)
 #
 # Query params:
 #   overview_line_status   — 'Paid' or 'Free' to filter server-side;
@@ -539,13 +455,6 @@ def overview_transaction_finance_summary(
     overview_line_status: str | None = Query(default=None),
     db: Session = Depends(overview_get_db),
 ):
-    # Anomaly rows are deliberately excluded from this summary. They
-    # represent refunds/credits/adjustments that don't cleanly resolve to
-    # "guest paid" or "guest didn't pay" (see overview_views.sql for the
-    # full reasoning) — including them in a Paid/Free toggle would force
-    # them into a bucket they don't actually belong to. They remain queryable
-    # directly from overview_transaction_lines for anyone who wants to
-    # audit them, just not folded into this summary.
     return overview_rows(db, """
         SELECT
             overview_line_category                          AS line_category,
@@ -564,20 +473,113 @@ def overview_transaction_finance_summary(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# /overview/reversals-summary
+#
+# Single-row rollup of charges that were fully charged-then-reversed in a
+# clean, mutually-unique pair (see overview_views.sql's docstring on the
+# 'Reversed' status in overview_transaction_lines for exactly what
+# qualifies and why). These are excluded from every Paid/Free total
+# elsewhere on the Overview tab — net cost to the guest was $0 — so this
+# is the one place the gross reversed amount is still visible.
+#
+# Added 2026-06-25: reversed charges shouldn't count toward any revenue
+# figure, but the fact that reversals happened (and how much) should
+# still be visible — this powers a line on the "Finance at a glance" card.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/reversals-summary")
+def overview_reversals_summary(db: Session = Depends(overview_get_db)):
+    return overview_one(db, """
+        SELECT
+            overview_reversed_count AS reversed_count,
+            overview_reversed_total AS reversed_total
+        FROM overview_reversals_summary
+    """)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /overview/cash-advance-summary
+#
+# Single-row rollup of cash advance lines (any line whose description
+# mentions "cash advance" — see overview_views.sql's docstring on the
+# 'CashAdvance' status). Cash handed to a guest and billed to their folio
+# isn't product/service revenue, so these are excluded from every
+# Paid/Free/Amenity total elsewhere on the Overview tab — this is the one
+# place the net cash-advance total is still visible.
+#
+# Added 2026-06-25 per request, following the same pattern as
+# /overview/reversals-summary: pulled out of revenue, surfaced on its own
+# line on the "Finance at a glance" card instead.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/cash-advance-summary")
+def overview_cash_advance_summary(db: Session = Depends(overview_get_db)):
+    return overview_one(db, """
+        SELECT
+            overview_cash_advance_count AS cash_advance_count,
+            overview_cash_advance_total AS cash_advance_total
+        FROM overview_cash_advance_summary
+    """)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /overview/anomalies-summary
+#
+# Single-row rollup of the 'Anomaly' lines — credits/refunds that
+# couldn't be matched to a charge cleanly enough to call them 'Reversed'
+# (either ambiguous: multiple same-amount candidates in the booking, or no
+# match at all). See overview_views.sql's docstring on
+# overview_anomalies_summary for the full breakdown. Already excluded
+# from every Paid/Free revenue total elsewhere on the Overview tab; this
+# is the one place the total is visible, the same pattern as
+# /overview/reversals-summary and /overview/cash-advance-summary.
+#
+# Added 2026-06-25 per request.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/anomalies-summary")
+def overview_anomalies_summary(db: Session = Depends(overview_get_db)):
+    return overview_one(db, """
+        SELECT
+            overview_anomaly_count AS anomaly_count,
+            overview_anomaly_total AS anomaly_total
+        FROM overview_anomalies_summary
+    """)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /overview/anomalies
+#
+# The individual 'Anomaly' lines themselves — one row per line-item, for
+# a reviewable table (not just the rolled-up total from
+# /overview/anomalies-summary above). Sorted most-negative first, since
+# the biggest unexplained credits are the most worth a human's attention.
+#
+# Added 2026-06-25 per request, alongside /overview/anomalies-summary.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/anomalies")
+def overview_anomalies(db: Session = Depends(overview_get_db)):
+    return overview_rows(db, """
+        SELECT
+            overview_conf_code      AS conf_code,
+            overview_villa_name     AS villa_name,
+            overview_line_description AS description,
+            overview_line_category  AS line_category,
+            overview_net_amount     AS net_amount
+        FROM overview_transaction_lines
+        WHERE overview_line_status = 'Anomaly'
+        ORDER BY overview_net_amount ASC
+    """)
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # /overview/transaction-member-vs-guest-revenue
 #
-# TRANSACTION-LEVEL Paid/Free revenue, split by customerType ('Member' /
-# 'Guests') — the transaction-level companion to
-# /overview/member-vs-guest-revenue (which is booking-level). Joins
-# overview_transaction_lines back to overview_villa_bookings on conf_code
-# to get overview_member_or_guest, since that field lives on the booking,
-# not the individual transaction line.
-#
-# Anomaly rows excluded — same reasoning as transaction-finance-summary.
-#
-# Query params:
-#   overview_line_status — 'Paid' or 'Free' to filter server-side;
-#                           omit for both combined.
+# revenue (net_amount summed) is unchanged — still $0 for every Free row,
+# as it should be: that's the actual cost to the guest. valueGivenAway
+# (added 2026-06-25) is the gross pre-reversal amount summed instead —
+# the only place that "what was given away" survives for Free rows, since
+# net_amount can't show it. The frontend uses valueGivenAway (negated) as
+# the displayed figure specifically when the Free pill is selected, and
+# leaves the Overall/Paid views reading from revenue as before — see
+# applyLineStatusFilter in OverviewTab.jsx.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/transaction-member-vs-guest-revenue")
 def overview_transaction_member_vs_guest_revenue(
@@ -592,6 +594,7 @@ def overview_transaction_member_vs_guest_revenue(
             END                                                AS "customerType",
             otl.overview_line_status                           AS line_status,
             COALESCE(SUM(otl.overview_net_amount), 0)          AS revenue,
+            COALESCE(SUM(otl.overview_gross_charged_amount), 0) AS "valueGivenAway",
             COUNT(*)                                            AS transactions,
             COUNT(DISTINCT otl.overview_conf_code)               AS "uniqueAccounts"
         FROM overview_transaction_lines otl
@@ -612,25 +615,89 @@ def overview_transaction_member_vs_guest_revenue(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# /overview/transaction-member-vs-guest-revenue-by-category
+#
+# Same shape as /overview/transaction-member-vs-guest-revenue, but also
+# split by overview_line_category (Villa/Amenity) — added 2026-06-25 to
+# power a stacked Villa/Amenity bar on the "Member vs guest revenue" card
+# (matching the convention already used by "Revenue by month").
+#
+# Deliberately kept as a SEPARATE endpoint rather than adding
+# line_category to the existing one's GROUP BY: the existing endpoint's
+# transactions/uniqueAccounts feed the card's headline numbers, and
+# summing uniqueAccounts across Villa+Amenity rows for the same
+# customerType would double-count anyone with both kinds of charges — the
+# same caveat already documented for Paid+Free in OverviewTab.jsx's
+# applyLineStatusFilter. This endpoint exists only to drive the bar's
+# Villa/Amenity proportions; the headline totals keep coming from the
+# original endpoint unchanged.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/transaction-member-vs-guest-revenue-by-category")
+def overview_transaction_member_vs_guest_revenue_by_category(
+    overview_line_status: str | None = Query(default=None),
+    db: Session = Depends(overview_get_db),
+):
+    return overview_rows(db, """
+        SELECT
+            CASE
+                WHEN ovb.overview_member_or_guest = 'Guest' THEN 'Guests'
+                ELSE 'Member'
+            END                                                AS "customerType",
+            otl.overview_line_category                         AS line_category,
+            otl.overview_line_status                           AS line_status,
+            COALESCE(SUM(otl.overview_net_amount), 0)          AS revenue,
+            COALESCE(SUM(otl.overview_gross_charged_amount), 0) AS "valueGivenAway"
+        FROM overview_transaction_lines otl
+        LEFT JOIN overview_villa_bookings ovb
+          ON ovb.overview_conf_code = otl.overview_conf_code
+        WHERE otl.overview_line_status IN ('Paid', 'Free')
+          AND (
+            :overview_line_status IS NULL
+            OR otl.overview_line_status = :overview_line_status
+          )
+        GROUP BY
+            CASE
+                WHEN ovb.overview_member_or_guest = 'Guest' THEN 'Guests'
+                ELSE 'Member'
+            END,
+            otl.overview_line_category,
+            otl.overview_line_status
+    """, {"overview_line_status": overview_line_status})
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /overview/villa-rack-rate-free
+#
+# For FREE villa bookings only: total rack rate (full list price) of the
+# nights given away, per villa, plus how many free bookings that covers.
+# Not money collected — see overview_villa_rack_rate_free's docstring in
+# overview_views.sql, including the note on the one Wonderland-style
+# exception (a Free-tagged booking actually charged at or above rack
+# rate) and why that's handled in OverviewTab.jsx rather than here.
+#
+# Powers a negative "value given away" number on the Villa rental revenue
+# metric of "Top villas by revenue", shown only for the Free-filtered
+# slice of that card.
+#
+# Added 2026-06-25.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/villa-rack-rate-free")
+def overview_villa_rack_rate_free(db: Session = Depends(overview_get_db)):
+    return overview_rows(db, """
+        SELECT
+            overview_villa_name      AS villa_name,
+            overview_rack_rate_total AS rack_rate_total,
+            overview_free_bookings   AS free_bookings
+        FROM overview_villa_rack_rate_free
+        ORDER BY rack_rate_total DESC
+    """)
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # /overview/summary
 #
 # One-call bundle of everything the Overview tab needs, so the frontend
-# only needs a single fetch on page load. Mirrors the shape of the old
-# /analytics/dashboard-summary response but is fully independent of it.
-#
-# overviewVillaStats / overviewBookingsByBedroom / overviewMonthlyRevenue /
-# overviewMemberVsGuestRevenue are returned UNFILTERED here (every payment
-# type combined) plus a parallel *ByPaymentType bundle, so the frontend can
-# either use the combined rows directly (each row already carries
-# overview_payment_type for client-side filtering) or call the dedicated
-# ?overview_payment_type=... endpoints if it wants the server to do the
-# filtering instead.
-#
-# overviewTransactionFinanceSummary / overviewTransactionMemberVsGuestRevenue
-# are the TRANSACTION-LEVEL (Finance at a glance / Member vs guest revenue
-# card) equivalents — these use overview_transaction_lines, not
-# overview_villa_bookings, and answer a different question (see their
-# endpoint docstrings above).
+# only needs a single fetch on page load.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/summary")
 def overview_summary(db: Session = Depends(overview_get_db)):
@@ -647,6 +714,12 @@ def overview_summary(db: Session = Depends(overview_get_db)):
         "overviewMemberVsGuestRevenue": overview_member_vs_guest_revenue(overview_payment_type=None, db=db),
         "overviewTransactionFinanceSummary": overview_transaction_finance_summary(overview_line_status=None, db=db),
         "overviewTransactionMemberVsGuestRevenue": overview_transaction_member_vs_guest_revenue(overview_line_status=None, db=db),
+        "overviewTransactionMemberVsGuestRevenueByCategory": overview_transaction_member_vs_guest_revenue_by_category(overview_line_status=None, db=db),
         "overviewVillaAmenityRevenue": overview_villa_amenity_revenue(overview_payment_type=None, db=db),
         "overviewMonthlyRevenueByCategory": overview_monthly_revenue_by_category(overview_payment_type=None, db=db),
+        "overviewReversalsSummary": overview_reversals_summary(db=db),
+        "overviewCashAdvanceSummary": overview_cash_advance_summary(db=db),
+        "overviewAnomaliesSummary": overview_anomalies_summary(db=db),
+        "overviewAnomalies": overview_anomalies(db=db),
+        "overviewVillaRackRateFree": overview_villa_rack_rate_free(db=db),
     }
