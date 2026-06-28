@@ -486,6 +486,7 @@ export default function Dashboard() {
         {/* ════ OVERVIEW ════ */}
         {activeTab === "overview" && (
           <OverviewTab
+            onNavigateToTab={setActiveTab}
             period={overviewPeriod}
             onPeriodChange={setOverviewPeriod}
             years={overviewYears}
