@@ -42,6 +42,8 @@ import {
   PartyPopper,
 } from "lucide-react";
 import { analyticsApi } from "../api/analytics";
+import { overviewApi } from "../api/overviewApi";
+import { FinancePeriodFilter, periodToParams, DEFAULT_PERIOD } from "./finance/FinanceShared";
 import { COLORS, TOOLTIP_STYLE } from "./styles/Dashboardstyles";
 import {
   StatCard,
@@ -88,13 +90,17 @@ const AX = "#9A8E84";
 const GRID = "#DDD6CA";
 const TIP = TOOLTIP_STYLE;
 
-/* ─── API base, shared by every fetch in this file ──────────── */
-const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
-
 /* ─── Main Dashboard ─────────────────────────────────────────── */
 export default function Dashboard() {
   const [activeTab, setActiveTab] = useState("overview");
   const [activeSeasonGroup, setActiveSeasonGroup] = useState(null);
+
+  // Overview tab date-range filter (added 2026-06-26) — reuses the exact
+  // same shape/component the Finance tab already uses (FinanceShared.jsx),
+  // so the two tabs' period pickers stay visually and behaviorally
+  // identical instead of drifting into two slightly different filters.
+  const [overviewPeriod, setOverviewPeriod] = useState(DEFAULT_PERIOD);
+  const [overviewYears, setOverviewYears] = useState([]);
 
   const [membersByCountry, setMembersByCountry] = useState([]);
   const [membersByState, setMembersByState] = useState([]);
@@ -196,57 +202,98 @@ export default function Dashboard() {
       .catch(console.error);
 
     analyticsApi.getTables().then(setAvailableTables).catch(console.error);
-    // ── Overview tab: single bundled fetch from the standalone overview
-    // module (postgres/overview_analytics.py, mounted at /overview).
-    // Replaces the old separate calls to:
-    //   /analytics/villa-stats
-    //   /analytics/visits-tab-summary
-    //   /analytics/bookings-by-bedroom
-    //   /analytics/monthly-revenue
-    //   /finance/member-vs-guest
-    //   /finance/villa-revenue
-    // Also includes the newer TRANSACTION-LEVEL (per net line-item, villa +
-    // amenity combined) Paid/Free data used by the Finance at a glance and
-    // Member vs guest revenue cards — see overview_transaction_lines in
-    // overview_views.sql for what powers these. As of 2026-06-25 also
-    // includes overviewReversalsSummary — the gross $ amount + count of
-    // charges that were charged then fully reversed (excluded from every
-    // other Paid/Free total on the tab; see that view's docstring).
-    // ────────────────────────────────────────────────────────────────
-    fetch(`${API_BASE}/overview/summary`)
-      .then((r) => r.json())
-      .then((data) => {
-        setVillaStats(data.overviewVillaStats ?? []);
-        setVisitsTabSummary(data.overviewVisitsSummary ?? null);
-        setBedroomBookings(data.overviewBookingsByBedroom ?? []);
-        setMonthlyRevenue(data.overviewMonthlyRevenue ?? []);
-        setMemberVsGuestRevenue(data.overviewMemberVsGuestRevenue ?? []);
-        setTransactionFinanceSummary(
-          data.overviewTransactionFinanceSummary ?? [],
-        );
-        setTransactionMemberVsGuestRevenue(
-          data.overviewTransactionMemberVsGuestRevenue ?? [],
-        );
-        setTransactionMemberVsGuestRevenueByCategory(
-          data.overviewTransactionMemberVsGuestRevenueByCategory ?? [],
-        );
-        setVillaAmenityRevenue(data.overviewVillaAmenityRevenue ?? []);
-        setMonthlyRevenueByCategory(
-          data.overviewMonthlyRevenueByCategory ?? [],
-        );
-        setTotalAmountDue(data.overviewAmountDue ?? null);
-        setAmountDueByPeriod(data.overviewAmountDueByPeriod ?? []);
-        setTotalDependents(data.overviewDependents ?? null);
-        setReversalsSummary(data.overviewReversalsSummary ?? null);
-        setVillaRackRateFree(data.overviewVillaRackRateFree ?? []);
-        setCashAdvanceSummary(data.overviewCashAdvanceSummary ?? null);
-        setAnomaliesSummary(data.overviewAnomaliesSummary ?? null);
-        setAnomalies(data.overviewAnomalies ?? []);
-        // villaRevenue (rental-revenue-per-villa) is no longer fetched —
-        // "Top villas by revenue" now uses villaAmenityRevenue instead.
-        setVillaRevenue([]);
-      })
-      .catch(console.error);
+  }, []);
+
+  // ── Overview tab: single bundled fetch from the standalone overview
+  // module (postgres/overview_analytics.py, mounted at /overview).
+  // Replaces the old separate calls to:
+  //   /analytics/villa-stats
+  //   /analytics/visits-tab-summary
+  //   /analytics/bookings-by-bedroom
+  //   /analytics/monthly-revenue
+  //   /finance/member-vs-guest
+  //   /finance/villa-revenue
+  // Also includes the newer TRANSACTION-LEVEL (per net line-item, villa +
+  // amenity combined) Paid/Free data used by the Finance at a glance and
+  // Member vs guest revenue cards — see overview_transaction_lines in
+  // overview_views.sql for what powers these. Includes
+  // overviewReversalsSummary, overviewCashAdvanceSummary,
+  // overviewAnomaliesSummary/overviewAnomalies, and overviewVillaRackRateFree.
+  //
+  // Split into its OWN effect (added 2026-06-26), separate from the
+  // dashboard-summary/demographics-summary/tables fetch above, and keyed
+  // on [overviewPeriod] — so changing the date filter only re-fetches the
+  // Overview tab's own data, not the whole dashboard's unrelated sections.
+  //
+  // Debounced + cancellable: rapid filter changes (e.g. clicking through
+  // several years while testing) used to fire a new request immediately
+  // on every change, with nothing cancelling the previous one — several
+  // requests could end up in flight at once, each holding a DB
+  // connection, which exhausted the connection pool and made the page
+  // look like it wasn't responding to the filter at all, when really most
+  // of the requests were just failing/timing out. The 400ms debounce
+  // waits for the user to stop changing the filter before fetching at
+  // all; the AbortController cancels whatever request is still in flight
+  // if the filter changes again before it resolves, instead of letting it
+  // pile up or (worse) land late and overwrite fresher data with stale
+  // data.
+  // ────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      overviewApi
+        .summary(periodToParams(overviewPeriod), { signal: controller.signal })
+        .then((data) => {
+          setVillaStats(data.overviewVillaStats ?? []);
+          setVisitsTabSummary(data.overviewVisitsSummary ?? null);
+          setBedroomBookings(data.overviewBookingsByBedroom ?? []);
+          setMonthlyRevenue(data.overviewMonthlyRevenue ?? []);
+          setMemberVsGuestRevenue(data.overviewMemberVsGuestRevenue ?? []);
+          setTransactionFinanceSummary(
+            data.overviewTransactionFinanceSummary ?? [],
+          );
+          setTransactionMemberVsGuestRevenue(
+            data.overviewTransactionMemberVsGuestRevenue ?? [],
+          );
+          setTransactionMemberVsGuestRevenueByCategory(
+            data.overviewTransactionMemberVsGuestRevenueByCategory ?? [],
+          );
+          setVillaAmenityRevenue(data.overviewVillaAmenityRevenue ?? []);
+          setMonthlyRevenueByCategory(
+            data.overviewMonthlyRevenueByCategory ?? [],
+          );
+          setTotalAmountDue(data.overviewAmountDue ?? null);
+          setAmountDueByPeriod(data.overviewAmountDueByPeriod ?? []);
+          setTotalDependents(data.overviewDependents ?? null);
+          setReversalsSummary(data.overviewReversalsSummary ?? null);
+          setVillaRackRateFree(data.overviewVillaRackRateFree ?? []);
+          setCashAdvanceSummary(data.overviewCashAdvanceSummary ?? null);
+          setAnomaliesSummary(data.overviewAnomaliesSummary ?? null);
+          setAnomalies(data.overviewAnomalies ?? []);
+          // villaRevenue (rental-revenue-per-villa) is no longer fetched —
+          // "Top villas by revenue" now uses villaAmenityRevenue instead.
+          setVillaRevenue([]);
+        })
+        .catch((err) => {
+          // AbortError means a NEWER request superseded this one — that's
+          // expected and not a real error, so don't log it.
+          if (err?.name === "AbortError") return;
+          console.error(err);
+        });
+    }, 400);
+
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [overviewPeriod]);
+
+  // Real distinct years with booking activity, for the year dropdown in
+  // the Overview tab's period filter — fetched once, not period-dependent
+  // (the years list itself doesn't change based on which period is
+  // currently selected).
+  useEffect(() => {
+    overviewApi.availableYears().then(setOverviewYears).catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -334,9 +381,9 @@ export default function Dashboard() {
     rowLimit === "all"
       ? sortedRows
       : sortedRows.slice(
-          (page - 1) * Number(rowLimit),
-          page * Number(rowLimit),
-        );
+        (page - 1) * Number(rowLimit),
+        page * Number(rowLimit),
+      );
 
   const getExportRows = () =>
     sortedRows.map((row) => {
@@ -439,6 +486,9 @@ export default function Dashboard() {
         {/* ════ OVERVIEW ════ */}
         {activeTab === "overview" && (
           <OverviewTab
+            period={overviewPeriod}
+            onPeriodChange={setOverviewPeriod}
+            years={overviewYears}
             membersByType={membersByType}
             membersByStatus={membersByStatus}
             membersByCountry={membersByCountry}

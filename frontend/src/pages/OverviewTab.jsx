@@ -1,5 +1,6 @@
 import { useState, useContext, useMemo, createContext } from "react";
 import { InfoTip } from "./styles/Dashboardcomponents";
+import { FinancePeriodFilter } from "./finance/FinanceShared";
 
 const serif = "'Cormorant Garamond', serif";
 
@@ -400,6 +401,9 @@ const applyLineStatusFilter = (data, filter, groupKey) => {
 // MAIN COMPONENT
 // ─────────────────────────────────────────────
 export default function OverviewTab({
+    period = null,
+    onPeriodChange = () => { },
+    years = [],
     membersByType = [],
     membersByStatus = [],
     membersByCountry = [],
@@ -473,12 +477,20 @@ export default function OverviewTab({
     // Used by the standalone Bedroom demand card — has its own independent toggle.
     const filteredBedroomBookingsForDemandCard = applyVillaFilter(bedroomBookings, bedroomDemandFilter);
     const filteredMemberGuest = applyLineStatusFilter(transactionMemberVsGuestRevenue, memberGuestFilter, "customerType");
-    // Villa/Amenity split for the stacked bar on "Member vs guest revenue"
-    // — a SEPARATE dataset from filteredMemberGuest above (see
-    // overview_analytics.py's docstring on why), used only to find each
-    // customerType's villa-vs-amenity proportions. Headline numbers
-    // (total revenue, transactions, uniqueAccounts) keep coming from
+    // Villa/Amenity/Membership split for the stacked bar on "Member vs
+    // guest revenue" — a SEPARATE dataset from filteredMemberGuest above
+    // (see overview_analytics.py's docstring on why), used only to find
+    // each customerType's category proportions. Headline numbers (total
+    // revenue, transactions, uniqueAccounts) keep coming from
     // filteredMemberGuest, unaffected by this.
+    //
+    // "Membership" (added 2026-06-26) is Temp Membership Fee charges,
+    // carved out of what the rest of the page still calls "Amenity" —
+    // scoped to ONLY this card's breakdown, see the backend endpoint's
+    // docstring. Label differs by customerType when rendered: shown as
+    // "Temp membership fee" for Guests (who are the ones who actually
+    // pay it), or generically as "Other" for Members (who rarely do) —
+    // same underlying number either way, just a different display label.
     const filteredMemberGuestByCategory = applyLineStatusFilter(
         transactionMemberVsGuestRevenueByCategory,
         memberGuestFilter,
@@ -487,7 +499,12 @@ export default function OverviewTab({
     const memberGuestCategorySplit = (customerType) => {
         const villa = filteredMemberGuestByCategory.find(r => r.customerType === customerType && r.line_category === "Villa");
         const amenity = filteredMemberGuestByCategory.find(r => r.customerType === customerType && r.line_category === "Amenity");
-        return { villaRevenue: villa?.revenue ?? 0, amenityRevenue: amenity?.revenue ?? 0 };
+        const membership = filteredMemberGuestByCategory.find(r => r.customerType === customerType && r.line_category === "Membership");
+        return {
+            villaRevenue: villa?.revenue ?? 0,
+            amenityRevenue: amenity?.revenue ?? 0,
+            membershipRevenue: membership?.revenue ?? 0,
+        };
     };
 
     // "Top villas by revenue" can rank villas by either AMENITY revenue
@@ -608,11 +625,11 @@ export default function OverviewTab({
 
     // ── Bookings card summary — respects bookingsFilter via visitsTabSummary.by_payment_type ──
     const bookingsSummary = pickSummary(visitsTabSummary, bookingsFilter);
-    // Real reservation count (one per booking), NOT total_members_booked +
-    // total_guests_booked — that sum undercounts whenever someone has
-    // more than one booking, since those are each COUNT(DISTINCT
-    // member_number). Confirmed against real data: 112 actual bookings
-    // were showing as 110, because two people had booked twice each.
+    // total_bookings, total_members_booked, and total_guests_booked are all
+    // COUNT(*) (bookings, not distinct people) since 2026-06-26 — see
+    // overview_analytics.py's docstring on /overview/visits-summary. Using
+    // total_bookings directly here either way, since "Total bookings" is
+    // the headline figure regardless of how the other two are computed.
     const totalBookingsMadeForBookings = bookingsSummary?.total_bookings ?? 0;
 
     // ── Finance card — TRANSACTION-LEVEL Paid/Free (villa + amenity combined),
@@ -633,6 +650,51 @@ export default function OverviewTab({
     const financeMemberGuestLines = applyLineStatusFilter(transactionMemberVsGuestRevenue, financeFilter, "customerType");
     const finMemberRev = financeMemberGuestLines.find(r => r.customerType === "Member");
     const finGuestRev = financeMemberGuestLines.find(r => r.customerType === "Guests");
+
+    // Villa/Amenity/Membership breakdown for the same two rows — same
+    // category split as memberGuestCategorySplit (see that function's
+    // comment for what "Membership" means and why the label differs by
+    // customerType), just filtered by financeFilter instead of
+    // memberGuestFilter, since this card has its own independent toggle.
+    const filteredFinanceByCategory = applyLineStatusFilter(
+        transactionMemberVsGuestRevenueByCategory,
+        financeFilter,
+        r => `${r.customerType}__${r.line_category}`,
+    );
+    const financeCategorySplit = (customerType) => {
+        const villa = filteredFinanceByCategory.find(r => r.customerType === customerType && r.line_category === "Villa");
+        const amenity = filteredFinanceByCategory.find(r => r.customerType === customerType && r.line_category === "Amenity");
+        const membership = filteredFinanceByCategory.find(r => r.customerType === customerType && r.line_category === "Membership");
+        return {
+            villaRevenue: villa?.revenue ?? 0,
+            amenityRevenue: amenity?.revenue ?? 0,
+            membershipRevenue: membership?.revenue ?? 0,
+        };
+    };
+    const finMemberSplit = financeCategorySplit("Member");
+    const finGuestSplit = financeCategorySplit("Guests");
+    const financeSubText = (split, customerType) => {
+        const thirdLabel = customerType === "Guests" ? "membership" : "other";
+        const v = Math.abs(split.villaRevenue), a = Math.abs(split.amenityRevenue), m = Math.abs(split.membershipRevenue);
+        if (v === 0 && a === 0 && m === 0) return undefined;
+        return `${money(v)} villa · ${money(a)} amenity · ${money(m)} ${thirdLabel}`;
+    };
+    // Total revenue's own villa/amenity/membership breakdown — just
+    // Member + Guest summed together (confirmed this reconstructs the
+    // same total the old 2-way villa/amenity split already showed, so
+    // nothing else changes, this only adds the membership-fee carve-out
+    // that's already shown on the Member/Guest rows directly below).
+    // "Membership" (not "other") is the right label here specifically
+    // because this combines both customer types - it's accurate
+    // regardless of who it's attributed to, unlike the Member row's
+    // "other", which exists only to avoid implying every member
+    // personally pays this fee.
+    const finTotalSplit = {
+        villaRevenue: (finMemberSplit.villaRevenue ?? 0) + (finGuestSplit.villaRevenue ?? 0),
+        amenityRevenue: (finMemberSplit.amenityRevenue ?? 0) + (finGuestSplit.amenityRevenue ?? 0),
+        membershipRevenue: (finMemberSplit.membershipRevenue ?? 0) + (finGuestSplit.membershipRevenue ?? 0),
+    };
+    const finTotalSubText = financeSubText(finTotalSplit, "Guests");
 
     // ── Hero KPIs — always overall (unfiltered), regardless of any card filter ──
     const heroSummary = visitsTabSummary; // overall object, never filtered
@@ -702,7 +764,7 @@ export default function OverviewTab({
         { label: "Villa Revenue ($USD)", value: heroVillaRevenue > 0 ? money(heroVillaRevenue) : "—", sub: `${heroSummary?.total_room_nights ?? "—"} room nights`, color: C.flame, tip: "The villa rental charge only, not amenities like food, golf or spa. Any charge that was later cancelled or corrected has already been removed, so this is the real amount actually paid across every reservation. This figure is always shown unfiltered, regardless of any toggle elsewhere on the page." },
         { label: "Outstanding ($USD)", value: totalAmountDue?.total_amount_due != null ? `$${(Number(totalAmountDue.total_amount_due) / 1_000_000).toFixed(2)}M` : "—", sub: "Total dues owed", color: C.rust, tip: "Shown in millions. The total of every unpaid balance currently owed, added up across all accounts and all billing periods." },
         { label: "Room Nights", value: heroSummary?.total_room_nights?.toLocaleString() ?? "—", sub: `Avg ${heroSummary?.avg_length_of_stay?.toFixed(1) ?? "—"} nights/stay`, color: C.navyText, tip: "The total number of nights members and guests have stayed, added up across every reservation (e.g. one 7-night stay counts as 7)." },
-        { label: "Rev / Booking ($USD)", value: (heroSummary && ((heroSummary.total_members_booked ?? 0) + (heroSummary.total_guests_booked ?? 0)) > 0) ? money(heroVillaRevenue / ((heroSummary.total_members_booked ?? 0) + (heroSummary.total_guests_booked ?? 0))) : "—", sub: "Villa rental average", color: C.navyText, tip: "Villa Revenue divided by the total number of bookings - the average amount a single booking brings in from the villa rental charge alone, not counting amenities." },
+        { label: "Rev / Booking ($USD)", value: (heroSummary?.total_bookings ?? 0) > 0 ? money(heroVillaRevenue / heroSummary.total_bookings) : "—", sub: "Villa rental average", color: C.navyText, tip: "Villa Revenue divided by the total number of bookings - the average amount a single booking brings in from the villa rental charge alone, not counting amenities." },
         { label: "Peak Month", value: peakMonth?.month ?? "—", sub: peakMonth ? money(peakMonth.revenue) : "—", color: C.flame, tip: "The single calendar month with the highest combined revenue - villa + amenities ($USD). Updates if you change the Overall/Paid/Free toggle on the \"Revenue by month\" card further down the page." },
         { label: "Active Accounts", value: membersByStatus.find(s => s.status === "Active")?.total?.toLocaleString() ?? "—", sub: `of ${totalAccounts.toLocaleString()} total`, color: C.navyText, tip: "The number of member and guest accounts currently marked Active (not Inactive, Cancelled, etc.), out of every account on file. A count of accounts." },
     ];
@@ -710,6 +772,17 @@ export default function OverviewTab({
     return (
         <TooltipContext.Provider value={tooltipCtxValue}>
             <div className="dashboard-section dashboard-section-lg">
+
+                {/* ── Date-range filter — same component/behavior as the Finance
+                 tab's, reused directly rather than reimplemented, so the two
+                 tabs' period pickers can never visually or behaviorally
+                 drift apart. Every card below already reads from
+                 villaStats/visitsTabSummary/etc, which dashboard.jsx now
+                 refetches whenever `period` changes — this component only
+                 needs to render the control itself. ── */}
+                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+                    <FinancePeriodFilter value={period} onChange={onPeriodChange} years={years} />
+                </div>
 
                 {/* ── Dark hero KPI band ── */}
                 <section style={{
@@ -752,13 +825,13 @@ export default function OverviewTab({
                     <div style={block}>
                         <CardHeaderF
                             label="Bookings at a glance"
-                            tip="Counts whole villa reservations (not individual charges). Paid/Free here describes how the BOOKING itself was classified at intake. Cancelled and no-show bookings are excluded. Total bookings is the actual reservation count - it can be higher than Members who booked + Guests who booked added together, since those two only count each person once even if they booked more than once."
+                            tip="Counts whole villa reservations (not individual charges). Paid/Free here describes how the BOOKING itself was classified at intake. Cancelled and no-show bookings are excluded. Every row here counts BOOKINGS, not people - an account that booked twice contributes 2, not 1. Bookings by members + Bookings by guests always adds up to Total bookings exactly."
                             filter={bookingsFilter}
                             onFilterChange={setBookingsFilter}
                         />
                         <StatRow label="Total bookings" value={totalBookingsMadeForBookings.toLocaleString()} />
-                        <StatRow label="Members who booked" value={bookingsSummary?.total_members_booked?.toLocaleString() ?? "—"} />
-                        <StatRow label="Guests who booked" value={bookingsSummary?.total_guests_booked?.toLocaleString() ?? "—"} />
+                        <StatRow label="Bookings by members" value={bookingsSummary?.total_members_booked?.toLocaleString() ?? "—"} />
+                        <StatRow label="Bookings by guests" value={bookingsSummary?.total_guests_booked?.toLocaleString() ?? "—"} />
                         <StatRow label="Total room nights" value={bookingsSummary?.total_room_nights?.toLocaleString() ?? "—"} />
                         <StatRow label="Avg. stay" value={bookingsSummary?.avg_length_of_stay != null ? `${bookingsSummary.avg_length_of_stay.toFixed(1)} nights` : "—"} />
                         <StatRow label="Avg. party size" value={bookingsSummary?.avg_party_size != null ? bookingsSummary.avg_party_size.toFixed(1) : "—"} />
@@ -770,11 +843,11 @@ export default function OverviewTab({
                     <div style={block}>
                         <CardHeaderF
                             label="Finance at a glance ($USD)"
-                            tip="This card counts individual CHARGES across every booking, not whole bookings. Paid means money was actually charged for that item, after cancelling out any matching refund or correction. Free means the charge was reversed or comped down to $0 - it does not mean the booking itself was free. Charges that were fully reversed (a charge and its exact-opposite correction, even when worded differently) are pulled out of Total revenue entirely and shown on their own as 'Reversed charges' below, so they don't inflate or distort the numbers. Cash advances (cash handed directly to a guest, billed to their folio) are pulled out the same way, since they aren't product or service revenue. A small number of unusual refunds that don't clearly match a known charge are also left out of Total revenue and shown separately as 'Unexplained anomalies' - see the dedicated table further down the page for the individual lines."
+                            tip="This card counts individual CHARGES across every booking, not whole bookings. Paid means money was actually charged for that item, after cancelling out any matching refund or correction. Free means the charge was reversed or comped down to $0 - it does not mean the booking itself was free. Charges that were fully reversed (a charge and its exact-opposite correction, even when worded differently) are pulled out of Total revenue entirely and shown on their own as 'Reversed charges' below, so they don't inflate or distort the numbers. Cash advances (cash handed directly to a guest, billed to their folio) are pulled out the same way, since they aren't product or service revenue. A small number of unusual refunds that don't clearly match a known charge are also left out of Total revenue and shown separately as 'Unexplained anomalies' - see the dedicated table further down the page for the individual lines. Total/Member/Guest revenue each break down into villa, amenity, and membership underneath - Temp Membership Fee charges, labeled 'other' on the Member row specifically since members rarely pay it themselves (mostly only when covering it for a group they're hosting)."
                             filter={financeFilter}
                             onFilterChange={setFinanceFilter}
                         />
-                        <StatRow label="Total revenue" value={money(totalVillaRevenue)} sub={`${money(financeVillaRevenue)} villa · ${money(financeAmenityRevenue)} amenity`} />
+                        <StatRow label="Total revenue" value={money(totalVillaRevenue)} sub={finTotalSubText ?? `${money(financeVillaRevenue)} villa · ${money(financeAmenityRevenue)} amenity`} />
                         <StatRow
                             label="Reversed charges"
                             value={reversalsSummary?.reversed_total != null ? money(reversalsSummary.reversed_total) : "—"}
@@ -786,8 +859,8 @@ export default function OverviewTab({
                             sub={cashAdvanceSummary?.cash_advance_count != null ? `${cashAdvanceSummary.cash_advance_count.toLocaleString()} cash advance charges` : undefined}
                         />
                         <StatRow label="Rev. per transaction" value={revPerBooking != null ? money(revPerBooking) : "—"} />
-                        <StatRow label="Member revenue" value={finMemberRev?.revenue != null ? `${finMemberRev.revenue < 0 ? "−" : ""}${money(Math.abs(finMemberRev.revenue))}` : "—"} warn={finMemberRev?.revenue < 0} />
-                        <StatRow label="Guest revenue" value={finGuestRev?.revenue != null ? `${finGuestRev.revenue < 0 ? "−" : ""}${money(Math.abs(finGuestRev.revenue))}` : "—"} warn={finGuestRev?.revenue < 0} />
+                        <StatRow label="Member revenue" value={finMemberRev?.revenue != null ? `${finMemberRev.revenue < 0 ? "−" : ""}${money(Math.abs(finMemberRev.revenue))}` : "—"} sub={financeSubText(finMemberSplit, "Member")} warn={finMemberRev?.revenue < 0} />
+                        <StatRow label="Guest revenue" value={finGuestRev?.revenue != null ? `${finGuestRev.revenue < 0 ? "−" : ""}${money(Math.abs(finGuestRev.revenue))}` : "—"} sub={financeSubText(finGuestSplit, "Guests")} warn={finGuestRev?.revenue < 0} />
                         <StatRow label="Member transactions" value={finMemberRev?.transactions?.toLocaleString() ?? "—"} />
                         <StatRow label="Statement periods" value={amountDueByPeriod.length} last />
                     </div>
@@ -845,7 +918,7 @@ export default function OverviewTab({
                         <div style={{ ...block, flex: "1 1 auto" }}>
                             <CardHeaderF
                                 label="Member vs guest revenue ($USD)"
-                                tip="Splits revenue between Member accounts and Guest accounts. This counts individual charges (villa rental + amenities combined). Paid/Free reflects whether each specific charge was actually paid, after netting out any matching refund or correction - not whether the booking itself was comped. Free shows a NEGATIVE number - the original amount charged before it was comped/reversed - since the actual net cost to the guest is always $0 and wouldn't show what was given away. Each bar is split Villa (navy) vs Amenity (orange) to show what kind of revenue (or giveaway) makes up that share."
+                                tip="Splits revenue between Member accounts and Guest accounts. This counts individual charges (villa rental + amenities combined). Paid/Free reflects whether each specific charge was actually paid, after netting out any matching refund or correction - not whether the booking itself was comped. Free shows a NEGATIVE number - the original amount charged before it was comped/reversed - since the actual net cost to the guest is always $0 and wouldn't show what was given away. Each bar splits into Villa (navy), Amenity (orange), and a third slice (rust) that's Temp Membership Fee charges for Guests, or just 'Other' for Members - same category, different label, since members rarely pay this fee."
                                 filter={memberGuestFilter}
                                 onFilterChange={setMemberGuestFilter}
                             />
@@ -858,19 +931,29 @@ export default function OverviewTab({
                                     <div style={{ width: 8, height: 8, borderRadius: 2, background: C.flame }} />
                                     <span style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif" }}>Amenity</span>
                                 </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                                    <div style={{ width: 8, height: 8, borderRadius: 2, background: C.rust }} />
+                                    <span style={{ fontSize: 10, color: C.muted, fontFamily: "sans-serif" }}>Membership fee / Other</span>
+                                </div>
                             </div>
                             {filteredMemberGuest.map((r, i, arr) => {
                                 const pct = totalRev !== 0 ? Math.round((r.revenue / totalRev) * 100) : 0;
                                 const isNeg = r.revenue < 0;
-                                const { villaRevenue, amenityRevenue } = memberGuestCategorySplit(r.customerType);
+                                const { villaRevenue, amenityRevenue, membershipRevenue } = memberGuestCategorySplit(r.customerType);
                                 const villaAbs = Math.abs(villaRevenue);
                                 const amenityAbs = Math.abs(amenityRevenue);
-                                const catTotal = villaAbs + amenityAbs;
-                                // Proportions WITHIN this row's own bar (villa share + amenity
-                                // share always add to 100% of the bar's own width, which is
-                                // itself `pct`% of the card) — not relative to any other row.
+                                const membershipAbs = Math.abs(membershipRevenue);
+                                const catTotal = villaAbs + amenityAbs + membershipAbs;
+                                // Proportions WITHIN this row's own bar (all three shares add
+                                // to 100% of the bar's own width, which is itself `pct`% of
+                                // the card) — not relative to any other row.
                                 const villaShare = catTotal > 0 ? (villaAbs / catTotal) * 100 : 0;
                                 const amenityShare = catTotal > 0 ? (amenityAbs / catTotal) * 100 : 0;
+                                const membershipShare = catTotal > 0 ? (membershipAbs / catTotal) * 100 : 0;
+                                // Guests are the ones who actually pay this fee — Members
+                                // showing a nonzero value here is the rare exception, so it's
+                                // labeled generically rather than implying every member pays it.
+                                const thirdLabel = r.customerType === "Guests" ? "temp membership fee" : "other";
                                 return (
                                     <div key={r.customerType} style={{ padding: "11px 16px", borderBottom: i < arr.length - 1 ? `1px solid ${C.rowBorder}` : "none" }}>
                                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
@@ -884,10 +967,11 @@ export default function OverviewTab({
                                             <div style={{ height: "100%", width: `${Math.abs(pct)}%`, display: "flex" }}>
                                                 <div style={{ height: "100%", width: `${villaShare}%`, background: C.navy }} />
                                                 <div style={{ height: "100%", width: `${amenityShare}%`, background: C.flame }} />
+                                                <div style={{ height: "100%", width: `${membershipShare}%`, background: C.rust }} />
                                             </div>
                                         </div>
                                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.muted, marginTop: 3, fontFamily: "sans-serif" }}>
-                                            <span>{isNeg ? "−" : ""}{money(villaAbs)} villa · {isNeg ? "−" : ""}{money(amenityAbs)} amenity</span>
+                                            <span>{isNeg ? "−" : ""}{money(villaAbs)} villa · {isNeg ? "−" : ""}{money(amenityAbs)} amenity · {isNeg ? "−" : ""}{money(membershipAbs)} {thirdLabel}</span>
                                         </div>
                                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, marginTop: 4, fontFamily: "sans-serif" }}>
                                             <span>{r.transactions?.toLocaleString()} transactions</span>
