@@ -58,7 +58,7 @@ from playwright.sync_api import sync_playwright
 BASE_URL       = "https://pms.tryallclub.com:8443/northstar-training"
 # ── PATH CONFIG — update FOLIO_CSV to point to your folio_report.csv ────────
 FOLIO_CSV            = Path(__file__).parent / "reports" / "folio_report.csv"
-REPORTS_DIR          = Path(r"C:\Users\elkay\All_VS_Projects\DemoWrk\backend\playwright\reports")
+REPORTS_DIR          = Path(__file__).parent / "reports"
 FREE_DETAIL_CSV      = REPORTS_DIR / "rate_details_free.csv"
 PAID_DETAIL_CSV      = REPORTS_DIR / "rate_details_paid.csv"
 FREE_SUMMARY_CSV     = REPORTS_DIR / "free_revenue_summary.csv"
