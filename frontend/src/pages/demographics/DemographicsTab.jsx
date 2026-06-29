@@ -137,54 +137,78 @@ const CHART_INFO = {
         x: "Member account",
         y: "Number of dependents",
     },
+    dataCompleteness: {
+        summary:
+            "Shows what share of accounts are missing key demographic fields, such as age, gender, country, marital status, and join (since) date.",
+        functionality:
+            "Hover over a bar to see the exact count and percentage of accounts missing that field.",
+        x: "Percent of accounts missing",
+        y: "Field",
+    },
+    householdComposition: {
+        summary:
+            "Summarizes member households by whether they have any registered dependents, plus the average and largest household sizes.",
+        functionality:
+            "These are summary statistics calculated across all member accounts.",
+        x: null,
+        y: null,
+    },
+    geographicConcentration: {
+        summary:
+            "Shows how concentrated accounts are geographically — the share coming from the top 5 states and top 5 countries, and the US vs. International account split.",
+        functionality:
+            "These are summary statistics calculated across all accounts with address data on file.",
+        x: null,
+        y: null,
+    },
 };
 
 const MONTHS = [
-  "All",
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
+    "All",
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
 ];
 
 const toDateParams = (filter) => {
-  if (filter.mode === "day") {
-    return filter.date
-      ? {
-          date: filter.date,
-        }
-      : {};
-  }
+    if (filter.mode === "day") {
+        return filter.date
+        ? {
+            date: filter.date,
+            }
+        : {};
+    }
 
-  if (filter.mode === "range") {
-    return filter.startDate &&
-      filter.endDate
-      ? {
-          start_date: filter.startDate,
-          end_date: filter.endDate,
-        }
-      : {};
-  }
+    if (filter.mode === "range") {
+        return filter.startDate &&
+        filter.endDate
+        ? {
+            start_date: filter.startDate,
+            end_date: filter.endDate,
+            }
+        : {};
+    }
 
-  return {
-    year:
-      filter.year === "All"
-        ? null
-        : Number(filter.year),
+    return {
+        year:
+        filter.year === "All"
+            ? null
+            : Number(filter.year),
 
-    month:
-      filter.month === "All"
-        ? null
-        : MONTHS.indexOf(filter.month),
-  };
+        month:
+        filter.month === "All"
+            ? null
+            : MONTHS.indexOf(filter.month),
+    };
 };
 
 
@@ -364,6 +388,68 @@ function Card({ title, sub, children, action }) {
                 {action}
             </div>
             {children}
+        </div>
+    );
+}
+
+/* ─── Lightweight KPI strip for summary stats ───────────────── */
+function MiniKpiBand({ items }) {
+    return (
+        <div
+            className="dashboard-kpi-band"
+            style={{ padding: "18px 24px", marginBottom: 18 }}
+        >
+            {items.map((item, index) => (
+                <div
+                    key={item.label}
+                    style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-start",
+                        gap: 4,
+                        padding: "0 22px",
+                        borderLeft:
+                            index > 0
+                                ? "1px solid #DDD6CA"
+                                : "none",
+                    }}
+                >
+                    <span
+                        style={{
+                            fontSize: 10,
+                            fontWeight: 600,
+                            letterSpacing: "0.18em",
+                            textTransform: "uppercase",
+                            color: "#9A8E84",
+                        }}
+                    >
+                        {item.label}
+                    </span>
+
+                    <span
+                        style={{
+                            fontFamily:
+                                "'Cormorant Garamond', serif",
+                            fontSize: 26,
+                            lineHeight: 1.1,
+                            color: "#1B2632",
+                        }}
+                    >
+                        {item.value}
+                    </span>
+
+                    {item.detail && (
+                        <span
+                            style={{
+                                fontSize: 11,
+                                color: "#A35139",
+                            }}
+                        >
+                            {item.detail}
+                        </span>
+                    )}
+                </div>
+            ))}
         </div>
     );
 }
@@ -605,7 +691,174 @@ export default function DemographicsTab({
         };
     }, [visitorChartFilter]);
     const countryChartRef = useRef(null);
-    
+
+    /* ─── Data completeness / household / geo summaries ────── */
+    const [completeness, setCompleteness] = useState(null);
+    const [householdSummary, setHouseholdSummary] = useState(null);
+    const [geoConcentration, setGeoConcentration] = useState(null);
+    const [extraSummaryLoading, setExtraSummaryLoading] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadExtraSummary = async () => {
+            setExtraSummaryLoading(true);
+
+            try {
+                const data =
+                    await analyticsApi.demographicsSummary();
+
+                if (!cancelled) {
+                    setCompleteness(
+                        data.dataCompleteness ?? null,
+                    );
+                    setHouseholdSummary(
+                        data.householdComposition ?? null,
+                    );
+                    setGeoConcentration(
+                        data.geographicConcentration ?? null,
+                    );
+                }
+            } catch (error) {
+                console.error(
+                    "Unable to load demographics summary extras:",
+                    error,
+                );
+            } finally {
+                if (!cancelled) {
+                    setExtraSummaryLoading(false);
+                }
+            }
+        };
+
+        loadExtraSummary();
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    /* 1. Demographic data completeness — turn missing_* counts into a
+       chart-friendly array of { field, missing, pct }. */
+    const completenessRows = useMemo(() => {
+        if (!completeness) return [];
+
+        const total = Number(completeness.total_accounts || 0);
+        if (!total) return [];
+
+        const fields = [
+            { key: "missing_age", label: "Age" },
+            { key: "missing_gender", label: "Gender" },
+            { key: "missing_country", label: "Country" },
+            {
+                key: "missing_marital_status",
+                label: "Marital Status",
+            },
+            { key: "missing_since_date", label: "Since Date" },
+        ];
+
+        return fields.map((f) => {
+            const missing = Number(completeness[f.key] || 0);
+
+            return {
+                field: f.label,
+                missing,
+                pct: Number(
+                    ((missing / total) * 100).toFixed(1),
+                ),
+            };
+        });
+    }, [completeness]);
+
+    /* 2. Household composition KPI items */
+    const householdKpiItems = [
+        {
+            label: "Accounts w/o Dependents",
+            value: householdSummary
+                ? Number(
+                    householdSummary.accounts_no_dependents ||
+                        0,
+                ).toLocaleString()
+                : "—",
+        },
+        {
+            label: "Accounts w/ Dependents",
+            value: householdSummary
+                ? Number(
+                    householdSummary.accounts_with_dependents ||
+                        0,
+                ).toLocaleString()
+                : "—",
+        },
+        {
+            label: "Avg Dependents / Household",
+            value:
+                householdSummary?.avg_dependents_per_household !=
+                null
+                    ? Number(
+                        householdSummary
+                            .avg_dependents_per_household,
+                    ).toFixed(2)
+                    : "—",
+        },
+        {
+            label: "Largest Household",
+            value:
+                householdSummary?.largest_household_size != null
+                    ? Number(
+                        householdSummary
+                            .largest_household_size,
+                    ).toLocaleString()
+                    : "—",
+            detail: "dependents",
+        },
+    ];
+
+    /* 3. Geographic concentration KPI items */
+    const geoKpiItems = [
+        {
+            label: "Top 5 States Share",
+            value:
+                geoConcentration?.top5_states_pct != null
+                    ? `${geoConcentration.top5_states_pct}%`
+                    : "—",
+            detail: "of all accounts",
+        },
+        {
+            label: "Top 5 Countries Share",
+            value:
+                geoConcentration?.top5_countries_pct != null
+                    ? `${geoConcentration.top5_countries_pct}%`
+                    : "—",
+            detail: "of all accounts",
+        },
+        {
+            label: "US Accounts",
+            value:
+                geoConcentration?.domestic_pct != null
+                    ? `${geoConcentration.domestic_pct}%`
+                    : "—",
+            detail:
+                geoConcentration?.domestic_accounts != null
+                    ? `${Number(
+                            geoConcentration.domestic_accounts,
+                        ).toLocaleString()} accounts`
+                    : undefined,
+        },
+        {
+            label: "International Accounts",
+            value:
+                geoConcentration?.international_pct != null
+                    ? `${geoConcentration.international_pct}%`
+                    : "—",
+            detail:
+                geoConcentration?.international_accounts != null
+                    ? `${Number(
+                            geoConcentration.international_accounts,
+                        ).toLocaleString()} accounts`
+                    : undefined,
+        },
+    ];
 
     /* ─── Derived account data ────────────────────────────────── */
 
@@ -1083,6 +1336,99 @@ export default function DemographicsTab({
                 );
                 })}
             </section>
+
+            {/* ─── Data quality / completeness ──────────────── */}
+            <SectionLabel>Data Quality</SectionLabel>
+            <Card
+                title="Demographic Data Completeness"
+                sub="Share of accounts missing key fields"
+                action={<ChartInfo id="dataCompleteness" />}
+            >
+                {extraSummaryLoading && !completeness && (
+                    <div
+                        style={{
+                            color: C.muted,
+                            fontSize: 12,
+                            marginBottom: 8,
+                        }}
+                    >
+                        Loading completeness data…
+                    </div>
+                )}
+
+                <div
+                    className="dashboard-chart"
+                    style={{
+                        height: Math.max(
+                            200,
+                            completenessRows.length * 42,
+                        ),
+                    }}
+                >
+                    <ResponsiveContainer
+                        width="100%"
+                        height="100%"
+                    >
+                        <BarChart
+                            data={completenessRows}
+                            layout="vertical"
+                            margin={{
+                                top: 2,
+                                right: 34,
+                                bottom: 2,
+                            }}
+                            barCategoryGap="28%"
+                        >
+                            <CartesianGrid
+                                strokeDasharray="3 3"
+                                stroke={GRID}
+                                horizontal={false}
+                            />
+
+                            <XAxis
+                                type="number"
+                                stroke={AX}
+                                fontSize={11}
+                                domain={[0, 100]}
+                                tickFormatter={(value) =>
+                                    `${value}%`
+                                }
+                            />
+
+                            <YAxis
+                                type="category"
+                                dataKey="field"
+                                stroke={AX}
+                                fontSize={11}
+                                width={120}
+                                tickLine={false}
+                            />
+
+                            <Tooltip
+                                contentStyle={TIP}
+                                formatter={(
+                                    value,
+                                    name,
+                                    props,
+                                ) => [
+                                    `${value}% (${Number(
+                                        props.payload.missing,
+                                    ).toLocaleString()} accounts)`,
+                                    "Missing",
+                                ]}
+                            />
+
+                            <Bar
+                                dataKey="pct"
+                                name="Missing"
+                                fill="var(--dashboard-flame)"
+                                radius={[0, 6, 6, 0]}
+                                maxBarSize={22}
+                            />
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+            </Card>
 
             {/* ─── Account types ─────────────────────────────────── */}
             <Card
@@ -1653,6 +1999,26 @@ export default function DemographicsTab({
             Geographic Distribution
             </SectionLabel>
 
+            {/* ─── Geographic concentration summary ─────────── */}
+            <Card
+                title="Geographic Concentration"
+                sub="How concentrated accounts are by state, country, and USA vs. International"
+                action={<ChartInfo id="geographicConcentration" />}
+            >
+                {extraSummaryLoading && !geoConcentration && (
+                    <div
+                        style={{
+                            color: C.muted,
+                            fontSize: 12,
+                            marginBottom: 8,
+                        }}
+                    >
+                        Loading geographic summary…
+                    </div>
+                )}
+                <MiniKpiBand items={geoKpiItems} />
+            </Card>
+
             <div className="dashboard-grid dashboard-grid-equal">
             <Card
                 title="Accounts by State"
@@ -1741,6 +2107,27 @@ export default function DemographicsTab({
             <SectionLabel>
             Household &amp; Dependents
             </SectionLabel>
+
+            {/* ─── Household composition summary ────────────── */}
+            <Card
+                title="Household Composition"
+                sub="No-dependent vs. dependent households, plus average and largest household size"
+                action={<ChartInfo id="householdComposition" />}
+            >
+                {extraSummaryLoading && !householdSummary && (
+                    <div
+                        style={{
+                            color: C.muted,
+                            fontSize: 12,
+                            marginBottom: 8,
+                        }}
+                    >
+                        Loading household summary…
+                    </div>
+                )}
+                <MiniKpiBand items={householdKpiItems} />
+            </Card>
+
             <div className="dashboard-grid dashboard-grid-equal">
             <Card
                 title="Dependents by Age Group"
