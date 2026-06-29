@@ -195,7 +195,7 @@ function KpiStrip({ totals, section }) {
     },
     {
       label: "Other (Payments, Adj.)",
-      value: money(totals.other),
+      value: money(Math.abs(totals.other)),
       color: C.muted,
       tip: "Payments applied against outstanding member balances and non-revenue adjustment entries. These reduce what's owed but are not income — excluded from all revenue figures.",
     },
@@ -351,8 +351,8 @@ export default function CategoryCompBreakdown({ data, onRowClick }) {
         if (r.missingRateCount != null) missing += Number(r.missingRateCount);
         if (r.calculationCoverage != null) coverage = r.calculationCoverage;
       }
-      else if (r.bucket === "reversed") e.reversed +=amt;
-      else if (r.bucket === "other") e.other += amt; 
+      else if (r.bucket === "reversed") e.reversed += Math.abs(amt);
+      else if (r.bucket === "other") e.other += Math.abs(amt); 
       e.transactions += Number(r.transactions || 0);
       e.uniqueAccounts += Number(r.uniqueAccounts || 0);
     });
