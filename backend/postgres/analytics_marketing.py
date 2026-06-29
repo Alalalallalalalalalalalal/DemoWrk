@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
+from typing import Any
 import re
 
 
@@ -428,14 +429,75 @@ CAMPAIGN_DEFINITIONS = {
 
 
 
+CAMPAIGN_FIELD_OPTIONS = {
+    "lifetime_spend": {
+        "label": "Lifetime Spend",
+        "type": "number",
+        "column": "lifetime_spend",
+        "default_sort": True,
+    },
+    "paid_revenue": {"label": "Paid Revenue", "type": "number", "column": "paid_revenue"},
+    "free_value": {"label": "Complimentary Value", "type": "number", "column": "free_value"},
+    "total_visits": {"label": "Number of Visits", "type": "number", "column": "total_visits"},
+    "total_nights": {"label": "Number of Nights", "type": "number", "column": "total_nights"},
+    "preferred_season_visits": {"label": "Preferred Season Visits", "type": "number", "column": "preferred_season_visits"},
+    "preferred_villa_visits": {"label": "Preferred Villa Visits", "type": "number", "column": "preferred_villa_visits"},
+    "preferred_amenity_visits": {"label": "Preferred Amenity Uses", "type": "number", "column": "preferred_amenity_visits"},
+    "last_visit": {"label": "Last Visit", "type": "date", "column": "last_visit"},
+    "first_visit": {"label": "First Visit", "type": "date", "column": "first_visit"},
+    "date_of_birth": {"label": "Birthday", "type": "date", "column": "date_of_birth"},
+    "preferred_villa": {"label": "Preferred Villa", "type": "text", "column": "preferred_villa"},
+    "preferred_amenity": {"label": "Preferred Amenity", "type": "text", "column": "preferred_amenity"},
+    "preferred_season": {"label": "Preferred Season", "type": "text", "column": "preferred_season"},
+    "business_source": {"label": "Business Source", "type": "text", "column": "business_source"},
+    "country": {"label": "Country", "type": "text", "column": "country"},
+    "state": {"label": "State", "type": "text", "column": "state"},
+    "city": {"label": "City", "type": "text", "column": "city"},
+    "email": {"label": "Email", "type": "text", "column": "email"},
+}
+
+SORT_FIELD_OPTIONS = {
+    key: value["column"]
+    for key, value in CAMPAIGN_FIELD_OPTIONS.items()
+}
+
+TEXT_OPERATORS = {"is", "is_not", "contains", "not_contains", "is_known", "is_unknown"}
+NUMBER_OPERATORS = {"=", "!=", ">", ">=", "<", "<=", "between"}
+DATE_OPERATORS = {"before", "after", "within_last_months", "more_than_months_ago", "next_month", "this_month", "is_known", "is_unknown"}
+
+REASON_TEMPLATES = {
+    "auto": "'Matched selected marketing audience rules.'",
+    "win_back": "'Last visit was ' || COALESCE(TO_CHAR(last_visit, 'Mon DD, YYYY'), 'not recorded') || '. Send a win-back offer.'",
+    "high_value": "'Lifetime spend is $' || TO_CHAR(lifetime_spend, 'FM999,999,999,990.00') || '. Prioritize premium messaging.'",
+    "villa": "'Preferred villa is ' || COALESCE(preferred_villa, 'not recorded') || ' with ' || preferred_villa_visits || ' visits.'",
+    "amenity": "'Top amenity is ' || COALESCE(preferred_amenity, 'not recorded') || ' with ' || preferred_amenity_visits || ' uses.'",
+    "birthday": "'Birthday: ' || COALESCE(TO_CHAR(date_of_birth, 'Mon DD'), 'not recorded') || '.'",
+    "custom": "'Custom campaign match.'",
+}
+
+
+class CampaignRulePayload(BaseModel):
+    field: str
+    operator: str
+    value: Any | None = None
+    value2: Any | None = None
+
+
 class CampaignPayload(BaseModel):
     key: str | None = Field(default=None, max_length=80)
     title: str = Field(min_length=2, max_length=160)
     category: str = Field(default="Custom", min_length=2, max_length=80)
     description: str = Field(default="", max_length=800)
-    where: str = Field(default="total_visits >= 1", min_length=1, max_length=1200)
-    reason: str = Field(default="'Custom campaign match.'", min_length=1, max_length=1200)
-    sort: str = Field(default="lifetime_spend DESC", min_length=1, max_length=400)
+    # Advanced SQL mode still works, but normal UI should send rules/sort dropdown values.
+    where: str | None = Field(default=None, max_length=1200)
+    reason: str | None = Field(default=None, max_length=1200)
+    sort: str | None = Field(default=None, max_length=400)
+    rules: list[CampaignRulePayload] = Field(default_factory=list)
+    rule_logic: str = Field(default="AND", max_length=3)
+    sort_field: str = Field(default="lifetime_spend", max_length=80)
+    sort_direction: str = Field(default="DESC", max_length=4)
+    reason_template: str = Field(default="auto", max_length=40)
+    advanced_mode: bool = False
     is_active: bool = True
 
 
@@ -459,6 +521,112 @@ def _validate_sql_piece(value: str, field: str) -> str:
     if any(token in low for token in blocked):
         raise HTTPException(status_code=400, detail=f"Unsafe SQL in {field}.")
     return value.strip()
+
+
+def _quote_sql_text(value: Any) -> str:
+    return "'" + str(value).replace("'", "''").strip() + "'"
+
+
+def _number_value(value: Any, field: str) -> str:
+    try:
+        return str(float(value))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{field} must be a number.")
+
+
+def _positive_int(value: Any, field: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{field} must be a whole number.")
+    if parsed < 0:
+        raise HTTPException(status_code=400, detail=f"{field} cannot be negative.")
+    return parsed
+
+
+def _rule_to_sql(rule: CampaignRulePayload) -> str:
+    field_meta = CAMPAIGN_FIELD_OPTIONS.get(rule.field)
+    if not field_meta:
+        raise HTTPException(status_code=400, detail=f"Unknown rule field: {rule.field}")
+
+    column = field_meta["column"]
+    field_type = field_meta["type"]
+    operator = rule.operator
+
+    if field_type == "number":
+        if operator not in NUMBER_OPERATORS:
+            raise HTTPException(status_code=400, detail=f"Invalid number operator for {rule.field}.")
+        if operator == "between":
+            return f"{column} BETWEEN {_number_value(rule.value, rule.field)} AND {_number_value(rule.value2, rule.field)}"
+        return f"{column} {operator} {_number_value(rule.value, rule.field)}"
+
+    if field_type == "text":
+        if operator not in TEXT_OPERATORS:
+            raise HTTPException(status_code=400, detail=f"Invalid text operator for {rule.field}.")
+        if operator == "is_known":
+            return f"{column} IS NOT NULL AND TRIM({column}) <> ''"
+        if operator == "is_unknown":
+            return f"({column} IS NULL OR TRIM({column}) = '')"
+        value = _quote_sql_text(rule.value or "")
+        if operator == "is":
+            return f"{column} = {value}"
+        if operator == "is_not":
+            return f"({column} IS NULL OR {column} <> {value})"
+        if operator == "contains":
+            return f"{column} ILIKE '%' || {value} || '%'"
+        if operator == "not_contains":
+            return f"({column} IS NULL OR {column} NOT ILIKE '%' || {value} || '%')"
+
+    if field_type == "date":
+        if operator not in DATE_OPERATORS:
+            raise HTTPException(status_code=400, detail=f"Invalid date operator for {rule.field}.")
+        if operator == "is_known":
+            return f"{column} IS NOT NULL"
+        if operator == "is_unknown":
+            return f"{column} IS NULL"
+        if operator == "next_month":
+            return f"{column} IS NOT NULL AND EXTRACT(MONTH FROM {column})::INT = EXTRACT(MONTH FROM (CURRENT_DATE + INTERVAL '1 month'))::INT"
+        if operator == "this_month":
+            return f"{column} IS NOT NULL AND EXTRACT(MONTH FROM {column})::INT = EXTRACT(MONTH FROM CURRENT_DATE)::INT"
+        if operator == "within_last_months":
+            months = _positive_int(rule.value, rule.field)
+            return f"{column} IS NOT NULL AND {column} >= (CURRENT_DATE - INTERVAL '{months} months')"
+        if operator == "more_than_months_ago":
+            months = _positive_int(rule.value, rule.field)
+            return f"{column} IS NOT NULL AND {column} < (CURRENT_DATE - INTERVAL '{months} months')"
+        value = _quote_sql_text(rule.value)
+        if operator == "before":
+            return f"{column} IS NOT NULL AND {column} < {value}::DATE"
+        if operator == "after":
+            return f"{column} IS NOT NULL AND {column} > {value}::DATE"
+
+    raise HTTPException(status_code=400, detail="Invalid campaign rule.")
+
+
+def _payload_sql_parts(payload: CampaignPayload) -> dict:
+    if payload.advanced_mode:
+        return {
+            "where": _validate_sql_piece(payload.where or "total_visits >= 1", "where"),
+            "reason": _validate_sql_piece(payload.reason or "'Custom campaign match.'", "reason"),
+            "sort": _validate_sql_piece(payload.sort or "lifetime_spend DESC", "sort"),
+        }
+
+    rules = [rule for rule in payload.rules if rule.field and rule.operator]
+    if not rules:
+        where_sql = "total_visits >= 1"
+    else:
+        joiner = " OR " if payload.rule_logic.upper() == "OR" else " AND "
+        where_sql = joiner.join(f"({_rule_to_sql(rule)})" for rule in rules)
+
+    sort_column = SORT_FIELD_OPTIONS.get(payload.sort_field, "lifetime_spend")
+    sort_direction = "ASC" if payload.sort_direction.upper() == "ASC" else "DESC"
+    reason_sql = REASON_TEMPLATES.get(payload.reason_template, REASON_TEMPLATES["auto"])
+
+    return {
+        "where": where_sql,
+        "reason": reason_sql,
+        "sort": f"{sort_column} {sort_direction} NULLS LAST",
+    }
 
 
 def _ensure_campaign_table(db: Session):
@@ -618,6 +786,7 @@ def create_marketing_campaign(payload: CampaignPayload, db: Session = Depends(ge
     existing = _get_campaign_definitions(db, include_inactive=True)
     if key in existing:
         raise HTTPException(status_code=409, detail="Campaign key already exists. Use edit instead.")
+    sql_parts = _payload_sql_parts(payload)
     db.execute(text("""
         INSERT INTO marketing_campaign_definitions
             (campaign_key, title, category, description, where_sql, reason_sql, sort_sql, is_active, is_custom)
@@ -628,9 +797,9 @@ def create_marketing_campaign(payload: CampaignPayload, db: Session = Depends(ge
         "title": payload.title.strip(),
         "category": payload.category.strip(),
         "description": payload.description.strip(),
-        "where_sql": _validate_sql_piece(payload.where, "where"),
-        "reason_sql": _validate_sql_piece(payload.reason, "reason"),
-        "sort_sql": _validate_sql_piece(payload.sort, "sort"),
+        "where_sql": sql_parts["where"],
+        "reason_sql": sql_parts["reason"],
+        "sort_sql": sql_parts["sort"],
         "is_active": payload.is_active,
     })
     db.commit()
@@ -644,6 +813,7 @@ def update_marketing_campaign(campaign_key: str, payload: CampaignPayload, db: S
     if campaign_key not in existing:
         raise HTTPException(status_code=404, detail="Unknown marketing campaign")
     is_custom = bool(existing[campaign_key].get("is_custom", False))
+    sql_parts = _payload_sql_parts(payload)
     db.execute(text("""
         INSERT INTO marketing_campaign_definitions
             (campaign_key, title, category, description, where_sql, reason_sql, sort_sql, is_active, is_custom, updated_at)
@@ -664,9 +834,9 @@ def update_marketing_campaign(campaign_key: str, payload: CampaignPayload, db: S
         "title": payload.title.strip(),
         "category": payload.category.strip(),
         "description": payload.description.strip(),
-        "where_sql": _validate_sql_piece(payload.where, "where"),
-        "reason_sql": _validate_sql_piece(payload.reason, "reason"),
-        "sort_sql": _validate_sql_piece(payload.sort, "sort"),
+        "where_sql": sql_parts["where"],
+        "reason_sql": sql_parts["reason"],
+        "sort_sql": sql_parts["sort"],
         "is_active": payload.is_active,
         "is_custom": is_custom,
     })
