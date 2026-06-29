@@ -3,7 +3,8 @@
 // Replaces Paid/Free/Member/Guest (already covered by the Breakdowns
 // section below) with the Villas / Amenities / Services split.
 
-import { TrendingUp, Home, Sparkles, Briefcase } from "lucide-react";
+import { useState } from "react";
+import { TrendingUp, Home, Sparkles, Briefcase, Info, X } from "lucide-react";
 
 const C = {
   bg:      "var(--dashboard-card)",
@@ -19,9 +20,79 @@ const C = {
 };
 
 const money = (v) =>
-  v == null ? "—" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  v == null ? "-" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
-function OverviewCard({ icon: Icon, label, value, sub, accent, onClick }) {
+// ── Tooltip (i) button ──
+function InfoNote({ title, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        type="button"
+        onClick={(e) => {
+          // Prevent the card's onClick (drill-down) from firing
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        aria-label="info"
+        style={{
+          background: "none",
+          border: "none",
+          padding: 4,
+          cursor: "pointer",
+          color: open ? C.accent2 : C.muted,
+          display: "flex",
+        }}
+      >
+        <Info size={13} />
+      </button>
+
+      {open && (
+        <>
+          <div
+            onClick={(e) => { e.stopPropagation(); setOpen(false); }}
+            style={{ position: "fixed", inset: 0, zIndex: 49 }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              top: "calc(100% + 6px)",
+              left: 2,
+              zIndex: 50,
+              width: 220,
+              background: C.bg,
+              border: `1px solid ${C.border}`,
+              borderRadius: 12,
+              boxShadow: "0 8px 28px rgba(0,0,0,0.14)",
+              padding: "12px 14px",
+              fontSize: 12,
+              color: C.soft,
+              lineHeight: 1.55,
+              fontFamily: "sans-serif",
+            }}
+          >
+            <button
+              onClick={(e) => { e.stopPropagation(); setOpen(false); }}
+              style={{
+                position: "absolute", top: 8, right: 8,
+                background: "none", border: "none", cursor: "pointer",
+                color: C.muted, padding: 2, display: "flex",
+              }}
+            >
+              <X size={12} />
+            </button>
+            <p style={{ margin: "0 0 6px", color: C.text, fontWeight: 700, paddingRight: 14 }}>
+              {title}
+            </p>
+            {children}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function OverviewCard({ icon: Icon, label, tooltip, value, accent, onClick }) {
   return (
     <button
       onClick={onClick}
@@ -53,6 +124,9 @@ function OverviewCard({ icon: Icon, label, value, sub, accent, onClick }) {
           <Icon size={15} color={accent} />
         </div>
         <span className="dashboard-eyebrow">{label}</span>
+        <InfoNote title={label}>
+          {tooltip}
+        </InfoNote>
       </div>
 
       <div
@@ -65,9 +139,6 @@ function OverviewCard({ icon: Icon, label, value, sub, accent, onClick }) {
       >
         {value}
       </div>
-      <div style={{ fontSize: 11, color: C.muted, marginTop: 4, fontFamily: "sans-serif" }}>
-        {sub}
-      </div>
     </button>
   );
 }
@@ -79,10 +150,10 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Total Revenue",
       value: money(data.totalRevenue),
-      sub:   `${(data.totalTransactions ?? 0).toLocaleString()} folio charges — villa stays, amenities, and all other services`,
+      tooltip: `${(data.totalTransactions ?? 0).toLocaleString()} folio charges - villa stays, amenities, and all other services`,
       icon:  TrendingUp,
       accent: C.accent,
-      // Special-cased in FinanceTab's handleOverviewCardClick — opens a
+      // Special-cased in FinanceTab's handleOverviewCardClick - opens a
       // Villas/Amenities/Services mid-item breakdown instead of going
       // straight to a flat record list.
       drillType: "total",
@@ -91,10 +162,10 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Villas Revenue",
       value: money(data.villasRevenue),
-      sub:   "Folio lines classified as villa stays — covers both paid and comped rooms that generated a charge",
+      tooltip: "Folio lines classified as villa stays - covers both paid and comped rooms that generated a charge",
       icon:  Home,
       accent: "#2D8A5F",
-      // transaction_category = 'Villa' — same /drilldown "category"
+      // transaction_category = 'Villa' - same /drilldown "category"
       // filter the rest of Finance already uses.
       drillType: "category",
       drillValue: "Villa",
@@ -102,7 +173,7 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Amenities Revenue",
       value: money(data.amenitiesRevenue),
-      sub:   "Spa, golf, F&B, tennis, boutique, and other amenity charges across all folios",
+      tooltip: "Spa, golf, F&B, tennis, boutique, and other amenity charges across all folios",
       icon:  Sparkles,
       accent: "#D98C2B",
       drillType: "section",
@@ -111,7 +182,7 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Services Revenue",
       value: money(data.servicesRevenue),
-      sub:   "Commissary, adjustments, and other service lines outside villa and amenity categories",
+      tooltip: "Commissary, adjustments, and other service lines outside villa and amenity categories",
       icon:  Briefcase,
       accent: C.accent2,
       drillType: "section",
@@ -126,8 +197,8 @@ export default function FinanceOverview({ data, onCardClick }) {
           key={card.label}
           icon={card.icon}
           label={card.label}
+          tooltip={card.tooltip}
           value={card.value}
-          sub={card.sub}
           accent={card.accent}
           onClick={() => onCardClick({ drillType: card.drillType, drillValue: card.drillValue })}
         />

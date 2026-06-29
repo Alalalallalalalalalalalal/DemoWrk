@@ -89,10 +89,10 @@ function Skeleton({ height = 120 }) {
 
 // ══════════════════════════════════════════════════════════════════
 export default function FinanceTab() {
-  // ── period filter (year / month) — drives every fetch below ─────
+  // ── period filter (year / month) - drives every fetch below ─────
 const [period, setPeriod] = useState(DEFAULT_PERIOD);
 
-  // Placeholder year range — there's no "available years" endpoint yet,
+  // Placeholder year range - there's no "available years" endpoint yet,
   // so this just offers the current year back 6 years. Swap this out for
   // a real source (e.g. whatever DemographicsDateFilter.jsx uses) if one
   // already exists elsewhere in the app, for consistency.
@@ -120,7 +120,7 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
   // (e.g. a future CategoryCompBreakdown row representing category +
   // payment bucket together). `drillType`/`drillValue` stay supported
   // for every existing single-dimension call site (villa rows, source
-  // rows, customer rows, amenity rows, category/section cards) — the
+  // rows, customer rows, amenity rows, category/section cards) - the
   // drawer merges both into the same accumulating filter set, and from
   // there the user can pivot ("Browse by…") into further dimensions
   // without losing what's already active.
@@ -191,30 +191,30 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
     setDrawer((d) => ({ ...d, open: false }));
   }, []);
 
-  // Build mid-items for "Total Revenue" card drill-down — shows the
+  // Build mid-items for "Total Revenue" card drill-down - shows the
   // Villas / Amenities / Services split (matching the new overview
   // cards) before going to underlying folio records. Pulled straight
-  // from the already-fetched `overview` state — no extra request.
+  // from the already-fetched `overview` state - no extra request.
   function buildTotalMidItems() {
     if (!overview) return [];
     return [
       {
         label:      "Villas Revenue",
-        sub:        "All folio lines classified as villa stays — click to drill into individual charges",
+        sub:        "All folio lines classified as villa stays - click to drill into individual charges",
         revenue:    overview.villasRevenue,
         drillType:  "category",
         drillValue: "Villa",
       },
       {
         label:      "Amenities Revenue",
-        sub:        "Spa, golf, F&B, tennis, boutique, and other amenity charges — click to see folio lines",
+        sub:        "Spa, golf, F&B, tennis, boutique, and other amenity charges - click to see folio lines",
         revenue:    overview.amenitiesRevenue,
         drillType:  "section",
         drillValue: "Amenities",
       },
       {
         label:      "Services Revenue",
-        sub:        "Commissary, adjustments, and other service lines — click to inspect underlying records",
+        sub:        "Commissary, adjustments, and other service lines - click to inspect underlying records",
         revenue:    overview.servicesRevenue,
         drillType:  "section",
         drillValue: "Services",
@@ -223,14 +223,14 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
   }
 
   // NOTE: a per-villa "mid items" list used to be hand-built here from
-  // the (unfiltered) Villa Revenue table data, but it's gone now —
+  // the (unfiltered) Villa Revenue table data, but it's gone now -
   // RevenueBreakdownDrawer's "Browse by Villa" pivot replaces it with
   // something strictly better: it calls /finance/drilldown-breakdown
   // scoped to whatever filters are already active (payment, category,
   // source, etc.), so the per-villa numbers shown are always correct
   // for the current drill-down, not just the lifetime villa totals.
   // That pivot is available automatically on every flat-record screen
-  // the drawer shows, from every entry point in this file — clicking
+  // the drawer shows, from every entry point in this file - clicking
   // "Villas Revenue" goes straight to flat category=Villa records, and
   // from there "Browse by → Villa" gives the same filtered per-villa
   // breakdown buildVillaMidItems() used to hand-roll.
@@ -244,14 +244,14 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
     }
   }
 
-  // Handle villa table row click — go straight to folio records
+  // Handle villa table row click - go straight to folio records
   function handleVillaRowClick({ drillType, drillValue }) {
     openDrawer({ drillType, drillValue });
   }
 
   return (
     <div className="dashboard-section">
-      {/* ── Period filter — applies to every section + the drawer ── */}
+      {/* ── Period filter - applies to every section + the drawer ── */}
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: 4 }}>
         <FinancePeriodFilter value={period} onChange={setPeriod} years={years} />
       </div>

@@ -1,8 +1,9 @@
 // frontend/src/pages/finance/SourceRevenueTable.jsx
-// payment_type from business_source is either 'Free' or 'Paid' — used directly.
+// payment_type from business_source is either 'Free' or 'Paid' - used directly.
 // One row per source (deduped in backend). Filter buttons: All | Paid | Free.
 
 import { useState } from "react";
+import { Info, X } from "lucide-react";
 
 const C = {
   bg:      "var(--dashboard-card)",
@@ -18,9 +19,9 @@ const C = {
 };
 
 const money = (v) =>
-  v == null ? "—" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  v == null ? "-" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
-const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
+const fmt = (v) => (v == null ? "-" : Number(v).toLocaleString());
 
 const th = {
   padding: "10px 14px",
@@ -48,7 +49,73 @@ const td = {
   fontFamily: "sans-serif",
 };
 
-// payment_type is exactly 'Paid' or 'Free' — no list needed
+// payment_type is exactly 'Paid' or 'Free' - no list needed
+function InfoNote({ title, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="info"
+        style={{
+          background: "none",
+          border: "none",
+          padding: 4,
+          cursor: "pointer",
+          color: open ? C.accent2 : C.muted,
+          display: "flex",
+        }}
+      >
+        <Info size={13} />
+      </button>
+
+      {open && (
+        <>
+          <div
+            onClick={() => setOpen(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 49 }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              top: "calc(100% + 6px)",
+              left: 2,
+              zIndex: 50,
+              width: 260,
+              background: C.bg,
+              border: `1px solid ${C.border}`,
+              borderRadius: 12,
+              boxShadow: "0 8px 28px rgba(0,0,0,0.14)",
+              padding: "12px 14px",
+              fontSize: 12,
+              color: C.soft,
+              lineHeight: 1.55,
+              fontFamily: "sans-serif",
+            }}
+          >
+            <button
+              onClick={() => setOpen(false)}
+              style={{
+                position: "absolute", top: 8, right: 8,
+                background: "none", border: "none", cursor: "pointer",
+                color: C.muted, padding: 2, display: "flex",
+              }}
+            >
+              <X size={12} />
+            </button>
+            <p style={{ margin: "0 0 6px", color: C.text, fontWeight: 700, paddingRight: 14 }}>
+              {title}
+            </p>
+            {children}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// payment_type badge
 function TypeBadge({ type }) {
   const isPaid = type === "Paid";
   return (
@@ -100,7 +167,27 @@ export default function SourceRevenueTable({ data, onRowClick }) {
   return (
     <div className="dashboard-card">
       <div className="dashboard-eyebrow">Revenue by Source</div>
-      <h2 className="dashboard-card-title">Booking source breakdown</h2>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
+        <h2 className="dashboard-card-title" style={{ margin: 0 }}>
+          Booking Source Breakdown
+        </h2>
+        <InfoNote title="Booking Source Breakdown">
+          <p style={{ margin: "0 0 8px" }}>
+            All bookings organised by their source - where or how the reservation originated -
+            split between Paid and Free/Complementary stays.
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 16 }}>
+            <li style={{ marginBottom: 4 }}>
+              <strong style={{ color: C.text }}>Click a row</strong> to see every booking that
+              came through that source.
+            </li>
+            <li>
+              Use the <strong style={{ color: C.text }}>All / Paid / Free</strong> filter to narrow
+              results to a specific stay type.
+            </li>
+          </ul>
+        </InfoNote>
+      </div>
 
       {/* Toolbar */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center", flexWrap: "wrap" }}>
@@ -190,7 +277,7 @@ export default function SourceRevenueTable({ data, onRowClick }) {
                     {fmt(row.transactions)}
                   </td>
                   <td style={{ ...td, textAlign: "right", color: C.muted }}>
-                    {row.transactions ? money((row.revenue ?? 0) / row.transactions) : "—"}
+                    {row.transactions ? money((row.revenue ?? 0) / row.transactions) : "-"}
                   </td>
                 </tr>
               ))
