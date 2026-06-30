@@ -2,7 +2,7 @@
 //
 // SECTION TABS (Villa / Amenities / Services) choose which rows are in
 // play. The "Villa stay type" toggle then filters WITHIN that section by
-// whether the booking's villa stay was comped (payment_type) — this
+// whether the booking's villa stay was comped (payment_type) - this
 // is what lets you answer "do guests whose villa stay was free still pay
 // for spa/golf/F&B, or are we comping those too."
 //
@@ -14,7 +14,7 @@
 //                        (SUM(original_amount) where payment_type =
 //                        'Free', excluding Villa Lolita / Wonderland),
 //                        NOT from folios. Amenities/Services keep the
-//                        original folio-comp logic — only the label
+//                        original folio-comp logic - only the label
 //                        and field name changed.
 //   reversed          -> reversal/write-off line
 //
@@ -22,7 +22,7 @@
 //   [{ section, category, PaymentType, bucket, amount, transactions,
 //      uniqueAccounts, missingRateCount?, calculationCoverage? }]
 //   missingRateCount / calculationCoverage only appear on the single
-//   synthetic Villa "forgone_revenue" row — they're data-quality
+//   synthetic Villa "forgone_revenue" row - they're data-quality
 //   companions to that figure, not part of every row.
 
 import { useMemo, useState } from "react";
@@ -58,10 +58,10 @@ const CATEGORY_COLORS = {
 const categoryColor = (name) => CATEGORY_COLORS[name] ?? C.muted;
 
 const money = (v) =>
-  v == null ? "—" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
+  v == null ? "-" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const fmt = (v) => (v == null ? "-" : Number(v).toLocaleString());
 const pct = (part, whole) =>
-  !Number(whole) ? "—" : `${((Number(part) / Number(whole)) * 100).toFixed(1)}%`;
+  !Number(whole) ? "-" : `${((Number(part) / Number(whole)) * 100).toFixed(1)}%`;
 
 const SECTION_TABS = [
   { key: "Villa", label: "Villa" },
@@ -154,7 +154,7 @@ function InfoNote({ title, children }) {
           <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 49 }} />
           <div
             style={{
-              position: "absolute", top: "calc(100% + 6px)", left: 2, zIndex: 50, width: 180,
+              position: "absolute", top: "calc(100% + 6px)", left: 2, zIndex: 50, width: 280,
               background: C.bg, border: `1px solid ${C.border}`, borderRadius: 12,
               boxShadow: "0 8px 28px rgba(0,0,0,0.14)", padding: "12px 14px", fontSize: 12,
               color: C.soft, lineHeight: 1.55, fontFamily: "sans-serif",
@@ -177,15 +177,15 @@ function KpiStrip({ totals, section }) {
 
   const forgoneTip =
     section === "Villa"
-      ? "The rack-rate value of complimentary villa stays, drawn from rate_details.original_amount where payment_type = 'Free'. Represents room revenue the club chose not to charge. Villa Lolita and Wonderland are excluded as they operate under separate pricing arrangements."
-      : "Amenity and service charges individually entered as comps on the folio line. Only captures waivers explicitly posted — value the club never rang up at all is not visible here.";
+      ? "The rack-rate value of complimentary villa stays. Represents room revenue the club chose not to charge. Villa Lolita and Wonderland are excluded."
+      : "Amenity and service charges individually entered as comps on the folio line. Only captures waivers explicitly posted - value the club never rang up at all is not visible here.";
 
   const cards = [
     {
       label: "Collected",
       value: money(totals.collected),
       color: C.green,
-      tip: "Revenue posted to folios and actually billed — the club's earned income for this section within the active period and filters.",
+      tip: "Revenue posted to folios and actually billed - the club's earned income for this section within the active period and filters.",
     },
     {
       label: "Forgone Revenue",
@@ -195,15 +195,15 @@ function KpiStrip({ totals, section }) {
     },
     {
       label: "Other (Payments, Adj.)",
-      value: money(totals.other),
+      value: money(Math.abs(totals.other)),
       color: C.muted,
-      tip: "Payments applied against outstanding member balances and non-revenue adjustment entries. These reduce what's owed but are not income — excluded from all revenue figures.",
+      tip: "Payments applied against outstanding member balances and non-revenue adjustment entries. These reduce what's owed but are not income - excluded from all revenue figures.",
     },
     {
       label: "Reversed / Written Off",
       value: money(Math.abs(totals.reversed) + Math.abs(totals.other)),
       color: C.red,
-      tip: "Charge reversals and write-offs — transactions that were posted and then corrected or cancelled. Excluded from all revenue totals.",
+      tip: "Charge reversals and write-offs - transactions that were posted and then corrected or cancelled. Excluded from all revenue totals.",
     },
     {
       label: "Forgone Rate",
@@ -214,7 +214,7 @@ function KpiStrip({ totals, section }) {
   ];
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 16 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginBottom: 16 }}>
       {cards.map((k) => (
         <div key={k.label} style={{ border: `1px solid ${C.border}`, borderTop: `3px solid ${k.color}`, borderRadius: 14, padding: "12px 14px", background: C.panel }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
@@ -230,7 +230,7 @@ function KpiStrip({ totals, section }) {
 
 function CoverageNote({ missingRateCount, calculationCoverage }) {
   if (!missingRateCount) return null;
-  const coveragePct = calculationCoverage == null ? "—" : `${(calculationCoverage * 100).toFixed(1)}%`;
+  const coveragePct = calculationCoverage == null ? "-" : `${(calculationCoverage * 100).toFixed(1)}%`;
   return (
     <div
       style={{
@@ -346,13 +346,13 @@ export default function CategoryCompBreakdown({ data, onRowClick }) {
       else if (r.bucket === "forgone_revenue") {
         e.forgoneRevenue += amt;
         // missingRateCount / calculationCoverage only live on the
-        // single synthetic Villa forgone-revenue row — pick them up
+        // single synthetic Villa forgone-revenue row - pick them up
         // directly rather than trying to aggregate a percentage.
         if (r.missingRateCount != null) missing += Number(r.missingRateCount);
         if (r.calculationCoverage != null) coverage = r.calculationCoverage;
       }
-      else if (r.bucket === "reversed") e.reversed +=amt;
-      else if (r.bucket === "other") e.other += amt; 
+      else if (r.bucket === "reversed") e.reversed += Math.abs(amt);
+      else if (r.bucket === "other") e.other += Math.abs(amt); 
       e.transactions += Number(r.transactions || 0);
       e.uniqueAccounts += Number(r.uniqueAccounts || 0);
     });
@@ -375,12 +375,33 @@ export default function CategoryCompBreakdown({ data, onRowClick }) {
       <div style={{ display: "flex", justifyContent: "space-between", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
         <div>
           <div className="dashboard-eyebrow">Spend Breakdown</div>
-          <h2 className="dashboard-card-title" style={{ marginBottom: 4 }}>Collected vs. Forgone Revenue</h2>
-          <p style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif", margin: 0, maxWidth: 560 }}>
-            Choose a revenue section, then optionally filter by whether the guest's villa stay was paid or
-            complimentary. This reveals whether comped-room guests offset the forgone room revenue through
-            amenity and service spend — or whether the entire visit was effectively gifted.
-          </p>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <h2 className="dashboard-card-title" style={{ marginBottom: 0 }}>Collected vs. Forgone Revenue</h2>
+            <InfoNote title="Collected vs. Forgone Revenue">
+              <p style={{ margin: "0 0 10px" }}>
+                Choose a revenue section (Villa, Amenities, or Services), then optionally filter by
+                whether the guest's villa stay was paid or complimentary. This reveals whether
+                comped-room guests offset the forgone room revenue through amenity spend - or whether
+                the entire visit was effectively gifted.
+              </p>
+              <p style={{ margin: "0 0 6px", color: C.text, fontWeight: 700 }}>How to read this</p>
+              <ul style={{ margin: 0, paddingLeft: 16 }}>
+                <li style={{ marginBottom: 4 }}>
+                  <strong style={{ color: C.text }}>Villa Forgone Revenue</strong> is the rack-rate
+                  value of complimentary stays - what the club would have earned at standard rates.
+                </li>
+                <li style={{ marginBottom: 4 }}>
+                  <strong style={{ color: C.text }}>Amenity &amp; Service Forgone Revenue</strong> reflects
+                  charges individually entered as comps on the folio line; spend never posted is not captured.
+                </li>
+                <li>
+                  Use the <strong style={{ color: C.text }}>Villa Stay Type</strong> filter to isolate
+                  comped-room guests and assess whether their amenity spend offsets the lost room revenue.
+                  Click any category card to see the underlying folio lines.
+                </li>
+              </ul>
+            </InfoNote>
+          </div>
         </div>
         <Pill options={VILLA_STAY_OPTIONS} value={villaStayFilter} onChange={setVillaStayFilter} />
       </div>
@@ -395,16 +416,6 @@ export default function CategoryCompBreakdown({ data, onRowClick }) {
 
       <KpiStrip totals={totals} section={section} />
       <CategoryCards rows={categoryRows} onRowClick={onRowClick} />
-
-      <p style={{ fontSize: 11, color: C.muted, fontFamily: "sans-serif", marginTop: 10, lineHeight: 1.5 }}>
-        <strong style={{ color: C.soft }}>How to read this:</strong> Villa Forgone Revenue is the rack-rate
-        value of complimentary stays drawn from rate_details — what the club would have earned if those nights
-        were sold at standard rates. Amenity and Service Forgone Revenue reflects charges individually entered
-        as comps on the folio line; spend the club never posted is not captured. Use the{" "}
-        <strong>Villa Stay Type</strong> filter to isolate guests with comped rooms and assess whether their
-        amenity and service spend offsets the lost room revenue. Click any category card to see the
-        underlying folio lines.
-      </p>
     </div>
   );
 }

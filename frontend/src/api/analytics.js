@@ -173,13 +173,40 @@ export const analyticsApi = {
   villaSourceBedroomBreakdown: (params = {}) =>
     fetchData(withQuery("/analytics/villa-source-bedroom-breakdown", params)),
 
-  marketingCampaigns: () => fetchData("/analytics/ml/marketing-campaigns"),
-
-  marketingCampaignMembers: (campaignKey, params = {}) =>
+  marketingCampaigns: (includeInactive = false) =>
     fetchData(
-      withQuery(
-        `/analytics/ml/marketing-campaigns/${encodeURIComponent(campaignKey)}/members`,
-        params,
-      ),
+      withQuery("/analytics/ml/marketing-campaigns", {
+        include_inactive: includeInactive,
+      }),
     ),
+
+  marketingCampaignMembers: (campaignKey, limit = 5000) =>
+    fetchData(
+      withQuery(`/analytics/ml/marketing-campaigns/${campaignKey}/members`, {
+        limit,
+      }),
+    ),
+
+  createMarketingCampaign: (payload) =>
+    fetchData(
+      "/analytics/ml/marketing-campaigns",
+      jsonRequest("POST", payload),
+    ),
+
+  updateMarketingCampaign: (campaignKey, payload) =>
+    fetchData(
+      `/analytics/ml/marketing-campaigns/${campaignKey}`,
+      jsonRequest("PUT", payload),
+    ),
+
+  setMarketingCampaignStatus: (campaignKey, isActive) =>
+    fetchData(
+      `/analytics/ml/marketing-campaigns/${campaignKey}/status`,
+      jsonRequest("PATCH", { is_active: isActive }),
+    ),
+
+  deleteMarketingCampaign: (campaignKey) =>
+    fetchData(`/analytics/ml/marketing-campaigns/${campaignKey}`, {
+      method: "DELETE",
+    }),
 };

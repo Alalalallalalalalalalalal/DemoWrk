@@ -665,11 +665,16 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
     2. For each row, click the confirmation code link to open the popup.
     3. Extract contact info from the popup.
     4. Close the popup and move to the next row.
-    Returns (room_rows, merged_contact_data)
+    Returns (success, room_rows, merged_contact_data)
+    success=True:
+        Rooms page loaded correctly, even if it contains no records.
+    success=False:
+        Frame/table/page failed to load or an unexpected error occurred.
     """
     frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not frame:
-        return [], {}
+        print(f"    {prefix}Rooms page failed: landing frame not found")
+        return False, [], {}
 
     room_rows      = []
     merged_contact = {}
@@ -678,7 +683,7 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
         tables = frame.query_selector_all("table")
         if not tables:
             print(f"    {prefix}No tables found in rooms tab")
-            return [], {}
+            return True, [], {}
 
         for table in tables:
             for row in extract_table(table):
@@ -689,7 +694,7 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
 
         if not room_rows:
             print(f"    {prefix}Rooms table is empty")
-            return [], {}
+            return True, [], {}
 
         print(f"    {prefix}Found {len(room_rows)} room row(s) — opening popups...")
 
@@ -709,8 +714,8 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
 
             frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
             if not frame:
-                print(f"    {prefix}Lost landing frame at row {i}")
-                break
+                print(f"    {prefix}Rooms page failed: Lost landing frame at row {i}")
+                return False, room_rows, merged_contact
 
             # Click the confirmation code link
             clicked = False
@@ -749,13 +754,14 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
 
             frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
             if not frame:
-                print(f"    {prefix}Landing frame lost after closing popup — stopping")
-                break
+                print(f"    {prefix}Rooms page failed: " "Landing frame lost after closing popup — stopping")
+                return False, room_rows, merged_contact
 
     except Exception as e:
         print(f"    {prefix}Rooms+popup scrape error: {e}")
+        return False, room_rows, merged_contact
 
-    return room_rows, merged_contact
+    return True, room_rows, merged_contact
 
 # ─────────────────────────────────────────────
 # PER-MEMBER SCRAPE
@@ -767,7 +773,7 @@ def scrape_member(page, member_number, member_id, prefix=""):
     dismiss_popup(page)
     if not navigate_to_member(page, member_id, prefix):
         print(f"  {prefix}Navigation failed for {member_number}")
-        return saved
+        return False, saved
 
     member_info = scrape_member_info_fields(page, prefix)
     append_member_info_to_profile(folder_name, member_info, prefix)
@@ -776,7 +782,7 @@ def scrape_member(page, member_number, member_id, prefix=""):
     if not shell:
         print(f"  {prefix}Shell frame not found for {member_number}")
         take_screenshot(page, f"no_shell_{folder_name}")
-        return saved
+        return False, saved
 
     tab_done = False
     for attempt in range(1, TAB_MAX_RETRIES + 1):
@@ -800,25 +806,37 @@ def scrape_member(page, member_number, member_id, prefix=""):
                 page.wait_for_timeout(1000 * attempt)
             continue
 
-        room_rows, merged_contact = scrape_rooms_with_popups(page, folder_name, prefix)
+        rooms_success, room_rows, merged_contact = scrape_rooms_with_popups(page, folder_name, prefix)
+        if not rooms_success:
+            print(f"    {prefix}Rooms scraping failed")
+            
+            if attempt < TAB_MAX_RETRIES:
+                page.wait_for_timeout(1000 * attempt)
+                continue
+
+            return False, saved
 
         if room_rows:
             fp = save_tab_csv(folder_name, "rooms", room_rows)
             if fp:
                 saved["rooms"] = fp
                 print(f"    {prefix}Rooms: {len(room_rows)} row(s) → {os.path.basename(fp)}")
+            else:
+                print(f"    {prefix}Rooms CSV could not be saved")
+                return False, saved
             if merged_contact:
                 enrich_profile_csv(folder_name, merged_contact, prefix)
         else:
-            print(f"    {prefix}Rooms: no data — skipping member")
+            print(f"    {prefix}Rooms: no data — processed successfully")
 
         tab_done = True
         break
 
     if not tab_done:
         print(f"    {prefix}Rooms: exhausted retries")
+        return False, saved
 
-    return saved
+    return True, saved
 
 # ─────────────────────────────────────────────
 # WORKER
@@ -870,20 +888,23 @@ def scrape_chunk(args):
                     results["skipped"].append(folder_name)
                     continue
 
-                saved = scrape_member(page, member_number, member_id, prefix)
-                if not saved:
+                success, saved = scrape_member(page, member_number, member_id, prefix)
+                if not success:
                     if ensure_session(page, worker_id):
                         print(f"  {prefix}Retrying {member_number} after re-login...")
-                        saved = scrape_member(page, member_number, member_id, prefix)
+                        success, saved = scrape_member(page, member_number, member_id, prefix)
 
-                mark_done(member_id)
-                done_set.add(member_id)
+                if success:
+                    mark_done(member_id)
+                    done_set.add(member_id)
 
-                if saved:
-                    print(f"  {prefix}✓ {member_number}: {len(saved)} file(s) saved")
+                    if saved:
+                        print(f"  {prefix}✓ {member_number}: {len(saved)} file(s) saved")
+                    else:
+                        print(f"  {prefix}✓ {member_number}: processed successfully — no room records")
                     results["success"].append(folder_name)
                 else:
-                    print(f"  {prefix}✗ {member_number}: nothing saved")
+                    print(f"  {prefix}✗ {member_number}: page or Rooms tab failed to load")
                     results["failed"].append(folder_name)
 
         except Exception as e:

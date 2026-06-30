@@ -5,8 +5,8 @@
 // ───────────────────
 // The drawer now tracks one accumulating `filters` object for the
 // whole session instead of a single drillType/drillValue pair. Every
-// time the user drills deeper — clicking a mid-item, picking a row
-// from a "browse by…" breakdown, or following a breadcrumb — the new
+// time the user drills deeper - clicking a mid-item, picking a row
+// from a "browse by…" breakdown, or following a breadcrumb - the new
 // dimension is MERGED into whatever was already active, never
 // replacing it. So "Free -> Villas" (click the Free payment-type
 // entry point, then choose to browse by villa) shows each villa's
@@ -18,7 +18,7 @@
 //
 // A "Browse by…" pivot bar sits above the flat record table, offering
 // any of villa / source / category / customer that isn't already
-// pinned — this is what lets ANY entry point (a summary card, a
+// pinned - this is what lets ANY entry point (a summary card, a
 // source row, a payment-type row, etc.) pivot into a per-villa (or
 // per-source, per-category, per-customer) view without losing the
 // filters that got the user there. This generalizes the same
@@ -33,7 +33,7 @@
 // • Records ordered highest amount first (done in backend)
 // • Accepts a `period` prop ({ year, month } from FinanceTab's period
 //   filter) and forwards it to the financeApi calls this drawer makes.
-//   Intentionally NOT a dependency of the open/reset effect — changing
+//   Intentionally NOT a dependency of the open/reset effect - changing
 //   the period elsewhere while the drawer is open won't reset an
 //   in-progress drill-down trail. Close + reopen to pick up a new period.
 
@@ -68,9 +68,9 @@ const C = {
 };
 
 const money = (v) =>
-  v == null ? "—" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  v == null ? "-" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
-const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
+const fmt = (v) => (v == null ? "-" : Number(v).toLocaleString());
 
 const MONTHS = ["All","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -93,7 +93,7 @@ const formatFilterValue = (key, value) => {
 
 // Dimensions offered in the "Browse by…" pivot bar. Payment/amenity/
 // section are entry-point filters (set by the card or row that opened
-// the drawer) rather than pivot targets, so they're left out here —
+// the drawer) rather than pivot targets, so they're left out here -
 // villa/source/category/customer are the ones worth re-slicing by.
 const PIVOT_DIMENSIONS = [
   { key: "villa",    label: "Villa" },
@@ -102,8 +102,8 @@ const PIVOT_DIMENSIONS = [
   { key: "customer", label: "Customer" },
 ];
 
-// Maps the legacy {drillType, drillValue} shape — still emitted by
-// SourceRevenueTable, AmenityRevenueTable, FinanceTables, etc. — onto
+// Maps the legacy {drillType, drillValue} shape - still emitted by
+// SourceRevenueTable, AmenityRevenueTable, FinanceTables, etc. - onto
 // the structured filter dict the backend understands. Centralizing
 // this here means none of those child components need to change.
 function legacyDrillToPatch(drillType, drillValue) {
@@ -339,7 +339,7 @@ function Breadcrumbs({ trail, onNavigate }) {
 }
 
 
-// ── Active filter chips — the net set of filters applied right now,
+// ── Active filter chips - the net set of filters applied right now,
 // independent of how many breadcrumb hops it took to build them ──
 function FilterChips({ filters, onRemove }) {
   const entries = Object.entries(filters || {}).filter(([, v]) => v != null && v !== "");
@@ -382,7 +382,7 @@ function FilterChips({ filters, onRemove }) {
 }
 
 
-// ── "Browse by…" pivot bar — re-slice the current filtered set by a
+// ── "Browse by…" pivot bar - re-slice the current filtered set by a
 // dimension that isn't already pinned ───────────────────────────
 function PivotBar({ filters, onPivot }) {
   const available = PIVOT_DIMENSIONS.filter((d) => filters?.[d.key] == null);
@@ -476,7 +476,7 @@ function FolioTable({ rows }) {
         </span>
         <InfoTip
           title="Folio Transaction Records"
-          description="Raw charge lines posted to member and guest folios, filtered by every active dimension shown above. Each row is one line item — a single villa night, a spa treatment, a restaurant charge, or a service fee. Sorted largest amount first."
+          description="Raw charge lines posted to member and guest folios, filtered by every active dimension shown above. Each row is one line item - a single villa night, a spa treatment, a restaurant charge, or a service fee. Sorted largest amount first."
           tips={[
             "Click a row to reveal the member's email, phone, and home location on file",
             "Search by charge description, folio number, member number, confirmation code, or villa name to find specific transactions",
@@ -565,22 +565,22 @@ function FolioTable({ rows }) {
                       }
                     >
                       <td style={{ ...tdStyle, whiteSpace: "nowrap", color: C.muted }}>
-                        {r.transactionDate ?? "—"}
+                        {r.transactionDate ?? "-"}
                       </td>
                       <td style={{ ...tdStyle, maxWidth: 220, wordBreak: "break-word" }}>
-                        {r.description ?? "—"}
+                        {r.description ?? "-"}
                       </td>
                       <td style={{ ...tdStyle, color: C.muted, fontSize: 11 }}>
-                        <div>{r.folioNum ?? "—"}</div>
+                        <div>{r.folioNum ?? "-"}</div>
                         <div style={{ color: C.accent }}>{r.confCode ?? ""}</div>
                       </td>
                       <td style={tdStyle}>
-                        <div style={{ fontWeight: 600 }}>{r.folioName ?? r.guestName ?? "—"}</div>
+                        <div style={{ fontWeight: 600 }}>{r.folioName ?? r.guestName ?? "-"}</div>
                         <div style={{ fontSize: 11, color: C.muted }}>
                           {r.memberNumber ? `#${r.memberNumber}` : "Guest"}
                         </div>
                       </td>
-                      <td style={{ ...tdStyle, color: C.soft }}>{r.villaName ?? "—"}</td>
+                      <td style={{ ...tdStyle, color: C.soft }}>{r.villaName ?? "-"}</td>
                       <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: C.accent }}>
                         {money(r.amount)}
                       </td>
@@ -642,7 +642,7 @@ function FolioTable({ rows }) {
 }
 
 
-// ── Mid-level breakdown list — used both for FinanceTab-supplied
+// ── Mid-level breakdown list - used both for FinanceTab-supplied
 // static mid items (e.g. Total Revenue's Villas/Amenities/Services
 // split) and for dynamically-fetched "browse by…" breakdowns ──────
 function BreakdownList({ items, onDrill }) {
@@ -697,13 +697,13 @@ export default function RevenueBreakdownDrawer({
   onClose,
   drillType,
   drillValue,
-  filters: initialFilters = null,  // optional — lets a caller seed >1 dimension atomically
+  filters: initialFilters = null,  // optional - lets a caller seed >1 dimension atomically
   midItems,
   period = DEFAULT_PERIOD,
 }) {
   // `trail` holds one entry per navigation step. Each entry's `filters`
   // is the FULL cumulative filter set active at that point (not just
-  // what was added at that step) — that's what makes breadcrumb
+  // what was added at that step) - that's what makes breadcrumb
   // navigation a simple "jump to this snapshot" instead of a replay.
   //
   // step.mode: "staticMid" | "breakdown" | "records"
@@ -791,7 +791,7 @@ export default function RevenueBreakdownDrawer({
   }
 
   // ── Reset when drawer opens with new context ─────────────────────
-  // Intentionally NOT keyed on `period` — see file header comment.
+  // Intentionally NOT keyed on `period` - see file header comment.
   const initialFiltersKey = initialFilters ? JSON.stringify(initialFilters) : "";
   useEffect(() => {
     if (!open) return;
@@ -833,7 +833,7 @@ export default function RevenueBreakdownDrawer({
   }
 
   // ── Pivot the current (filtered) record set into a breakdown by a
-  // new dimension — this is the "Free -> Villas" mechanism: filters
+  // new dimension - this is the "Free -> Villas" mechanism: filters
   // stay exactly as they are, we just re-group by villa ──────────
   function pivotBreakdown(groupBy) {
     const dim = PIVOT_DIMENSIONS.find((d) => d.key === groupBy);
@@ -935,7 +935,7 @@ export default function RevenueBreakdownDrawer({
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              {/* Record count — no total sum to avoid confusing negatives */}
+              {/* Record count - no total sum to avoid confusing negatives */}
               {showFolios && (
                 <span style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}>
                   {exportRowsData.length} records
@@ -960,7 +960,7 @@ export default function RevenueBreakdownDrawer({
             </div>
           </div>
 
-          {/* Active filters — net set applied right now */}
+          {/* Active filters - net set applied right now */}
           <div style={{ marginTop: 12 }}>
             <FilterChips filters={currentFilters} onRemove={removeFilter} />
           </div>

@@ -7,19 +7,25 @@
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
-async function get(endpoint, params = {}) {
+async function get(endpoint, params = {}, options = {}) {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => {
         if (v !== undefined && v !== null && v !== "") query.set(k, v);
     });
     const qs = query.toString();
     const url = `${API}/overview${endpoint}${qs ? "?" + qs : ""}`;
-    const res = await fetch(url);
+    const res = await fetch(url, options.signal ? { signal: options.signal } : undefined);
     if (!res.ok) throw new Error(`${url} → ${res.status}`);
     return res.json();
 }
 
 export const overviewApi = {
+    // [overview] Real distinct years that have actual booking check-ins
+    // on file — powers the year dropdown in the period filter. Added
+    // 2026-06-26 alongside the date-range filtering feature.
+    // Backend route: GET /overview/available-years
+    availableYears: () => get("/available-years"),
+
     // [overview] Villa AMENITY revenue (not villa rental — see
     // overview_analytics.py's docstring on this endpoint), ranked per
     // villa. Filterable by booking-level Paid/Free villa-stay type.
@@ -124,12 +130,16 @@ export const overviewApi = {
 
     // [overview] One bundled call that returns every dataset the
     // Overview tab needs in a single round trip — this is what
-    // dashboard.jsx actually uses today, rather than calling the
-    // individual endpoints above one at a time. Includes
-    // overviewReversalsSummary, overviewCashAdvanceSummary, and
-    // overviewVillaRackRateFree as of 2026-06-25.
+    // dashboard.jsx uses, rather than calling the individual endpoints
+    // above one at a time. Pass year/month or start_date/end_date (e.g.
+    // via FinanceShared's periodToParams()) to scope every date-aware
+    // dataset to a period; omit for all-time, the original behavior.
+    // Second arg accepts { signal } for request cancellation — see
+    // dashboard.jsx's debounced overview-fetch effect for why this
+    // matters (rapid filter changes piling up concurrent in-flight
+    // requests was exhausting the DB connection pool).
     // Backend route: GET /overview/summary
-    summary: () => get("/summary"),
+    summary: (dateParams = {}, options = {}) => get("/summary", dateParams, options),
 
     // NOTE: there is no "/stay-categories" (4-bucket stay classification)
     // endpoint on the backend yet — removed rather than left pointing at

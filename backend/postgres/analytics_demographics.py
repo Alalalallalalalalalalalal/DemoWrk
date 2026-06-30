@@ -515,6 +515,211 @@ def demographics_summary(
             """,
             params,
         ),
+
+        # ── Demographic data completeness ──────────────────
+        "dataCompleteness": one(
+            db,
+            f"""
+            SELECT
+                COUNT(*)::int AS total_accounts,
+
+                COUNT(*) FILTER (
+                    WHERE m.age IS NULL
+                )::int AS missing_age,
+
+                COUNT(*) FILTER (
+                    WHERE m.gender IS NULL
+                       OR TRIM(m.gender) = ''
+                )::int AS missing_gender,
+
+                COUNT(*) FILTER (
+                    WHERE m.marital_status IS NULL
+                       OR TRIM(m.marital_status) = ''
+                )::int AS missing_marital_status,
+
+                COUNT(*) FILTER (
+                    WHERE m.since_date IS NULL
+                )::int AS missing_since_date,
+
+                COUNT(*) FILTER (
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM member_addresses a
+                        WHERE a.member_number = m.member_number
+                          AND a.country IS NOT NULL
+                          AND TRIM(a.country) <> ''
+                    )
+                )::int AS missing_country
+
+            FROM members m
+            WHERE 1 = 1
+              {member_filter}
+            """,
+            params,
+        ),
+
+        # ── Household composition summary ───────────────────
+        "householdComposition": one(
+            db,
+            f"""
+            WITH household_counts AS (
+                SELECT
+                    m.member_number,
+                    COUNT(
+                        d.dependent_number
+                    )::int AS dependent_count
+                FROM members m
+                LEFT JOIN dependents d
+                  ON d.member_number = m.member_number
+                WHERE LOWER(
+                    TRIM(m.member_or_guest)
+                ) = 'member'
+                  {member_filter}
+                GROUP BY m.member_number
+            )
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE dependent_count = 0
+                )::int AS accounts_no_dependents,
+
+                COUNT(*) FILTER (
+                    WHERE dependent_count > 0
+                )::int AS accounts_with_dependents,
+
+                ROUND(
+                    AVG(dependent_count), 2
+                )::float AS avg_dependents_per_household,
+
+                COALESCE(
+                    MAX(dependent_count), 0
+                )::int AS largest_household_size
+
+            FROM household_counts
+            """,
+            params,
+        ),
+
+        # ── Geographic concentration summary ─────────────────
+        "geographicConcentration": one(
+            db,
+            f"""
+            WITH base AS (
+                SELECT m.member_number
+                FROM members m
+                WHERE 1 = 1
+                  {member_filter}
+            ),
+            state_counts AS (
+                SELECT
+                    UPPER(TRIM(a.state)) AS state,
+                    COUNT(
+                        DISTINCT b.member_number
+                    )::int AS total
+                FROM base b
+                JOIN member_addresses a
+                  ON a.member_number = b.member_number
+                WHERE UPPER(TRIM(a.state)) IN (
+                    'AL', 'AK', 'AZ', 'AR', 'CA',
+                    'CO', 'CT', 'DE', 'FL', 'GA',
+                    'HI', 'ID', 'IL', 'IN', 'IA',
+                    'KS', 'KY', 'LA', 'ME', 'MD',
+                    'MA', 'MI', 'MN', 'MS', 'MO',
+                    'MT', 'NE', 'NV', 'NH', 'NJ',
+                    'NM', 'NY', 'NC', 'ND', 'OH',
+                    'OK', 'OR', 'PA', 'RI', 'SC',
+                    'SD', 'TN', 'TX', 'UT', 'VT',
+                    'VA', 'WA', 'WV', 'WI', 'WY',
+                    'DC'
+                )
+                GROUP BY UPPER(TRIM(a.state))
+            ),
+            country_counts AS (
+                SELECT
+                    TRIM(a.country) AS country,
+                    COUNT(
+                        DISTINCT b.member_number
+                    )::int AS total
+                FROM base b
+                JOIN member_addresses a
+                  ON a.member_number = b.member_number
+                WHERE a.country IS NOT NULL
+                  AND TRIM(a.country) <> ''
+                GROUP BY TRIM(a.country)
+            ),
+            top5_states AS (
+                SELECT COALESCE(SUM(total), 0)::int AS total
+                FROM (
+                    SELECT total FROM state_counts
+                    ORDER BY total DESC
+                    LIMIT 5
+                ) t
+            ),
+            top5_countries AS (
+                SELECT COALESCE(SUM(total), 0)::int AS total
+                FROM (
+                    SELECT total FROM country_counts
+                    ORDER BY total DESC
+                    LIMIT 5
+                ) t
+            ),
+            domestic AS (
+                SELECT COALESCE(SUM(total), 0)::int AS total
+                FROM country_counts
+                WHERE country = 'United States'
+            ),
+            country_total AS (
+                SELECT COALESCE(SUM(total), 0)::int AS total
+                FROM country_counts
+            ),
+            account_total AS (
+                SELECT COUNT(*)::int AS total FROM base
+            )
+            SELECT
+                account_total.total AS total_accounts,
+                top5_states.total AS top5_states_total,
+                top5_countries.total AS top5_countries_total,
+                domestic.total AS domestic_accounts,
+
+                (
+                    country_total.total - domestic.total
+                ) AS international_accounts,
+
+                country_total.total AS accounts_with_country,
+
+                ROUND(
+                    100.0 * top5_states.total
+                    / GREATEST(account_total.total, 1),
+                    1
+                )::float AS top5_states_pct,
+
+                ROUND(
+                    100.0 * top5_countries.total
+                    / GREATEST(account_total.total, 1),
+                    1
+                )::float AS top5_countries_pct,
+
+                ROUND(
+                    100.0 * domestic.total
+                    / GREATEST(country_total.total, 1),
+                    1
+                )::float AS domestic_pct,
+
+                ROUND(
+                    100.0 * (
+                        country_total.total - domestic.total
+                    ) / GREATEST(country_total.total, 1),
+                    1
+                )::float AS international_pct
+
+            FROM
+                account_total,
+                top5_states,
+                top5_countries,
+                domestic,
+                country_total
+            """,
+            params,
+        ),
     }
 
 

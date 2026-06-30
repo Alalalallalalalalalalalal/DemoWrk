@@ -1,8 +1,9 @@
 // frontend/src/pages/finance/FinanceTables.jsx
-// MemberGuestRevenueTable — member_type NULL = Member per business rule
-// VillaRevenueTable — search bar + 10-per-page pagination
+// MemberGuestRevenueTable - member_type NULL = Member per business rule
+// VillaRevenueTable - search bar + 10-per-page pagination
 
 import { useState } from "react";
+import { Info, X } from "lucide-react";
 
 const C = {
   bg:      "var(--dashboard-card)",
@@ -18,8 +19,8 @@ const C = {
 };
 
 const money = (v) =>
-  v == null ? "—" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
+  v == null ? "-" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const fmt = (v) => (v == null ? "-" : Number(v).toLocaleString());
 
 const MEMBER_COLORS = {
   Member: "var(--dashboard-deep-blue)",
@@ -52,6 +53,72 @@ const baseTd = {
   fontFamily: "sans-serif",
 };
 
+// ── Tooltip (i) button - matches the InfoNote pattern in CategoryCompBreakdown ──
+function InfoNote({ title, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="info"
+        style={{
+          background: "none",
+          border: "none",
+          padding: 4,
+          cursor: "pointer",
+          color: open ? C.accent2 : C.muted,
+          display: "flex",
+        }}
+      >
+        <Info size={13} />
+      </button>
+
+      {open && (
+        <>
+          <div
+            onClick={() => setOpen(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 49 }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              top: "calc(100% + 6px)",
+              left: 2,
+              zIndex: 50,
+              width: 260,
+              background: C.bg,
+              border: `1px solid ${C.border}`,
+              borderRadius: 12,
+              boxShadow: "0 8px 28px rgba(0,0,0,0.14)",
+              padding: "12px 14px",
+              fontSize: 12,
+              color: C.soft,
+              lineHeight: 1.55,
+              fontFamily: "sans-serif",
+            }}
+          >
+            <button
+              onClick={() => setOpen(false)}
+              style={{
+                position: "absolute", top: 8, right: 8,
+                background: "none", border: "none", cursor: "pointer",
+                color: C.muted, padding: 2, display: "flex",
+              }}
+            >
+              <X size={12} />
+            </button>
+            <p style={{ margin: "0 0 6px", color: C.text, fontWeight: 700, paddingRight: 14 }}>
+              {title}
+            </p>
+            {children}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 
 // ════════════════════════════════════════════════════════
 // MemberGuestRevenueTable
@@ -63,13 +130,26 @@ export function MemberGuestRevenueTable({ data, onRowClick }) {
   return (
     <div className="dashboard-card">
       <div className="dashboard-eyebrow">Customer Type</div>
-      <h2 className="dashboard-card-title">Member vs Guest revenue</h2>
-      <p style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif", marginTop: -8, marginBottom: 14 }}>
-        Folios with no <code>member_type</code> value are classified as <strong>Member</strong> — this covers
-        direct member charges where the type was not explicitly set at posting time. <strong>Guest</strong> records
-        carry an explicit designation and typically represent accompanied non-member visitors or single-stay bookings.
-        Click either row to inspect the underlying folio charges.
-      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
+        <h2 className="dashboard-card-title" style={{ margin: 0 }}>
+          Member vs Guest revenue
+        </h2>
+        <InfoNote title="Member vs Guest Revenue">
+          <ul style={{ margin: 0, paddingLeft: 16 }}>
+            <li style={{ marginBottom: 6 }}>
+              <strong style={{ color: C.text }}>Member</strong> - Covers direct member charges where the type was not
+              explicitly set at posting time.
+            </li>
+            <li style={{ marginBottom: 6 }}>
+              <strong style={{ color: C.text }}>Guest</strong> - Records with an explicit
+              designation, typically accompanied non-member visitors or single-stay bookings.
+            </li>
+            <li>
+              <strong style={{ color: C.text }}>Click either row</strong> to inspect the underlying folios.
+            </li>
+          </ul>
+        </InfoNote>
+      </div>
 
       <div style={{ overflowX: "auto", borderRadius: 10, border: `1px solid ${C.border}` }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -180,7 +260,28 @@ export function VillaRevenueTable({ data, onRowClick }) {
   return (
     <div className="dashboard-card">
       <div className="dashboard-eyebrow">Accommodation</div>
-      <h2 className="dashboard-card-title">Villa revenue breakdown</h2>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
+        <h2 className="dashboard-card-title" style={{ margin: 0 }}>
+          Villa Revenue Breakdown
+        </h2>
+        <InfoNote title="Villa Revenue Breakdown">
+          <p style={{ margin: "0 0 8px" }}>
+            Revenue broken down by individual villa, ordered from highest to lowest revenue for the
+            active period.
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 16 }}>
+            <li style={{ marginBottom: 4 }}>
+              <strong style={{ color: C.text }}>Click a row</strong> to see all bookings for that
+              specific villa.
+            </li>
+            <li>
+              Use the <strong style={{ color: C.text }}>search bar</strong> to filter by villa name,
+              and the <strong style={{ color: C.text }}>pagination</strong> controls to page through
+              all results.
+            </li>
+          </ul>
+        </InfoNote>
+      </div>
 
       {/* Search + count */}
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
@@ -259,7 +360,7 @@ export function VillaRevenueTable({ data, onRowClick }) {
                       {fmt(row.roomNights)}
                     </td>
                     <td style={{ ...baseTd, textAlign: "right", color: C.muted }}>
-                      {row.avgStay ? `${Number(row.avgStay).toFixed(1)}n` : "—"}
+                      {row.avgStay ? `${Number(row.avgStay).toFixed(1)}n` : "-"}
                     </td>
                     <td style={{ ...baseTd, textAlign: "right", color: C.soft }}>
                       {fmt(row.memberBookings)}

@@ -3,6 +3,7 @@
 // ▼/▲ button → expand/collapse season sub-rows (independent of drill)
 
 import { useState } from "react";
+import { Info, X } from "lucide-react";
 
 const C = {
   bg:      "var(--dashboard-card)",
@@ -31,8 +32,8 @@ const AMENITY_COLORS = {
 const amenityColor = (name) => AMENITY_COLORS[name] ?? C.muted;
 
 const money = (v) =>
-  v == null ? "—" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
+  v == null ? "-" : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const fmt = (v) => (v == null ? "-" : Number(v).toLocaleString());
 
 const th = {
   padding: "10px 14px", background: C.panelAlt, color: C.soft,
@@ -47,6 +48,72 @@ const td = {
   color: C.text, fontSize: 13, verticalAlign: "top", fontFamily: "sans-serif",
 };
 
+// ── Tooltip (i) button - matches the InfoNote pattern in CategoryCompBreakdown ──
+function InfoNote({ title, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="info"
+        style={{
+          background: "none",
+          border: "none",
+          padding: 4,
+          cursor: "pointer",
+          color: open ? C.accent2 : C.muted,
+          display: "flex",
+        }}
+      >
+        <Info size={13} />
+      </button>
+
+      {open && (
+        <>
+          <div
+            onClick={() => setOpen(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 49 }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              top: "calc(100% + 6px)",
+              left: 2,
+              zIndex: 50,
+              width: 260,
+              background: C.bg,
+              border: `1px solid ${C.border}`,
+              borderRadius: 12,
+              boxShadow: "0 8px 28px rgba(0,0,0,0.14)",
+              padding: "12px 14px",
+              fontSize: 12,
+              color: C.soft,
+              lineHeight: 1.55,
+              fontFamily: "sans-serif",
+            }}
+          >
+            <button
+              onClick={() => setOpen(false)}
+              style={{
+                position: "absolute", top: 8, right: 8,
+                background: "none", border: "none", cursor: "pointer",
+                color: C.muted, padding: 2, display: "flex",
+              }}
+            >
+              <X size={12} />
+            </button>
+            <p style={{ margin: "0 0 6px", color: C.text, fontWeight: 700, paddingRight: 14 }}>
+              {title}
+            </p>
+            {children}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function AmenityRevenueTable({ data, onRowClick }) {
   const [expanded, setExpanded] = useState(null);
 
@@ -55,13 +122,25 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
   return (
     <div className="dashboard-card">
       <div className="dashboard-eyebrow">Amenities</div>
-      <h2 className="dashboard-card-title">Amenity revenue &amp; season breakdown</h2>
-      <p style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif", marginBottom: 14, marginTop: -8 }}>
-        Each row is one amenity category — spa, golf, F&amp;B, tennis, boutique, and others. Revenue is the
-        total of all charges posted under that category in the selected period. Click a row to inspect the
-        individual folio lines behind the figure. Use <strong>▼</strong> to compare performance across high,
-        shoulder, and low season without leaving this view.
-      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 14 }}>
+        <h2 className="dashboard-card-title" style={{ margin: 0 }}>
+          Amenity Revenue &amp; Season Breakdown
+        </h2>
+        <InfoNote title="Amenity Revenue & Season Breakdown">
+          <p style={{ margin: "0 0 8px" }}>
+            Each row is one amenity category - spa, golf, F&amp;B, tennis, boutique, and others.
+            Revenue is the total of all charges posted under that category in the selected period.
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 16 }}>
+            <li style={{ marginBottom: 4 }}>
+              <strong style={{ color: C.text }}>Click a row</strong> to inspect the individual folio lines behind the figure.
+            </li>
+            <li>
+              <strong style={{ color: C.text }}>▼ / ▲</strong> to compare performance across high, shoulder, and low season without leaving this view.
+            </li>
+          </ul>
+        </InfoNote>
+      </div>
 
       <div style={{ overflowX: "auto", borderRadius: 10, border: `1px solid ${C.border}` }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -71,7 +150,7 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
               <th style={{ ...th, textAlign: "right" }}>Revenue</th>
               <th style={{ ...th, textAlign: "right" }}>Transactions</th>
               <th style={{ ...th, textAlign: "right" }}>Seasons</th>
-              {/* expand button column — no header text */}
+              {/* expand button column - no header text */}
               <th style={{ ...th, width: 48, textAlign: "center" }} />
             </tr>
           </thead>
@@ -146,10 +225,10 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
                         ...td, textAlign: "right", color: C.muted,
                         borderBottom: isOpen ? "none" : undefined,
                       }}>
-                        {row.seasonCount ?? (hasSeasons ? row.seasons.length : "—")}
+                        {row.seasonCount ?? (hasSeasons ? row.seasons.length : "-")}
                       </td>
 
-                      {/* Expand/collapse button — stopPropagation so it doesn't also drill */}
+                      {/* Expand/collapse button - stopPropagation so it doesn't also drill */}
                       <td style={{
                         ...td, textAlign: "center",
                         borderBottom: isOpen ? "none" : undefined,
@@ -181,7 +260,7 @@ export default function AmenityRevenueTable({ data, onRowClick }) {
                       </td>
                     </tr>
 
-                    {/* Season sub-rows — shown when expanded, independent of drill */}
+                    {/* Season sub-rows - shown when expanded, independent of drill */}
                     {isOpen && hasSeasons && (
                       <tr key={`${row.amenity}-seasons`}>
                         <td
