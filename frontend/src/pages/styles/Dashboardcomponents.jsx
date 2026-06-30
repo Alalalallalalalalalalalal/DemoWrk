@@ -296,6 +296,7 @@ export function PieLegendCard({
                 outerRadius={75}
                 innerRadius={40}
                 paddingAngle={2}
+                minAngle={3}
               >
                 {data.map((item, i) => (
                   <Cell
