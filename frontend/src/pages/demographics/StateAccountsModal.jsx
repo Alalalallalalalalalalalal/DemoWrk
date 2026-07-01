@@ -41,6 +41,12 @@ const DEFAULT_DATE_FILTER = {
   endDate: "",
 };
 
+const CATEGORY_OPTIONS = [
+  { value: "All", label: "All" },
+  { value: "Member", label: "Members" },
+  { value: "Guest", label: "Guests" },
+];
+
 const COLUMNS = [
   {
     key: "member_number",
@@ -115,6 +121,7 @@ export default function StateAccountsModal({
   showDateFilter = true,
 }) {
   const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("All");
   const [drawerWidth, setDrawerWidth] =
     useState(DEFAULT_WIDTH);
 
@@ -143,10 +150,6 @@ export default function StateAccountsModal({
     state?.code ||
     "accounts";
 
-  /*
-   * Close using Escape and stop the page behind
-   * the drawer from scrolling.
-   */
   useEffect(() => {
     if (!isOpen) {
       return undefined;
@@ -211,22 +214,16 @@ export default function StateAccountsModal({
     };
   }, [exportMenuOpen]);
 
-  /*
-   * Reset local table controls whenever another
-   * drawer/table is opened.
-   */
   useEffect(() => {
     if (!isOpen) {
       return;
     }
 
     setSearch("");
+    setCategoryFilter("All");
     setExportMenuOpen(false);
   }, [isOpen, state, title]);
 
-  /*
-   * Adjustable right-side drawer width.
-   */
   useEffect(() => {
     const handleMouseMove = (event) => {
       if (!resizingRef.current) {
@@ -282,31 +279,46 @@ export default function StateAccountsModal({
     };
   }, []);
 
-  /*
-   * The custom date filter reloads `accounts`
-   * from the backend.
-   *
-   * This local filter only performs text search
-   * on the rows returned by the backend.
-   */
   const filteredAccounts = useMemo(() => {
-    const term =
-      search.trim().toLowerCase();
+    const term = search.trim().toLowerCase();
 
-    if (!term) {
-      return accounts;
-    }
+    return accounts.filter((account) => {
+      if (categoryFilter !== "All") {
+        const category = String(
+          account.member_or_guest ?? "",
+        ).trim();
 
-    return accounts.filter((account) =>
-      COLUMNS.some((column) =>
-        String(
-          account[column.key] ?? "",
-        )
+        if (category !== categoryFilter) {
+          return false;
+        }
+      }
+
+      if (!term) {
+        return true;
+      }
+
+      return COLUMNS.some((column) =>
+        String(account[column.key] ?? "")
           .toLowerCase()
           .includes(term),
-      ),
-    );
-  }, [accounts, search]);
+      );
+    });
+  }, [accounts, search, categoryFilter]);
+
+  const categoryCounts = useMemo(() => {
+    const counts = { All: accounts.length, Member: 0, Guest: 0 };
+
+    accounts.forEach((account) => {
+      const category = String(
+        account.member_or_guest ?? "",
+      ).trim();
+
+      if (category === "Member") counts.Member += 1;
+      if (category === "Guest") counts.Guest += 1;
+    });
+
+    return counts;
+  }, [accounts]);
 
   const exportValue = (value) => {
     if (
@@ -380,9 +392,14 @@ export default function StateAccountsModal({
     const filterSuffix =
       getDateFilterSuffix();
 
+    const categorySuffix =
+      categoryFilter !== "All"
+        ? `-${categoryFilter.toLowerCase()}`
+        : "";
+
     return `${
       safeKey || "accounts"
-    }${filterSuffix}-${exportDate}.${extension}`;
+    }${categorySuffix}${filterSuffix}-${exportDate}.${extension}`;
   };
 
   const exportRows =
@@ -792,7 +809,7 @@ export default function StateAccountsModal({
           )}
         </div>
 
-        {/* Search and export toolbar */}
+        {/* Category filter + search + export toolbar */}
         <div
           style={{
             display: "flex",
@@ -809,51 +826,114 @@ export default function StateAccountsModal({
         >
           <div
             style={{
-              position: "relative",
-              flex: "1 1 250px",
-              minWidth: 210,
-              maxWidth: 380,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              flexWrap: "wrap",
             }}
           >
-            <Search
-              size={14}
+            <div
+              role="group"
+              aria-label="Filter by account category"
               style={{
-                position: "absolute",
-                left: 11,
-                top: "50%",
-                transform:
-                  "translateY(-50%)",
-                color: C.muted,
-              }}
-            />
-
-            <input
-              type="search"
-              value={search}
-              onChange={(event) =>
-                setSearch(
-                  event.target.value,
-                )
-              }
-              placeholder="Search name, account number, city..."
-              disabled={loading}
-              style={{
-                width: "100%",
-                height: 38,
-                padding:
-                  "0 12px 0 34px",
-                border:
-                  `1px solid ${C.border}`,
-                borderRadius: 10,
-                outline: "none",
+                display: "flex",
+                gap: 4,
+                padding: 4,
                 background: C.panelAlt,
-                color: C.text,
-                fontSize: 12,
-                boxSizing: "border-box",
-                opacity:
-                  loading ? 0.6 : 1,
+                border: `1px solid ${C.border}`,
+                borderRadius: 10,
               }}
-            />
+            >
+              {CATEGORY_OPTIONS.map((option) => {
+                const active =
+                  categoryFilter === option.value;
+
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() =>
+                      setCategoryFilter(option.value)
+                    }
+                    style={{
+                      border: "none",
+                      borderRadius: 7,
+                      padding: "6px 11px",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      background: active
+                        ? "#2C3B4D"
+                        : "transparent",
+                      color: active
+                        ? "#FFB162"
+                        : C.text,
+                    }}
+                  >
+                    {option.label}
+                    {categoryCounts[option.value] != null && (
+                      <span
+                        style={{
+                          marginLeft: 5,
+                          opacity: 0.7,
+                        }}
+                      >
+                        ({categoryCounts[option.value]})
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              style={{
+                position: "relative",
+                flex: "1 1 220px",
+                minWidth: 200,
+                maxWidth: 340,
+              }}
+            >
+              <Search
+                size={14}
+                style={{
+                  position: "absolute",
+                  left: 11,
+                  top: "50%",
+                  transform:
+                    "translateY(-50%)",
+                  color: C.muted,
+                }}
+              />
+
+              <input
+                type="search"
+                value={search}
+                onChange={(event) =>
+                  setSearch(
+                    event.target.value,
+                  )
+                }
+                placeholder="Search name, account number, city..."
+                disabled={loading}
+                style={{
+                  width: "100%",
+                  height: 38,
+                  padding:
+                    "0 12px 0 34px",
+                  border:
+                    `1px solid ${C.border}`,
+                  borderRadius: 10,
+                  outline: "none",
+                  background: C.panelAlt,
+                  color: C.text,
+                  fontSize: 12,
+                  boxSizing: "border-box",
+                  opacity:
+                    loading ? 0.6 : 1,
+                }}
+              />
+            </div>
           </div>
 
           <div
@@ -1100,8 +1180,8 @@ export default function StateAccountsModal({
                 fontSize: 13,
               }}
             >
-              {search
-                ? "No accounts match your search."
+              {search || categoryFilter !== "All"
+                ? "No accounts match your current filters."
                 : drawerEmptyMessage}
             </div>
           ) : (
