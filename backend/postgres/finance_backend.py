@@ -372,9 +372,10 @@ def _apply_common_filters(
     frontend just keeps merging new dimensions into the same dict
     instead of replacing it.
 
-    Callers must already have `f` (folios) and a LEFT JOIN'd
-    `bs` (business_source) in scope, since `payment` and the default
-    `section` behavior both read bs.payment_type.
+    Callers must already have `f` (folios), a LEFT JOIN'd `bs`
+    (business_source), and a LEFT JOIN'd `m` (members) in scope, since
+    `payment` reads bs.payment_type and `customer` reads
+    m.member_or_guest.
 
     NOTE: this powers /drilldown and /drilldown-breakdown, both of
     which still read from folios. It is NOT used by the rate_details-
@@ -390,9 +391,9 @@ def _apply_common_filters(
         params["flt_villa"] = villa
 
     if customer == "Member":
-        where_clauses.append("AND (f.member_type IS NULL OR f.member_type != 'Guests')")
+        where_clauses.append("AND (m.member_or_guest IS NULL OR m.member_or_guest != 'Guest')")
     elif customer == "Guest":
-        where_clauses.append("AND f.member_type = 'Guests'")
+        where_clauses.append("AND m.member_or_guest = 'Guest'")
 
     if payment == "free":
         where_clauses.append("AND bs.payment_type = 'Free'")
@@ -745,8 +746,10 @@ def finance_source_breakdown(
 
 # ══════════════════════════════════════════════════════════════════
 # 3. MEMBER vs GUEST
-# member_type = 'Guest' → Guest
-# member_type = NULL    → Member (assumption per business rule)
+# member_or_guest = 'Guest'        → Guest
+# member_or_guest IS NULL          → Member (assumption per business rule)
+# member_or_guest = 'Member'       → Member (additional rule)
+# (member_type moved from folios -> members; join on member_number)
 # ══════════════════════════════════════════════════════════════════
 @router.get("/member-vs-guest")
 def finance_member_vs_guest(
@@ -765,18 +768,20 @@ def finance_member_vs_guest(
     sql = text(f"""
         SELECT
             CASE
-                WHEN f.member_type = 'Guests' THEN 'Guests'
+                WHEN m.member_or_guest = 'Guest' THEN 'Guests'
                 ELSE 'Member'
             END                      AS customer_type,
             SUM(f.amount)            AS revenue,
             COUNT(*)                 AS transactions,
             COUNT(DISTINCT
-                CASE WHEN (f.member_type IS NULL OR f.member_type != 'Guests')
+                CASE WHEN (m.member_or_guest IS NULL OR m.member_or_guest != 'Guest')
                      THEN f.member_number
                      ELSE f.guest_name
                 END
             )                        AS unique_accounts
         FROM folios f
+        LEFT JOIN members m
+            ON m.member_number = f.member_number
         WHERE f.amount IS NOT NULL
         {date_sql}
         GROUP BY customer_type
@@ -795,7 +800,6 @@ def finance_member_vs_guest(
         }
         for r in rows
     ]
-
 
 # ══════════════════════════════════════════════════════════════════
 # 4. VILLA REVENUE (breakdown table, by villa name)
@@ -1049,7 +1053,7 @@ def finance_drilldown(
             f.villa_name,
             f.source,
             f.payment_type         AS folio_payment_type,
-            f.member_type,
+            m.member_type,
             f.reservation_status,
             bs.payment_type        AS source_payment_type,
             m.email                AS member_email,
@@ -1141,7 +1145,7 @@ _BREAKDOWN_GROUPS = {
     "villa":    {"expr": "f.villa_name", "requires_not_null": True},
     "source":   {"expr": "COALESCE(NULLIF(TRIM(f.source), ''), 'Unknown')", "requires_not_null": False},
     "category": {"expr": "COALESCE(NULLIF(TRIM(f.transaction_category), ''), 'Uncategorized')", "requires_not_null": False},
-    "customer": {"expr": "CASE WHEN f.member_type = 'Guests' THEN 'Guest' ELSE 'Member' END", "requires_not_null": False},
+    "customer": {"expr": "CASE WHEN m.member_or_guest = 'Guest' THEN 'Guest' ELSE 'Member' END", "requires_not_null": False},
     "amenity":  {"expr": _amenity_case_sql(), "requires_not_null": False},
 }
 
@@ -1207,6 +1211,8 @@ def finance_drilldown_breakdown(
         FROM folios f
         LEFT JOIN business_source bs
           ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
+        LEFT JOIN members m
+          ON m.member_number = f.member_number
         WHERE f.amount IS NOT NULL
         {where_str}
         GROUP BY 1
