@@ -72,58 +72,160 @@ def demographics_summary(
         alias="m",
         column="since_date",
     )
+    
+    member_state_rows = rows(
+        db,
+        f"""
+        SELECT
+            UPPER(TRIM(a.state)) AS state,
+            COUNT(DISTINCT m.member_number) FILTER (
+                WHERE TRIM(m.member_or_guest) = 'Member'
+            )::int AS member_total,
+            COUNT(DISTINCT m.member_number) FILTER (
+                WHERE TRIM(m.member_or_guest) = 'Guest'
+            )::int AS guest_total,
+            COUNT(DISTINCT m.member_number)::int AS total
+        FROM members m
+        JOIN member_addresses a
+          ON a.member_number = m.member_number
+        WHERE UPPER(TRIM(a.state)) IN (
+            'AL', 'AK', 'AZ', 'AR', 'CA',
+            'CO', 'CT', 'DE', 'FL', 'GA',
+            'HI', 'ID', 'IL', 'IN', 'IA',
+            'KS', 'KY', 'LA', 'ME', 'MD',
+            'MA', 'MI', 'MN', 'MS', 'MO',
+            'MT', 'NE', 'NV', 'NH', 'NJ',
+            'NM', 'NY', 'NC', 'ND', 'OH',
+            'OK', 'OR', 'PA', 'RI', 'SC',
+            'SD', 'TN', 'TX', 'UT', 'VT',
+            'VA', 'WA', 'WV', 'WI', 'WY',
+            'DC'
+        )
+          {member_filter}
+        GROUP BY UPPER(TRIM(a.state))
+        ORDER BY total DESC
+        """,
+        params,
+    )
+
+    member_country_rows = rows(
+        db,
+        f"""
+        SELECT
+            TRIM(a.country) AS country,
+            COUNT(DISTINCT m.member_number) FILTER (
+                WHERE TRIM(m.member_or_guest) = 'Member'
+            )::int AS member_total,
+            COUNT(DISTINCT m.member_number) FILTER (
+                WHERE TRIM(m.member_or_guest) = 'Guest'
+            )::int AS guest_total,
+            COUNT(DISTINCT m.member_number)::int AS total
+        FROM members m
+        JOIN member_addresses a
+          ON a.member_number = m.member_number
+        WHERE a.country IS NOT NULL
+          AND TRIM(a.country) <> ''
+          {member_filter}
+        GROUP BY TRIM(a.country)
+        ORDER BY total DESC
+        """,
+        params,
+    )
+
+    account_total_row = one(
+        db,
+        f"""
+        SELECT
+            COUNT(DISTINCT m.member_number)::int AS total
+        FROM members m
+        WHERE 1 = 1
+          {member_filter}
+        """,
+        params,
+    )
+    account_total = int(account_total_row.get("total") or 0)
+
+    top5_states = member_state_rows[:5]
+    top5_states_total = sum(r["total"] for r in top5_states)
+    top5_states_pct = round(
+        100.0 * top5_states_total / max(account_total, 1), 1
+    )
+
+    top5_countries = member_country_rows[:5]
+    top5_countries_total = sum(r["total"] for r in top5_countries)
+    top5_countries_pct = round(
+        100.0 * top5_countries_total / max(account_total, 1), 1
+    )
+
+    accounts_with_country = sum(
+        r["total"] for r in member_country_rows
+    )
+    countries_represented = len(member_country_rows)
+
+    domestic_row = next(
+        (
+            r for r in member_country_rows
+            if r["country"] == "United States"
+        ),
+        None,
+    )
+    domestic_accounts = domestic_row["total"] if domestic_row else 0
+    domestic_members = domestic_row["member_total"] if domestic_row else 0
+    domestic_guests = domestic_row["guest_total"] if domestic_row else 0
+    domestic_pct = round(
+        100.0 * domestic_accounts / max(accounts_with_country, 1), 1
+    )
+
+    international_rows = [
+        r for r in member_country_rows
+        if r["country"] != "United States"
+    ]
+    international_accounts = sum(r["total"] for r in international_rows)
+    international_members = sum(
+        r["member_total"] for r in international_rows
+    )
+    international_guests = sum(
+        r["guest_total"] for r in international_rows
+    )
+    international_country_count = sum(
+        1 for r in international_rows if r["total"] > 0
+    )
+    international_pct = round(
+        100.0 * international_accounts
+        / max(accounts_with_country, 1),
+        1,
+    )
+
+    geographic_concentration = {
+        "total_accounts": account_total,
+
+        "top5_states_total": top5_states_total,
+        "top5_states_pct": top5_states_pct,
+        "top5_states": top5_states,
+
+        "top5_countries_total": top5_countries_total,
+        "top5_countries_pct": top5_countries_pct,
+        "top5_countries": top5_countries,
+
+        "domestic_accounts": domestic_accounts,
+        "domestic_members": domestic_members,
+        "domestic_guests": domestic_guests,
+        "domestic_pct": domestic_pct,
+
+        "international_accounts": international_accounts,
+        "international_members": international_members,
+        "international_guests": international_guests,
+        "international_country_count": international_country_count,
+        "international_pct": international_pct,
+
+        "accounts_with_country": accounts_with_country,
+        "countries_represented": countries_represented,
+    }
 
     return {
-        "membersByCountry": rows(
-            db,
-            f"""
-            SELECT
-                TRIM(a.country) AS country,
-                COUNT(
-                    DISTINCT m.member_number
-                )::int AS total
-            FROM members m
-            JOIN member_addresses a
-              ON a.member_number = m.member_number
-            WHERE a.country IS NOT NULL
-              AND TRIM(a.country) <> ''
-              {member_filter}
-            GROUP BY TRIM(a.country)
-            ORDER BY total DESC
-            """,
-            params,
-        ),
+        "membersByCountry": member_country_rows,
 
-        "membersByState": rows(
-            db,
-            f"""
-            SELECT
-                UPPER(TRIM(a.state)) AS state,
-                COUNT(
-                    DISTINCT m.member_number
-                )::int AS total
-            FROM members m
-            JOIN member_addresses a
-              ON a.member_number = m.member_number
-            WHERE UPPER(TRIM(a.state)) IN (
-                'AL', 'AK', 'AZ', 'AR', 'CA',
-                'CO', 'CT', 'DE', 'FL', 'GA',
-                'HI', 'ID', 'IL', 'IN', 'IA',
-                'KS', 'KY', 'LA', 'ME', 'MD',
-                'MA', 'MI', 'MN', 'MS', 'MO',
-                'MT', 'NE', 'NV', 'NH', 'NJ',
-                'NM', 'NY', 'NC', 'ND', 'OH',
-                'OK', 'OR', 'PA', 'RI', 'SC',
-                'SD', 'TN', 'TX', 'UT', 'VT',
-                'VA', 'WA', 'WV', 'WI', 'WY',
-                'DC'
-            )
-              {member_filter}
-            GROUP BY UPPER(TRIM(a.state))
-            ORDER BY total DESC
-            """,
-            params,
-        ),
+        "membersByState": member_state_rows,
 
         "membersByGender": rows(
             db,
@@ -600,126 +702,7 @@ def demographics_summary(
         ),
 
         # ── Geographic concentration summary ─────────────────
-        "geographicConcentration": one(
-            db,
-            f"""
-            WITH base AS (
-                SELECT m.member_number
-                FROM members m
-                WHERE 1 = 1
-                  {member_filter}
-            ),
-            state_counts AS (
-                SELECT
-                    UPPER(TRIM(a.state)) AS state,
-                    COUNT(
-                        DISTINCT b.member_number
-                    )::int AS total
-                FROM base b
-                JOIN member_addresses a
-                  ON a.member_number = b.member_number
-                WHERE UPPER(TRIM(a.state)) IN (
-                    'AL', 'AK', 'AZ', 'AR', 'CA',
-                    'CO', 'CT', 'DE', 'FL', 'GA',
-                    'HI', 'ID', 'IL', 'IN', 'IA',
-                    'KS', 'KY', 'LA', 'ME', 'MD',
-                    'MA', 'MI', 'MN', 'MS', 'MO',
-                    'MT', 'NE', 'NV', 'NH', 'NJ',
-                    'NM', 'NY', 'NC', 'ND', 'OH',
-                    'OK', 'OR', 'PA', 'RI', 'SC',
-                    'SD', 'TN', 'TX', 'UT', 'VT',
-                    'VA', 'WA', 'WV', 'WI', 'WY',
-                    'DC'
-                )
-                GROUP BY UPPER(TRIM(a.state))
-            ),
-            country_counts AS (
-                SELECT
-                    TRIM(a.country) AS country,
-                    COUNT(
-                        DISTINCT b.member_number
-                    )::int AS total
-                FROM base b
-                JOIN member_addresses a
-                  ON a.member_number = b.member_number
-                WHERE a.country IS NOT NULL
-                  AND TRIM(a.country) <> ''
-                GROUP BY TRIM(a.country)
-            ),
-            top5_states AS (
-                SELECT COALESCE(SUM(total), 0)::int AS total
-                FROM (
-                    SELECT total FROM state_counts
-                    ORDER BY total DESC
-                    LIMIT 5
-                ) t
-            ),
-            top5_countries AS (
-                SELECT COALESCE(SUM(total), 0)::int AS total
-                FROM (
-                    SELECT total FROM country_counts
-                    ORDER BY total DESC
-                    LIMIT 5
-                ) t
-            ),
-            domestic AS (
-                SELECT COALESCE(SUM(total), 0)::int AS total
-                FROM country_counts
-                WHERE country = 'United States'
-            ),
-            country_total AS (
-                SELECT COALESCE(SUM(total), 0)::int AS total
-                FROM country_counts
-            ),
-            account_total AS (
-                SELECT COUNT(*)::int AS total FROM base
-            )
-            SELECT
-                account_total.total AS total_accounts,
-                top5_states.total AS top5_states_total,
-                top5_countries.total AS top5_countries_total,
-                domestic.total AS domestic_accounts,
-
-                (
-                    country_total.total - domestic.total
-                ) AS international_accounts,
-
-                country_total.total AS accounts_with_country,
-
-                ROUND(
-                    100.0 * top5_states.total
-                    / GREATEST(account_total.total, 1),
-                    1
-                )::float AS top5_states_pct,
-
-                ROUND(
-                    100.0 * top5_countries.total
-                    / GREATEST(account_total.total, 1),
-                    1
-                )::float AS top5_countries_pct,
-
-                ROUND(
-                    100.0 * domestic.total
-                    / GREATEST(country_total.total, 1),
-                    1
-                )::float AS domestic_pct,
-
-                ROUND(
-                    100.0 * (
-                        country_total.total - domestic.total
-                    ) / GREATEST(country_total.total, 1),
-                    1
-                )::float AS international_pct
-
-            FROM
-                account_total,
-                top5_states,
-                top5_countries,
-                domestic,
-                country_total
-            """,
-            params,
-        ),
+        "geographicConcentration": geographic_concentration,
     }
 
 
@@ -1229,6 +1212,10 @@ def get_new_vs_repeat_visitors(
     month: int | None = Query(default=None),
     start_date: date | None = Query(default=None),
     end_date: date | None = Query(default=None),
+    start_year: int | None = Query(default=None),
+    end_year: int | None = Query(default=None),
+    start_month: int | None = Query(default=None),
+    end_month: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     if month is not None and not 1 <= month <= 12:
@@ -1256,37 +1243,123 @@ def get_new_vs_repeat_visitors(
             detail="start_date cannot be after end_date",
         )
 
-    use_monthly_groups = (
-        year is not None
-        or month is not None
-        or (
-            start_date is not None
-            and end_date is not None
+    if (start_year is None) != (end_year is None):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "start_year and end_year "
+                "must be supplied together"
+            ),
         )
+
+    if (
+        start_year is not None
+        and end_year is not None
+        and start_year > end_year
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="start_year cannot be after end_year",
+        )
+
+    monthly_custom_range = (
+        start_month is not None
+        or end_month is not None
     )
 
-    if start_date is not None and end_date is not None:
-        range_start = start_date
-        range_end = end_date
+    if monthly_custom_range:
+        if start_month is None or end_month is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "start_month and end_month "
+                    "must be supplied together"
+                ),
+            )
 
-    elif year is not None and month is not None:
-        range_start = date(year, month, 1)
+        if start_year is None or end_year is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "start_year and end_year are "
+                    "required together with "
+                    "start_month/end_month"
+                ),
+            )
 
-        if month == 12:
-            range_end = date(year, 12, 31)
+        if not (1 <= start_month <= 12) or not (1 <= end_month <= 12):
+            raise HTTPException(
+                status_code=400,
+                detail="start_month and end_month must be between 1 and 12",
+            )
+
+        range_start = date(start_year, start_month, 1)
+
+        if end_month == 12:
+            range_end = date(end_year, 12, 31)
         else:
             range_end = (
-                date(year, month + 1, 1)
+                date(end_year, end_month + 1, 1)
                 - timedelta(days=1)
             )
 
-    elif year is not None:
-        range_start = date(year, 1, 1)
-        range_end = date(year, 12, 31)
+        if range_start > range_end:
+            raise HTTPException(
+                status_code=400,
+                detail="End month must be on or after the start month",
+            )
+
+        month_count = (
+            (end_year - start_year) * 12
+            + (end_month - start_month)
+            + 1
+        )
+
+        if month_count > 24:
+            raise HTTPException(
+                status_code=400,
+                detail="Custom ranges can span at most 24 months",
+            )
+
+        use_monthly_groups = True
 
     else:
-        range_start = None
-        range_end = None
+        use_monthly_groups = (
+            year is not None
+            or month is not None
+            or (
+                start_date is not None
+                and end_date is not None
+            )
+        )
+
+        if start_year is not None and end_year is not None:
+            # Year mode window — always annual buckets.
+            range_start = date(start_year, 1, 1)
+            range_end = date(end_year, 12, 31)
+
+        elif start_date is not None and end_date is not None:
+            range_start = start_date
+            range_end = end_date
+
+        elif year is not None and month is not None:
+            range_start = date(year, month, 1)
+
+            if month == 12:
+                range_end = date(year, 12, 31)
+            else:
+                range_end = (
+                    date(year, month + 1, 1)
+                    - timedelta(days=1)
+                )
+
+        elif year is not None:
+            range_start = date(year, 1, 1)
+            range_end = date(year, 12, 31)
+
+        else:
+            range_start = None
+            range_end = None
 
     group_expression = (
         "DATE_TRUNC('month', event_date)::date"

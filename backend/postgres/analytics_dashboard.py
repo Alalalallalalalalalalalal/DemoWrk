@@ -6,7 +6,7 @@ This is the original `/dashboard-summary` payload that powers the main
 overview dashboard widgets (members by country/state/gender/age, bookings,
 spend, dependents, directory listing, etc). It's kept as a single big query
 set (rather than split into the newer filterable `/demographics-summary`
-style endpoints) for backwards compatibility with the existing frontend.
+style endpoints) for backwards compatibility with the existing frontend —
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -26,18 +26,39 @@ def dashboard_summary(db: Session = Depends(get_db)):
         return dict(db.execute(text(sql)).mappings().first() or {})
 
     return {
-        "membersByCountry": rows("""SELECT country, COUNT(*) AS total
-                                    FROM member_addresses
-                                    WHERE country IS NOT NULL
-                                    GROUP BY country
-                                    ORDER BY total DESC"""),
+        "membersByCountry": rows("""
+            SELECT
+                TRIM(a.country) AS country,
+                COUNT(DISTINCT m.member_number) FILTER (
+                    WHERE TRIM(m.member_or_guest) = 'Member'
+                )::int AS member_total,
+                COUNT(DISTINCT m.member_number) FILTER (
+                    WHERE TRIM(m.member_or_guest) = 'Guest'
+                )::int AS guest_total,
+                COUNT(DISTINCT m.member_number)::int AS total
+            FROM member_addresses a
+            JOIN members m
+              ON m.member_number = a.member_number
+            WHERE a.country IS NOT NULL
+              AND TRIM(a.country) <> ''
+            GROUP BY TRIM(a.country)
+            ORDER BY total DESC
+        """),
 
         "membersByState": rows("""
             SELECT
-                UPPER(TRIM(state)) AS state,
-                COUNT(*)::int AS total
-            FROM member_addresses
-            WHERE UPPER(TRIM(state)) IN (
+                UPPER(TRIM(a.state)) AS state,
+                COUNT(DISTINCT m.member_number) FILTER (
+                    WHERE TRIM(m.member_or_guest) = 'Member'
+                )::int AS member_total,
+                COUNT(DISTINCT m.member_number) FILTER (
+                    WHERE TRIM(m.member_or_guest) = 'Guest'
+                )::int AS guest_total,
+                COUNT(DISTINCT m.member_number)::int AS total
+            FROM member_addresses a
+            JOIN members m
+              ON m.member_number = a.member_number
+            WHERE UPPER(TRIM(a.state)) IN (
                 'AL', 'AK', 'AZ', 'AR', 'CA',
                 'CO', 'CT', 'DE', 'FL', 'GA',
                 'HI', 'ID', 'IL', 'IN', 'IA',
@@ -50,7 +71,7 @@ def dashboard_summary(db: Session = Depends(get_db)):
                 'VA', 'WA', 'WV', 'WI', 'WY',
                 'DC'
             )
-            GROUP BY UPPER(TRIM(state))
+            GROUP BY UPPER(TRIM(a.state))
             ORDER BY total DESC
         """),
 

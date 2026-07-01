@@ -9,6 +9,7 @@ import {
     YAxis,
     Tooltip,
     Legend,
+    LabelList,
     ResponsiveContainer,
     CartesianGrid,
 } from "recharts";
@@ -23,6 +24,9 @@ import {
 import AccountsUSMap from "./AccountsUSMap";
 import StateAccountsModal from "./StateAccountsModal";
 import DateFilterBar from "./DemographicsDateFilter";
+import NewVsRepeatFilterBar, {
+    DEFAULT_VISITOR_FILTER,
+} from "./NewVsRepeatFilterBar";
 
 /* ─── Shared chart values ───────────────────────────────────── */
 
@@ -91,17 +95,17 @@ const CHART_INFO = {
     },
     newVsRepeatVisitors: {
         summary:
-            "Compares newly acquired accounts with returning accounts across each year.",
+            "Compares newly acquired accounts with returning accounts over time.",
         functionality:
-            "Click a legend item to show or hide a line. Hover for totals or click a point to open matching account records. Use the date filter to view yearly or monthly New vs Repeat trends.",
-        x: "Year/Month",
+            "Click a legend item to show or hide a line. Hover for totals or click a point to open matching account records. Use Years shown / Ending year for a rolling annual window, All years for the full history, or switch to Custom Range to inspect a specific month-to-month span (up to 24 months, can cross a calendar year).",
+        x: "Period",
         y: "Number of accounts",
     },
     accountsByState: {
         summary:
             "Shows the geographic distribution of accounts across US states.",
         functionality:
-            "Select a state on the map to open the accounts associated with that state.",
+            "Hover a state for its account total, member/guest split and percentages. Select a state to open the accounts associated with it.",
         x: null,
         y: null,
     },
@@ -109,7 +113,7 @@ const CHART_INFO = {
         summary:
             "Shows the countries represented by member and guest accounts.",
         functionality:
-            "Hover for the exact total and click a country bar to open its associated accounts.",
+            "Choose how many countries to display, hover for exact totals, percentages and the member/guest split, and click a country bar (or Other Countries) to view more detail.",
         x: "Number of accounts",
         y: "Country",
     },
@@ -157,7 +161,7 @@ const CHART_INFO = {
         summary:
             "Shows how concentrated accounts are geographically — the share coming from the top 5 states and top 5 countries, and the US vs. International account split.",
         functionality:
-            "These are summary statistics calculated across all accounts with address data on file.",
+            "Hover a card for the underlying breakdown; click a card to jump to the related map or chart (Top 5 Countries and International Accounts also switch the country chart's view).",
         x: null,
         y: null,
     },
@@ -178,6 +182,25 @@ const MONTHS = [
     "Nov",
     "Dec",
 ];
+
+/* New vs Repeat: maps the "Years shown" label to a span (in years). */
+const YEARS_SHOWN_SPAN = {
+    "Past 5 years": 5,
+    "Past 10 years": 10,
+    "Past 15 years": 15,
+    "Past 20 years": 20,
+};
+
+/* Accounts by Country: maps the "Countries shown" label to a count. */
+const COUNTRY_TOP_N = {
+    "Top 5": 5,
+    "Top 10": 10,
+    "Top 15": 15,
+    "Top 20": 20,
+};
+
+const COUNTRY_CHART_VISIBLE_HEIGHT = 288;
+const COUNTRY_ROW_HEIGHT = 32;
 
 const toDateParams = (filter) => {
     if (filter.mode === "day") {
@@ -209,6 +232,42 @@ const toDateParams = (filter) => {
             ? null
             : MONTHS.indexOf(filter.month),
     };
+};
+
+const toVisitorParams = (filter, currentYr) => {
+    if (filter.mode === "range") {
+        if (
+            !filter.startMonth ||
+            !filter.startYear ||
+            !filter.endMonth ||
+            !filter.endYear
+        ) {
+            return null;
+        }
+
+        return {
+            start_year: Number(filter.startYear),
+            start_month: Number(filter.startMonth),
+            end_year: Number(filter.endYear),
+            end_month: Number(filter.endMonth),
+        };
+    }
+
+    // Year mode
+    if (filter.yearsShown === "All years") {
+        return {};
+    }
+
+    const span = YEARS_SHOWN_SPAN[filter.yearsShown] ?? 10;
+
+    const endYear =
+        filter.endingYear === "Latest year"
+            ? currentYr
+            : Number(filter.endingYear);
+
+    const startYear = endYear - span + 1;
+
+    return { start_year: startYear, end_year: endYear };
 };
 
 
@@ -369,9 +428,9 @@ function ChartInfo({ id }) {
     );
 }
 
-function Card({ title, sub, children, action }) {
+function Card({ title, sub, children, action, style }) {
     return (
-        <div className="dashboard-card">
+        <div className="dashboard-card" style={style}>
             <div
                 style={{
                     display: "flex",
@@ -392,7 +451,7 @@ function Card({ title, sub, children, action }) {
     );
 }
 
-/* ─── Lightweight KPI strip for summary stats ───────────────── */
+/* ─── Lightweight KPI strip for summary stats (household composition) ── */
 function MiniKpiBand({ items }) {
     return (
         <div
@@ -450,6 +509,97 @@ function MiniKpiBand({ items }) {
                     )}
                 </div>
             ))}
+        </div>
+    );
+}
+
+function HoverKpiCard({ label, value, detail, onClick, panel, index }) {
+    const [hovered, setHovered] = useState(false);
+
+    return (
+        <div
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            style={{
+                position: "relative",
+                padding: "0 22px",
+                borderLeft: index > 0 ? "1px solid #DDD6CA" : "none",
+            }}
+        >
+            <button
+                type="button"
+                onClick={onClick}
+                onFocus={() => setHovered(true)}
+                onBlur={() => setHovered(false)}
+                style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-start",
+                    gap: 4,
+                    border: "none",
+                    background: "transparent",
+                    textAlign: "left",
+                    fontFamily: "inherit",
+                    cursor: onClick ? "pointer" : "default",
+                    padding: "6px 4px",
+                    borderRadius: 10,
+                    width: "100%",
+                    transition: "background 0.16s ease",
+                }}
+                onMouseDown={(event) => event.preventDefault()}
+            >
+                <span
+                    style={{
+                        fontSize: 10,
+                        fontWeight: 600,
+                        letterSpacing: "0.18em",
+                        textTransform: "uppercase",
+                        color: "#9A8E84",
+                    }}
+                >
+                    {label}
+                </span>
+
+                <span
+                    style={{
+                        fontFamily: "'Cormorant Garamond', serif",
+                        fontSize: 26,
+                        lineHeight: 1.1,
+                        color: "#1B2632",
+                    }}
+                >
+                    {value}
+                </span>
+
+                {detail && (
+                    <span style={{ fontSize: 11, color: "#A35139" }}>
+                        {detail}
+                    </span>
+                )}
+            </button>
+
+            {hovered && panel && (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: "calc(100% + 6px)",
+                        left: 0,
+                        zIndex: 45,
+                        width: 300,
+                        maxHeight: 300,
+                        overflowY: "auto",
+                        background: C.bg,
+                        border: `1px solid ${C.border}`,
+                        borderRadius: 12,
+                        boxShadow: "0 10px 30px rgba(0, 0, 0, 0.16)",
+                        padding: 12,
+                        fontSize: 11,
+                        color: C.text,
+                    }}
+                >
+                    {panel}
+                </div>
+            )}
         </div>
     );
 }
@@ -572,10 +722,9 @@ export default function DemographicsTab({
     dependentsPerHousehold = [],
     dependentsPerMember = [],
 }) {
-    const years = useMemo(() => {
-        const currentYear =
-            new Date().getFullYear();
+    const currentYear = useMemo(() => new Date().getFullYear(), []);
 
+    const years = useMemo(() => {
         return [
             "All",
             ...Array.from(
@@ -587,7 +736,7 @@ export default function DemographicsTab({
                 currentYear - index,
             ),
         ];
-    }, []);
+    }, [currentYear]);
 
     const [drawerDateFilter, setDrawerDateFilter] =
         useState({
@@ -614,15 +763,12 @@ export default function DemographicsTab({
         total_new: true,
         total_repeat: true,
     });
+
     const [visitorChartFilter, setVisitorChartFilter] =
-        useState({
-            mode: "ym",
-            year: "All",
-            month: "All",
-            date: "",
-            startDate: "",
-            endDate: "",
-        });
+        useState(DEFAULT_VISITOR_FILTER);
+
+    const [visitorYearsAvailable, setVisitorYearsAvailable] =
+        useState([]);
 
     const [visitorChartData, setVisitorChartData] =
         useState([]);
@@ -633,21 +779,50 @@ export default function DemographicsTab({
     useEffect(() => {
         let cancelled = false;
 
-        const loadVisitorChart = async () => {
-            if (
-                visitorChartFilter.mode === "range" &&
-                (
-                    !visitorChartFilter.startDate ||
-                    !visitorChartFilter.endDate
-                )
-            ) {
-                return;
-            }
+        analyticsApi
+            .newVsRepeatVisitors({})
+            .then((data) => {
+                if (cancelled) return;
 
-            if (
-                visitorChartFilter.mode === "day" &&
-                !visitorChartFilter.date
-            ) {
+                const rowsArray = Array.isArray(data) ? data : [];
+
+                const uniqueYears = Array.from(
+                    new Set(
+                        rowsArray
+                            .map((row) => Number(row.year))
+                            .filter(
+                                (year) =>
+                                    Number.isFinite(year) &&
+                                    year <= currentYear,
+                            ),
+                    ),
+                ).sort((a, b) => b - a);
+
+                setVisitorYearsAvailable(uniqueYears);
+            })
+            .catch((error) => {
+                console.error(
+                    "Unable to load available years for New vs Repeat chart:",
+                    error,
+                );
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [currentYear]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const loadVisitorChart = async () => {
+            const params = toVisitorParams(
+                visitorChartFilter,
+                currentYear,
+            );
+
+            if (params === null) {
+                // Custom Range selected but not yet applied — wait.
                 return;
             }
 
@@ -655,18 +830,22 @@ export default function DemographicsTab({
 
             try {
                 const data =
-                    await analyticsApi.newVsRepeatVisitors(
-                        toDateParams(
-                            visitorChartFilter,
-                        ),
-                    );
+                    await analyticsApi.newVsRepeatVisitors(params);
 
                 if (!cancelled) {
-                    setVisitorChartData(
-                        Array.isArray(data)
-                            ? data
-                            : [],
-                    );
+                    const rowsArray = Array.isArray(data)
+                        ? data
+                        : [];
+
+                    const capped =
+                        visitorChartFilter.mode === "range"
+                            ? rowsArray
+                            : rowsArray.filter(
+                                  (row) =>
+                                      Number(row.year) <= currentYear,
+                              );
+
+                    setVisitorChartData(capped);
                 }
             } catch (error) {
                 console.error(
@@ -689,8 +868,74 @@ export default function DemographicsTab({
         return () => {
             cancelled = true;
         };
-    }, [visitorChartFilter]);
+    }, [visitorChartFilter, currentYear]);
+
+    const visitorChartSubtitle = useMemo(() => {
+        if (visitorChartLoading && !visitorChartData.length) {
+            return "Loading account history…";
+        }
+
+        if (!visitorChartData.length) {
+            return "No account history available for this range.";
+        }
+
+        if (visitorChartFilter.mode === "range") {
+            const first = visitorChartData[0];
+            const last =
+                visitorChartData[visitorChartData.length - 1];
+            const numMonths = visitorChartData.length;
+
+            return (
+                `Monthly seasonal trend · ${first.period_label}` +
+                `–${last.period_label} · ${numMonths} month${
+                    numMonths === 1 ? "" : "s"
+                }`
+            );
+        }
+
+        const dataYears = visitorChartData
+            .map((row) => Number(row.year))
+            .filter((year) => Number.isFinite(year));
+
+        const rangeStart = Math.min(...dataYears);
+        const rangeEnd = Math.max(...dataYears);
+
+        if (visitorChartFilter.yearsShown === "All years") {
+            return `Showing all available years · ${rangeStart}–${rangeEnd}`;
+        }
+
+        return `Showing the ${visitorChartFilter.yearsShown.toLowerCase()} · ${rangeStart}–${rangeEnd}`;
+    }, [visitorChartData, visitorChartFilter, visitorChartLoading]);
+
+    const visitorAxisInterval = useMemo(() => {
+        const numPoints = visitorChartData.length;
+
+        if (visitorChartFilter.mode === "range") {
+            if (numPoints <= 12) return 0;
+            if (numPoints <= 18) return 1;
+            return 2;
+        }
+
+        if (
+            visitorChartFilter.mode === "year" &&
+            visitorChartFilter.yearsShown === "All years"
+        ) {
+            return Math.max(0, Math.ceil(numPoints / 12) - 1);
+        }
+
+        if (numPoints <= 15) return 0;
+        if (numPoints <= 20) return 1;
+
+        return Math.max(1, Math.ceil(numPoints / 12) - 1);
+    }, [visitorChartData, visitorChartFilter]);
+
+    const stateMapCardRef = useRef(null);
     const countryChartRef = useRef(null);
+    const countryScrollRef = useRef(null);
+
+    /* Accounts by Country: Top N / All Countries selector */
+    const [countriesShown, setCountriesShown] = useState("Top 10");
+    const [otherCountriesOpen, setOtherCountriesOpen] = useState(false);
 
     /* ─── Data completeness / household / geo summaries ────── */
     const [completeness, setCompleteness] = useState(null);
@@ -814,51 +1059,32 @@ export default function DemographicsTab({
         },
     ];
 
-    /* 3. Geographic concentration KPI items */
-    const geoKpiItems = [
-        {
-            label: "Top 5 States Share",
-            value:
-                geoConcentration?.top5_states_pct != null
-                    ? `${geoConcentration.top5_states_pct}%`
-                    : "—",
-            detail: "of all accounts",
-        },
-        {
-            label: "Top 5 Countries Share",
-            value:
-                geoConcentration?.top5_countries_pct != null
-                    ? `${geoConcentration.top5_countries_pct}%`
-                    : "—",
-            detail: "of all accounts",
-        },
-        {
-            label: "US Accounts",
-            value:
-                geoConcentration?.domestic_pct != null
-                    ? `${geoConcentration.domestic_pct}%`
-                    : "—",
-            detail:
-                geoConcentration?.domestic_accounts != null
-                    ? `${Number(
-                            geoConcentration.domestic_accounts,
-                        ).toLocaleString()} accounts`
-                    : undefined,
-        },
-        {
-            label: "International Accounts",
-            value:
-                geoConcentration?.international_pct != null
-                    ? `${geoConcentration.international_pct}%`
-                    : "—",
-            detail:
-                geoConcentration?.international_accounts != null
-                    ? `${Number(
-                            geoConcentration.international_accounts,
-                        ).toLocaleString()} accounts`
-                    : undefined,
-        },
-    ];
+    /* 3. Geographic Concentration: hover-panel data, derived from the
+       new top5_states / top5_countries arrays returned by
+       /demographics-summary. */
+    const geoTotalAccounts = geoConcentration?.total_accounts ?? 0;
+
+    const topStatesPanelRows = useMemo(() => {
+        const list = geoConcentration?.top5_states ?? [];
+
+        return list.map((row) => ({
+            ...row,
+            pct: geoTotalAccounts
+                ? ((row.total / geoTotalAccounts) * 100).toFixed(1)
+                : "0.0",
+        }));
+    }, [geoConcentration, geoTotalAccounts]);
+
+    const topCountriesPanelRows = useMemo(() => {
+        const list = geoConcentration?.top5_countries ?? [];
+
+        return list.map((row) => ({
+            ...row,
+            pct: geoTotalAccounts
+                ? ((row.total / geoTotalAccounts) * 100).toFixed(1)
+                : "0.0",
+        }));
+    }, [geoConcentration, geoTotalAccounts]);
 
     /* ─── Derived account data ────────────────────────────────── */
 
@@ -904,6 +1130,159 @@ export default function DemographicsTab({
         }
         return "—";
     })();
+
+    const sortedCountries = useMemo(
+        () =>
+            [...membersByCountry].sort(
+                (a, b) =>
+                    Number(b.total || 0) - Number(a.total || 0),
+            ),
+        [membersByCountry],
+    );
+
+    const totalCountryLinkedAccounts = useMemo(
+        () =>
+            sortedCountries.reduce(
+                (sum, item) => sum + Number(item.total || 0),
+                0,
+            ),
+        [sortedCountries],
+    );
+
+    const isAllCountries = countriesShown === "All countries";
+
+    const countryChartRows = useMemo(() => {
+        if (isAllCountries) {
+            return sortedCountries;
+        }
+
+        const n = COUNTRY_TOP_N[countriesShown] ?? 10;
+        const top = sortedCountries.slice(0, n);
+        const rest = sortedCountries.slice(n);
+
+        if (!rest.length) {
+            return top;
+        }
+
+        const otherTotal = rest.reduce(
+            (sum, item) => sum + Number(item.total || 0),
+            0,
+        );
+        const otherMemberTotal = rest.reduce(
+            (sum, item) => sum + Number(item.member_total || 0),
+            0,
+        );
+        const otherGuestTotal = rest.reduce(
+            (sum, item) => sum + Number(item.guest_total || 0),
+            0,
+        );
+
+        return [
+            ...top,
+            {
+                country: "Other Countries",
+                total: otherTotal,
+                member_total: otherMemberTotal,
+                guest_total: otherGuestTotal,
+                isOtherCountries: true,
+                includedCountries: rest,
+            },
+        ];
+    }, [sortedCountries, countriesShown, isAllCountries]);
+
+    const hasOtherCountriesBar = !isAllCountries &&
+        countryChartRows.some((row) => row.isOtherCountries);
+
+    const countryChartHeight = Math.max(
+        COUNTRY_CHART_VISIBLE_HEIGHT,
+        countryChartRows.length * COUNTRY_ROW_HEIGHT,
+    );
+
+    useEffect(() => {
+        if (countryScrollRef.current) {
+            countryScrollRef.current.scrollTop = 0;
+        }
+    }, [countriesShown]);
+
+    const countryChartSubtitle = isAllCountries
+        ? `Showing all ${sortedCountries.length} represented countries`
+        : hasOtherCountriesBar
+        ? `Showing top ${
+              COUNTRY_TOP_N[countriesShown] ?? 10
+          } countries plus Other Countries`
+        : `Showing top ${
+              COUNTRY_TOP_N[countriesShown] ?? 10
+          } countries`;
+
+    const clearCountryFilters = () => {
+        setCountriesShown("Top 10");
+        setOtherCountriesOpen(false);
+
+        if (countryScrollRef.current) {
+            countryScrollRef.current.scrollTop = 0;
+        }
+    };
+
+    function CountryTooltip({ active, payload }) {
+        if (!active || !payload?.length) return null;
+
+        const row = payload[0].payload;
+        const pct = totalCountryLinkedAccounts
+            ? (
+                  (Number(row.total || 0) /
+                      totalCountryLinkedAccounts) *
+                  100
+              ).toFixed(1)
+            : "0.0";
+
+        if (row.isOtherCountries) {
+            return (
+                <div style={TIP}>
+                    <div style={{ fontWeight: 700 }}>
+                        Other Countries
+                    </div>
+                    <div>
+                        {Number(row.total).toLocaleString()} accounts
+                        ({pct}%)
+                    </div>
+                    <div>
+                        {row.includedCountries.length} countries
+                        included
+                    </div>
+                </div>
+            );
+        }
+
+        const hasBreakdown =
+            row.member_total !== undefined ||
+            row.guest_total !== undefined;
+
+        return (
+            <div style={TIP}>
+                <div style={{ fontWeight: 700 }}>{row.country}</div>
+                <div>
+                    {Number(row.total).toLocaleString()} accounts (
+                    {pct}%)
+                </div>
+                {hasBreakdown && (
+                    <>
+                        <div>
+                            Members:{" "}
+                            {Number(
+                                row.member_total || 0,
+                            ).toLocaleString()}
+                        </div>
+                        <div>
+                            Guests:{" "}
+                            {Number(
+                                row.guest_total || 0,
+                            ).toLocaleString()}
+                        </div>
+                    </>
+                )}
+            </div>
+        );
+    }
 
     const loadDrawerAccounts = async (
         drawer,
@@ -1079,10 +1458,17 @@ export default function DemographicsTab({
         };
 
     const handleStateClick = (state) => {
+        const total = Number(state.total || 0);
+        const memberTotal = Number(state.member_total || 0);
+        const guestTotal = Number(state.guest_total || 0);
+
         openAccountDrawer({
             state,
             title:
-            `Accounts in ${state.name} (${state.code})`,
+                `Accounts in ${state.name} (${state.code}) — ` +
+                `${total.toLocaleString()} total ` +
+                `(${memberTotal.toLocaleString()} members · ` +
+                `${guestTotal.toLocaleString()} guests)`,
             eyebrow: "State account details",
             emptyMessage:
             `No accounts were found in ${state.name}.`,
@@ -1144,6 +1530,17 @@ export default function DemographicsTab({
         });
     };
 
+    const handleCountryBarClick = (entry) => {
+        const row = entry?.payload ?? entry;
+
+        if (row?.isOtherCountries) {
+            setOtherCountriesOpen(true);
+            return;
+        }
+
+        handleCountryClick(row);
+    };
+
     const closeAccountDrawer = () => {
         setAccountDrawer(null);
         setAccountDetails([]);
@@ -1151,8 +1548,24 @@ export default function DemographicsTab({
         setAccountDetailsLoading(false);
     };
 
-    const scrollToCountryChart = () => {
-        countryChartRef.current?.scrollIntoView({
+    const scrollToCountryChart = (view) => {
+        if (view) {
+            setCountriesShown(view);
+            setOtherCountriesOpen(false);
+        }
+
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                countryChartRef.current?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "center",
+                });
+            });
+        });
+    };
+
+    const scrollToStateMap = () => {
+        stateMapCardRef.current?.scrollIntoView({
             behavior: "smooth",
             block: "center",
         });
@@ -1200,6 +1613,62 @@ export default function DemographicsTab({
         });
     };
 
+    const countryBarChart = (
+        <BarChart
+            data={countryChartRows}
+            layout="vertical"
+            margin={{ left: 12, right: 44 }}
+            barCategoryGap="22%"
+        >
+            <CartesianGrid
+                strokeDasharray="3 3"
+                stroke={GRID}
+                horizontal={false}
+            />
+
+            <XAxis
+                type="number"
+                stroke={AX}
+                fontSize={11}
+            />
+
+            <YAxis
+                type="category"
+                dataKey="country"
+                stroke={AX}
+                fontSize={10}
+                width={130}
+                interval={0}
+                tickLine={false}
+            />
+
+            <Tooltip content={<CountryTooltip />} />
+
+            <Bar
+                dataKey="total"
+                name="Accounts"
+                fill="var(--dashboard-muted)"
+                radius={[0, 6, 6, 0]}
+                maxBarSize={20}
+                cursor="pointer"
+                onClick={handleCountryBarClick}
+                background={(props) => (
+                    <ClickableBarRow
+                        {...props}
+                        onRowClick={handleCountryBarClick}
+                    />
+                )}
+            >
+                <LabelList
+                    dataKey="total"
+                    position="right"
+                    formatter={(v) => Number(v).toLocaleString()}
+                    style={{ fontSize: 10, fill: C.text }}
+                />
+            </Bar>
+        </BarChart>
+    );
+
     return (
         <>
         <div className="dashboard-section">
@@ -1233,7 +1702,7 @@ export default function DemographicsTab({
                     ? membersByCountry.length.toLocaleString()
                     : "—",
                 detail: "Click to view country distribution",
-                onClick: scrollToCountryChart,
+                onClick: () => scrollToCountryChart(),
                 },
                 {
                 label: "Total Dependents",
@@ -1812,26 +2281,16 @@ export default function DemographicsTab({
             <div>
                 <Card
                     title="New vs Repeat Guests & Members"
-                    sub={
-                        visitorChartFilter.mode === "ym" &&
-                        visitorChartFilter.year !== "All"
-                            ? `Monthly distribution for ${visitorChartFilter.year}`
-                            : visitorChartFilter.mode === "range" &&
-                                visitorChartFilter.startDate &&
-                                visitorChartFilter.endDate
-                            ? `${visitorChartFilter.startDate} to ${visitorChartFilter.endDate}`
-                            : "Yearly account distribution"
-                    }
+                    sub={visitorChartSubtitle}
                     action={
                         <ChartInfo id="newVsRepeatVisitors" />
                     }
                 >
-                    <DateFilterBar
+                    <NewVsRepeatFilterBar
                         value={visitorChartFilter}
                         onChange={setVisitorChartFilter}
-                        years={years}
-                        months={MONTHS}
-                        showSpecificDate={false}
+                        yearsAvailable={visitorYearsAvailable}
+                        currentYear={currentYear}
                     />
 
                     {visitorChartLoading && (
@@ -1874,7 +2333,7 @@ export default function DemographicsTab({
                                     dataKey="period_label"
                                     stroke={AX}
                                     fontSize={11}
-                                    interval={0}
+                                    interval={visitorAxisInterval}
                                 />
 
                                 <YAxis
@@ -2016,88 +2475,375 @@ export default function DemographicsTab({
                         Loading geographic summary…
                     </div>
                 )}
-                <MiniKpiBand items={geoKpiItems} />
+
+                <div className="dashboard-kpi-band" style={{ padding: "18px 24px" }}>
+                    <HoverKpiCard
+                        index={0}
+                        label="Top 5 States Share"
+                        value={
+                            geoConcentration?.top5_states_pct != null
+                                ? `${geoConcentration.top5_states_pct}%`
+                                : "—"
+                        }
+                        detail={
+                            geoConcentration?.top5_states_total != null
+                                ? `${Number(
+                                      geoConcentration.top5_states_total,
+                                  ).toLocaleString()} accounts`
+                                : "of all accounts"
+                        }
+                        onClick={scrollToStateMap}
+                        panel={
+                            topStatesPanelRows.length ? (
+                                <>
+                                    <div
+                                        style={{
+                                            fontWeight: 700,
+                                            marginBottom: 6,
+                                        }}
+                                    >
+                                        {Number(
+                                            geoConcentration.top5_states_total,
+                                        ).toLocaleString()}{" "}
+                                        accounts across the top 5 states
+                                    </div>
+                                    {topStatesPanelRows.map((row) => (
+                                        <div
+                                            key={row.state}
+                                            style={{
+                                                display: "flex",
+                                                justifyContent:
+                                                    "space-between",
+                                                gap: 8,
+                                                padding: "5px 0",
+                                                borderTop: `1px solid ${C.border}`,
+                                            }}
+                                        >
+                                            <span style={{ fontWeight: 600 }}>
+                                                {row.state}
+                                            </span>
+                                            <span>
+                                                {Number(
+                                                    row.total,
+                                                ).toLocaleString()}{" "}
+                                                ({row.pct}%)
+                                            </span>
+                                            <span style={{ color: C.muted }}>
+                                                {Number(
+                                                    row.member_total,
+                                                ).toLocaleString()}
+                                                M /{" "}
+                                                {Number(
+                                                    row.guest_total,
+                                                ).toLocaleString()}
+                                                G
+                                            </span>
+                                        </div>
+                                    ))}
+                                </>
+                            ) : (
+                                <span style={{ color: C.muted }}>
+                                    No state data available.
+                                </span>
+                            )
+                        }
+                    />
+
+                    <HoverKpiCard
+                        index={1}
+                        label="Top 5 Countries Share"
+                        value={
+                            geoConcentration?.top5_countries_pct != null
+                                ? `${geoConcentration.top5_countries_pct}%`
+                                : "—"
+                        }
+                        detail={
+                            geoConcentration?.top5_countries_total != null
+                                ? `${Number(
+                                      geoConcentration.top5_countries_total,
+                                  ).toLocaleString()} accounts`
+                                : "of all accounts"
+                        }
+                        onClick={() => scrollToCountryChart("Top 10")}
+                        panel={
+                            topCountriesPanelRows.length ? (
+                                <>
+                                    <div
+                                        style={{
+                                            fontWeight: 700,
+                                            marginBottom: 6,
+                                        }}
+                                    >
+                                        {Number(
+                                            geoConcentration.top5_countries_total,
+                                        ).toLocaleString()}{" "}
+                                        accounts across the top 5 countries
+                                    </div>
+                                    {topCountriesPanelRows.map((row) => (
+                                        <div
+                                            key={row.country}
+                                            style={{
+                                                display: "flex",
+                                                justifyContent:
+                                                    "space-between",
+                                                gap: 8,
+                                                padding: "5px 0",
+                                                borderTop: `1px solid ${C.border}`,
+                                            }}
+                                        >
+                                            <span style={{ fontWeight: 600 }}>
+                                                {row.country}
+                                            </span>
+                                            <span>
+                                                {Number(
+                                                    row.total,
+                                                ).toLocaleString()}{" "}
+                                                ({row.pct}%)
+                                            </span>
+                                            <span style={{ color: C.muted }}>
+                                                {Number(
+                                                    row.member_total,
+                                                ).toLocaleString()}
+                                                M /{" "}
+                                                {Number(
+                                                    row.guest_total,
+                                                ).toLocaleString()}
+                                                G
+                                            </span>
+                                        </div>
+                                    ))}
+                                </>
+                            ) : (
+                                <span style={{ color: C.muted }}>
+                                    No country data available.
+                                </span>
+                            )
+                        }
+                    />
+
+                    <HoverKpiCard
+                        index={2}
+                        label="US Accounts"
+                        value={
+                            geoConcentration?.domestic_pct != null
+                                ? `${geoConcentration.domestic_pct}%`
+                                : "—"
+                        }
+                        detail={
+                            geoConcentration?.domestic_accounts != null
+                                ? `${Number(
+                                      geoConcentration.domestic_accounts,
+                                  ).toLocaleString()} accounts`
+                                : undefined
+                        }
+                        onClick={scrollToStateMap}
+                        panel={
+                            <>
+                                <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                                    United States
+                                </div>
+                                <div style={{ padding: "3px 0" }}>
+                                    {Number(
+                                        geoConcentration?.domestic_accounts || 0,
+                                    ).toLocaleString()}{" "}
+                                    total accounts
+                                </div>
+                                <div style={{ padding: "3px 0" }}>
+                                    {Number(
+                                        geoConcentration?.domestic_members || 0,
+                                    ).toLocaleString()}{" "}
+                                    members ·{" "}
+                                    {Number(
+                                        geoConcentration?.domestic_guests || 0,
+                                    ).toLocaleString()}{" "}
+                                    guests
+                                </div>
+                                <div style={{ padding: "3px 0", color: C.muted }}>
+                                    {geoConcentration?.domestic_pct != null
+                                        ? `${geoConcentration.domestic_pct}%`
+                                        : "—"}{" "}
+                                    of accounts with country data
+                                </div>
+                            </>
+                        }
+                    />
+
+                    <HoverKpiCard
+                        index={3}
+                        label="International Accounts"
+                        value={
+                            geoConcentration?.international_pct != null
+                                ? `${geoConcentration.international_pct}%`
+                                : "—"
+                        }
+                        detail={
+                            geoConcentration?.international_accounts != null
+                                ? `${Number(
+                                      geoConcentration.international_accounts,
+                                  ).toLocaleString()} accounts`
+                                : undefined
+                        }
+                        onClick={() => scrollToCountryChart("All countries")}
+                        panel={
+                            <>
+                                <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                                    International
+                                </div>
+                                <div style={{ padding: "3px 0" }}>
+                                    {Number(
+                                        geoConcentration?.international_accounts ||
+                                            0,
+                                    ).toLocaleString()}{" "}
+                                    total accounts
+                                </div>
+                                <div style={{ padding: "3px 0" }}>
+                                    {Number(
+                                        geoConcentration?.international_members ||
+                                            0,
+                                    ).toLocaleString()}{" "}
+                                    members ·{" "}
+                                    {Number(
+                                        geoConcentration?.international_guests ||
+                                            0,
+                                    ).toLocaleString()}{" "}
+                                    guests
+                                </div>
+                                <div style={{ padding: "3px 0", color: C.muted }}>
+                                    {Number(
+                                        geoConcentration?.international_country_count ||
+                                            0,
+                                    ).toLocaleString()}{" "}
+                                    countries represented
+                                </div>
+                            </>
+                        }
+                    />
+                </div>
             </Card>
 
             <div className="dashboard-grid dashboard-grid-equal">
-            <Card
+            <div
+                ref={stateMapCardRef}
+                style={{
+                    minWidth: 0,
+                    height: "100%",
+                }}
+            >
+                <Card
                 title="Accounts by State"
                 sub="Account concentration across the United States"
                 action={<ChartInfo id="accountsByState" />}
-            >
+                style={{ height: "100%", boxSizing: "border-box" }}
+                >
                 <AccountsUSMap
-                data={membersByState}
-                onStateClick={handleStateClick}
+                    data={membersByState}
+                    onStateClick={handleStateClick}
                 />
-            </Card>
+                </Card>
+            </div>
 
-            <div ref={countryChartRef}>
+            <div
+                ref={countryChartRef}
+                style={{
+                    minWidth: 0,
+                    height: "100%",
+                }}
+            >
                 <Card
                 title="Accounts by Country"
-                sub="Click a country to view its accounts"
+                sub={countryChartSubtitle}
                 action={<ChartInfo id="accountsByCountry" />}
+                style={{ height: "100%", boxSizing: "border-box" }}
                 >
                 <div
-                    className="dashboard-chart"
                     style={{
-                    height: Math.max(
-                        260,
-                        membersByCountry.length * 30,
-                    ),
-                    maxHeight: 318,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        marginBottom: 14,
+                        flexWrap: "wrap",
                     }}
                 >
-                    <ResponsiveContainer
-                    width="100%"
-                    height="100%"
+                    <label
+                        style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 8,
+                        }}
                     >
-                    <BarChart
-                        data={membersByCountry}
-                        layout="vertical"
-                        margin={{ left: 12 }}
-                        barCategoryGap="22%"
+                        <span className="dashboard-eyebrow">
+                            Countries shown
+                        </span>
+
+                        <select
+                            value={countriesShown}
+                            onChange={(event) =>
+                                setCountriesShown(
+                                    event.target.value,
+                                )
+                            }
+                            style={{
+                                padding: "8px 10px",
+                                borderRadius: 10,
+                                border: `1px solid ${C.border}`,
+                                background: C.bg,
+                                color: C.text,
+                                fontSize: 12,
+                            }}
+                        >
+                            <option value="Top 5">Top 5</option>
+                            <option value="Top 10">Top 10</option>
+                            <option value="Top 15">Top 15</option>
+                            <option value="Top 20">Top 20</option>
+                            <option value="All countries">
+                                All countries
+                            </option>
+                        </select>
+                    </label>
+
+                    <button
+                        type="button"
+                        onClick={clearCountryFilters}
+                        style={{
+                            padding: "8px 12px",
+                            borderRadius: 10,
+                            border: `1px solid ${C.border}`,
+                            background: C.bg,
+                            color: C.accent2,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: "pointer",
+                        }}
                     >
-                        <CartesianGrid
-                        strokeDasharray="3 3"
-                        stroke={GRID}
-                        horizontal={false}
-                        />
-
-                        <XAxis
-                        type="number"
-                        stroke={AX}
-                        fontSize={11}
-                        />
-
-                        <YAxis
-                        type="category"
-                        dataKey="country"
-                        stroke={AX}
-                        fontSize={10}
-                        width={115}
-                        interval={0}
-                        tickLine={false}
-                        />
-
-                        <Tooltip contentStyle={TIP} />
-
-                        <Bar
-                            dataKey="total"
-                            name="Accounts"
-                            fill="var(--dashboard-muted)"
-                            radius={[0, 6, 6, 0]}
-                            maxBarSize={20}
-                            cursor="pointer"
-                            onClick={handleCountryClick}
-                            background={(props) => (
-                                <ClickableBarRow
-                                {...props}
-                                onRowClick={handleCountryClick}
-                                />
-                            )}
-                            />
-                    </BarChart>
-                    </ResponsiveContainer>
+                        Clear
+                    </button>
+                </div>
+                <div
+                    ref={countryScrollRef}
+                    style={{
+                        height: COUNTRY_CHART_VISIBLE_HEIGHT,
+                        overflowY:
+                            countryChartHeight >
+                            COUNTRY_CHART_VISIBLE_HEIGHT
+                                ? "auto"
+                                : "hidden",
+                        overflowX: "hidden",
+                        paddingRight: 4,
+                    }}
+                >
+                    <div
+                        style={{
+                            height: countryChartHeight,
+                            minWidth: 0,
+                        }}
+                    >
+                        <ResponsiveContainer
+                            width="100%"
+                            height="100%"
+                        >
+                            {countryBarChart}
+                        </ResponsiveContainer>
+                    </div>
                 </div>
                 </Card>
             </div>
@@ -2301,7 +3047,140 @@ export default function DemographicsTab({
             }
             />
 
-            
+        {/* Other Countries drilldown — lists the countries folded into
+            the "Other Countries" bar; clicking one opens the normal
+            account drawer for that country. */}
+        {otherCountriesOpen && (
+            <div
+                role="dialog"
+                aria-modal="true"
+                aria-label="Other Countries breakdown"
+                onMouseDown={() => setOtherCountriesOpen(false)}
+                style={{
+                    position: "fixed",
+                    inset: 0,
+                    zIndex: 1500,
+                    background: "rgba(27, 38, 50, 0.34)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
+            >
+                <div
+                    onMouseDown={(event) =>
+                        event.stopPropagation()
+                    }
+                    style={{
+                        width: 380,
+                        maxWidth: "90vw",
+                        maxHeight: "70vh",
+                        overflowY: "auto",
+                        background: C.bg,
+                        border: `1px solid ${C.border}`,
+                        borderRadius: 16,
+                        padding: 20,
+                        boxShadow:
+                            "0 20px 50px rgba(0, 0, 0, 0.2)",
+                    }}
+                >
+                    <div
+                        style={{
+                            display: "flex",
+                            justifyContent:
+                                "space-between",
+                            alignItems: "center",
+                            marginBottom: 12,
+                        }}
+                    >
+                        <h3
+                            style={{
+                                margin: 0,
+                                fontFamily:
+                                    "'Cormorant Garamond', serif",
+                                fontSize: 22,
+                                color: C.text,
+                            }}
+                        >
+                            Other Countries
+                        </h3>
+
+                        <button
+                            type="button"
+                            onClick={() =>
+                                setOtherCountriesOpen(false)
+                            }
+                            aria-label="Close Other Countries breakdown"
+                            style={{
+                                border: "none",
+                                background: "none",
+                                cursor: "pointer",
+                                color: C.muted,
+                                padding: 2,
+                                display: "flex",
+                            }}
+                        >
+                            <X size={16} />
+                        </button>
+                    </div>
+
+                    <p
+                        style={{
+                            fontSize: 12,
+                            color: C.muted,
+                            marginBottom: 12,
+                        }}
+                    >
+                        Countries outside the current Top view,
+                        ranked by account total. Select one to view
+                        its accounts.
+                    </p>
+
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 6,
+                        }}
+                    >
+                        {(
+                            countryChartRows.find(
+                                (row) => row.isOtherCountries,
+                            )?.includedCountries ?? []
+                        ).map((row) => (
+                            <button
+                                key={row.country}
+                                type="button"
+                                onClick={() => {
+                                    setOtherCountriesOpen(false);
+                                    handleCountryClick(row);
+                                }}
+                                style={{
+                                    display: "flex",
+                                    justifyContent:
+                                        "space-between",
+                                    padding: "8px 10px",
+                                    borderRadius: 8,
+                                    border: `1px solid ${C.border}`,
+                                    background:
+                                        "var(--dashboard-panel-alt)",
+                                    cursor: "pointer",
+                                    fontSize: 12,
+                                    color: C.text,
+                                }}
+                            >
+                                <span>{row.country}</span>
+                                <span>
+                                    {Number(
+                                        row.total || 0,
+                                    ).toLocaleString()}
+                                </span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )}
+
         </>
     );
 }
