@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS folios (
     check_out_date         DATE,
     room_number            VARCHAR(50),
     villa_name             VARCHAR(255),
-    bedroom_count          INTEGER,
+    bedroom_count           INTEGER,
     persons                INTEGER,
     source                 VARCHAR(255),
     payment_type           VARCHAR(100),
@@ -250,7 +250,7 @@ CREATE TABLE IF NOT EXISTS reservation_guests (
     member_number          VARCHAR(50),
     guest_name             VARCHAR(255),
     folio                  VARCHAR(100),
-    is_owner               BOOLEAN,
+    is_owner                BOOLEAN,
     check_in_date          DATE,
     check_out_date         DATE,
     room_number            VARCHAR(50),
@@ -278,6 +278,35 @@ CREATE TABLE IF NOT EXISTS statements (
     due_date            DATE,
     amount_due          NUMERIC(12, 2),
     UNIQUE (member_number, statement_period)
+);
+
+-- Re-added 2026-07-03: itemized line items drilled from each statement
+-- period's detail page (statementNonPrintable.jsp), across BOTH
+-- receivable types (House and Dues Charges, Homeowner). One row per
+-- transaction line within a statement. See load_statement_details()
+-- below. Previously removed, then re-added per request to use real
+-- itemized membership dues instead of estimating via services+statements.
+--
+-- Primary key is a hash (statement_detail_key), not a raw UNIQUE
+-- constraint, since ref_transaction_id is sometimes blank (e.g.
+-- "Balance Forward" rows) and can't be relied on alone — same pattern
+-- already used for folios/rate_details.
+CREATE TABLE IF NOT EXISTS statement_details (
+    statement_detail_key    VARCHAR(64) PRIMARY KEY,
+    member_number           VARCHAR(50) REFERENCES members(member_number) ON DELETE CASCADE,
+    receivable_type         VARCHAR(50),
+    statement_period        VARCHAR(100),
+    statement_due_date      DATE,
+    transaction_date        DATE,
+    ref_transaction_id      VARCHAR(100),
+    description             VARCHAR(500),
+    charge                  NUMERIC(12, 2),
+    surcharge               NUMERIC(12, 2),
+    service_charge          NUMERIC(12, 2),
+    sales_tax               NUMERIC(12, 2),
+    amount                  NUMERIC(12, 2),
+    created_at              TIMESTAMP DEFAULT NOW(),
+    updated_at              TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS services (
@@ -324,7 +353,7 @@ FROM rate_details rd;
 """
 
 DROP_ALL = """
-DROP TABLE IF EXISTS interests, services, statements, recent_activity,
+DROP TABLE IF EXISTS interests, services, statement_details, statements, recent_activity,
     reservation_guests, business_source, rate_details, folios, rooms, dependent_phones, dependent_addresses, dependents,
     member_phones, member_addresses, members CASCADE;
 """
@@ -645,6 +674,82 @@ def create_tables(conn, recreate=False):
             ADD COLUMN IF NOT EXISTS payment_type VARCHAR(100),
             DROP COLUMN IF EXISTS journal_folder,
             DROP COLUMN IF EXISTS source_file
+        """)
+
+        # ── services: extended 2026-07-02 ──────────────────────────
+        # Was originally just a bare enrolled-service NAME list. Now
+        # also captures the dues/fee detail from Billing > Services
+        # (members_enrolled_services.jsp) — Type, Frequency, Start Date,
+        # Billed Upto, End Date, Amount — see load_services() below.
+        # Populated by journal_scraper.py (scrape_services(), folded
+        # into the main per-member pass alongside Rooms and Statements
+        # — no separate standalone script for this anymore).
+        cur.execute("""
+            ALTER TABLE IF EXISTS services
+            ADD COLUMN IF NOT EXISTS service_type VARCHAR(100),
+            ADD COLUMN IF NOT EXISTS frequency VARCHAR(50),
+            ADD COLUMN IF NOT EXISTS start_date DATE,
+            ADD COLUMN IF NOT EXISTS billed_upto DATE,
+            ADD COLUMN IF NOT EXISTS end_date DATE,
+            ADD COLUMN IF NOT EXISTS amount NUMERIC(12, 2)
+        """)
+
+        # The original UNIQUE (member_number, service_name) is no longer
+        # enough on its own — the same service name (e.g. "Family
+        # Membership Dues") can legitimately recur across renewal
+        # periods with different Start/Billed Upto/End dates, and the
+        # old constraint would silently collapse those into one row on
+        # upsert. Swap it for a composite key that includes start_date.
+        # Guarded with a pg_constraint existence check since Postgres
+        # has no "ADD CONSTRAINT IF NOT EXISTS", so this stays safe to
+        # run every time create_tables() runs, not just the first time.
+        cur.execute("""
+            ALTER TABLE IF EXISTS services
+            DROP CONSTRAINT IF EXISTS services_member_number_service_name_key
+        """)
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'services_member_number_service_name_start_date_key'
+                ) THEN
+                    ALTER TABLE services
+                    ADD CONSTRAINT services_member_number_service_name_start_date_key
+                    UNIQUE (member_number, service_name, start_date);
+                END IF;
+            END $$;
+        """)
+
+        # ── statements: extended 2026-07-02 ────────────────────────
+        # Added receivable_type — the same Statement Period can
+        # legitimately appear under BOTH "House and Dues Charges" and
+        # "Homeowner" for the same member (they're two completely
+        # different receivable ledgers, not duplicates of each other).
+        # The original UNIQUE (member_number, statement_period) would
+        # have silently collapsed those two different statements into
+        # one row on upsert — same class of bug already fixed for
+        # services' start_date. See load_statements() below.
+        cur.execute("""
+            ALTER TABLE IF EXISTS statements
+            ADD COLUMN IF NOT EXISTS receivable_type VARCHAR(50)
+        """)
+        cur.execute("""
+            ALTER TABLE IF EXISTS statements
+            DROP CONSTRAINT IF EXISTS statements_member_number_statement_period_key
+        """)
+        cur.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'statements_member_number_statement_period_receivable_type_key'
+                ) THEN
+                    ALTER TABLE statements
+                    ADD CONSTRAINT statements_member_number_statement_period_receivable_type_key
+                    UNIQUE (member_number, statement_period, receivable_type);
+                END IF;
+            END $$;
         """)
     conn.commit()
     log.info("Tables ready.")
@@ -982,7 +1087,25 @@ def load_recent_activity(conn, member_number, filepath, dry_run=False):
 
 
 def load_statements(conn, member_number, filepath, dry_run=False):
-    """Load _statements.csv into statements table."""
+    """
+    Load _statements.csv into statements table.
+
+    Extended 2026-07-02 to capture receivable_type — the scraper now
+    pulls BOTH receivable types (House and Dues Charges, Homeowner) via
+    the arAccountTypeId dropdown on the Statements page, tagging each
+    row with which one it came from (_receivable_type). These are two
+    genuinely different ledgers (membership dues/AR vs. per-villa
+    operating P&L for owner-members), so the same Statement Period can
+    legitimately appear once under each type for the same member.
+
+    Conflict key is (member_number, statement_period, receivable_type),
+    not just (member_number, statement_period) — the old key would
+    have silently collapsed a member's House-and-Dues and Homeowner
+    statements for the same period into a single row.
+
+    Falls back to receivable_type = NULL for any older-style CSVs that
+    predate this change (single receivable type, no tag column).
+    """
     try:
         df = pd.read_csv(filepath)
     except Exception as e:
@@ -1001,35 +1124,154 @@ def load_statements(conn, member_number, filepath, dry_run=False):
             "statement_period": period,
             "due_date":         clean_date(row.get("Due Date")),
             "amount_due":       clean_amount(row.get("Amount Due")),
+            "receivable_type":  clean_str(row.get("_receivable_type"), 50),
         })
 
     if rows:
         upsert_multi(conn, "statements", rows,
-                     ["member_number", "statement_period"], dry_run)
+                     ["member_number", "statement_period", "receivable_type"], dry_run)
         log.info(f"  statements: {len(rows)} rows")
 
 
-def load_services(conn, member_number, filepath, dry_run=False):
-    """Load _services.csv into services table."""
+def load_statement_details(conn, member_number, filepath, dry_run=False):
+    """
+    Load _statement_details.csv into statement_details table.
+
+    Re-added 2026-07-03 — itemized line items drilled from each statement
+    period's detail page (statementNonPrintable.jsp), across BOTH
+    receivable types. Expected columns from that page:
+        DATE, REF. / TRANSACTION ID, DESCRIPTION, CHARGE, Surcharge,
+        Service Charge, SALES TAX, AMOUNT
+    plus the scraper-tagged _receivable_type, _statement_period,
+    _statement_due_date columns identifying which summary row each
+    line item belongs to. Tries a couple of casing variants per column
+    since exact header casing on the live page wasn't independently
+    confirmed at build time.
+
+    Primary key is a hash (see statement_detail_key in the DDL), not a
+    raw multi-column UNIQUE constraint — ref_transaction_id is
+    sometimes blank (e.g. "Balance Forward" rows) and can't be relied
+    on alone as a distinguishing key.
+    """
     try:
         df = pd.read_csv(filepath)
     except Exception as e:
         log.warning(f"  Could not read {filepath}: {e}")
         return
 
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+
     rows = []
     for _, row in df.iterrows():
-        svc = clean_str(row.get("col_0") or row.get("Service") or row.get("service_name"))
-        if not svc or svc.lower() == "no matching records found":
+        receivable_type    = clean_str(get_first(row, "_receivable_type"), 50)
+        statement_period   = clean_str(get_first(row, "_statement_period"), 100)
+        statement_due_date = clean_date(get_first(row, "_statement_due_date"))
+        transaction_date   = clean_date(get_first(row, "DATE", "Date"))
+        ref_transaction_id = clean_str(get_first(row, "REF. / TRANSACTION ID", "Ref. / Transaction ID", "Ref / Transaction ID"), 100)
+        description         = clean_str(get_first(row, "DESCRIPTION", "Description"), 500)
+        charge              = clean_amount(get_first(row, "CHARGE", "Charge"))
+        surcharge           = clean_amount(get_first(row, "Surcharge", "SURCHARGE"))
+        service_charge      = clean_amount(get_first(row, "Service Charge", "SERVICE CHARGE"))
+        sales_tax           = clean_amount(get_first(row, "SALES TAX", "Sales Tax"))
+        amount              = clean_amount(get_first(row, "AMOUNT", "Amount"))
+
+        if not any([transaction_date, description, amount]):
+            continue
+
+        rows.append({
+            "statement_detail_key": make_folio_key(
+                member_number, receivable_type, statement_period,
+                transaction_date, ref_transaction_id, description, amount,
+            ),
+            "member_number":      member_number,
+            "receivable_type":    receivable_type,
+            "statement_period":   statement_period,
+            "statement_due_date": statement_due_date,
+            "transaction_date":   transaction_date,
+            "ref_transaction_id": ref_transaction_id,
+            "description":        description,
+            "charge":             charge,
+            "surcharge":          surcharge,
+            "service_charge":     service_charge,
+            "sales_tax":          sales_tax,
+            "amount":             amount,
+        })
+
+    if rows:
+        upsert(conn, "statement_details", rows, "statement_detail_key", dry_run)
+        log.info(f"  statement_details: {len(rows)} rows")
+
+
+def load_services(conn, member_number, filepath, dry_run=False):
+    """
+    Load _services.csv into services table.
+
+    Extended 2026-07-02 to capture the full Billing > Services detail
+    (members_enrolled_services.jsp) rather than just a bare service
+    name — dues/fees like Capital Expenditure Contribution, F&B
+    minimum, Family Membership Dues, GCT - Family Membership Dues,
+    Monthly Maintenance Fee, etc. Expected columns from that page:
+        Name, Type, Frequency, Start Date, Billed Upto, End Date, Amount
+
+    Falls back to a bare name-only column (Service/service_name/col_0)
+    for any older-style CSVs that predate the richer scrape — those
+    rows just get NULLs for type/frequency/dates/amount, same as
+    before this change.
+
+    Conflict key is (member_number, service_name, start_date), not just
+    (member_number, service_name) — the same service name can
+    legitimately recur across renewal periods (e.g. "Family Membership
+    Dues" billed 2019-2023, then again 2024-2025 at a different rate),
+    and collapsing those into one row would silently lose the older
+    period's amount/dates.
+    """
+    try:
+        df = pd.read_csv(filepath)
+    except Exception as e:
+        log.warning(f"  Could not read {filepath}: {e}")
+        return
+
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+
+    # Page-level error/empty-state messages that occasionally get scraped
+    # into the Name column instead of real service data — reject these
+    # outright, same treatment as "no matching records found".
+    PAGE_ERROR_PHRASES = {
+        "no matching records found",
+        "unable to process this request",
+    }
+
+    rows = []
+    for _, row in df.iterrows():
+        svc = clean_str(get_first(row, "Name", "Service", "service_name", "col_0"))
+        if not svc or svc.lower() in PAGE_ERROR_PHRASES:
+            continue
+        # Defensive sanity check (added 2026-07-02): a scraper bug briefly
+        # let unrelated table content — including a raw <script> JS blob
+        # from the site's popup-dialog framework — through as if it were
+        # a real service name, for a handful of members before the
+        # scraper itself was fixed to validate table headers. A real
+        # service/dues name is always short and free of code-like
+        # tokens; reject anything that looks like it wasn't actually
+        # from the Services table, as a second line of defense even
+        # with the scraper fix in place.
+        if len(svc) > 150 or any(tok in svc for tok in ("function(", "var ", "\n", "{", "};")):
+            log.warning(f"  Skipping implausible service_name for {member_number}: {svc[:60]!r}...")
             continue
         rows.append({
             "member_number": member_number,
             "service_name":  clean_category(svc, 255),
+            "service_type":  clean_category(get_first(row, "Type"), 100),
+            "frequency":     clean_category(get_first(row, "Frequency"), 50),
+            "start_date":    clean_date(get_first(row, "Start Date")),
+            "billed_upto":   clean_date(get_first(row, "Billed Upto")),
+            "end_date":      clean_date(get_first(row, "End Date")),
+            "amount":        clean_amount(get_first(row, "Amount")),
         })
 
     if rows:
         upsert_multi(conn, "services", rows,
-                     ["member_number", "service_name"], dry_run)
+                     ["member_number", "service_name", "start_date"], dry_run)
         log.info(f"  services: {len(rows)} rows")
 
 
@@ -1400,13 +1642,14 @@ def load_rate_details(conn, dry_run=False):
 # ─────────────────────────────────────────────
 
 LOADERS = {
-    "profile":         load_profile,
-    "dependents":      load_dependents,
-    "rooms":           load_rooms,
-    "recent_activity": load_recent_activity,
-    "statements":      load_statements,
-    "services":        load_services,
-    "interests":       load_interests,
+    "profile":            load_profile,
+    "dependents":         load_dependents,
+    "rooms":              load_rooms,
+    "recent_activity":    load_recent_activity,
+    "statements":         load_statements,
+    "statement_details":  load_statement_details,
+    "services":           load_services,
+    "interests":          load_interests,
 }
 
 
@@ -1510,6 +1753,10 @@ def main():
                         help="Only load reports/business_source.csv and update folios.payment_type")
     parser.add_argument("--rate-details-only", action="store_true",
                         help="Only load rate_details_free.csv and rate_details_paid.csv into rate_details")
+    parser.add_argument("--services-and-statements-only", action="store_true",
+                        help="Only load *_services.csv and *_statements.csv from journal folders")
+    parser.add_argument("--statement-details-only", action="store_true",
+                        help="Only load *_statement_details.csv from journal folders")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -1523,6 +1770,8 @@ def main():
     print(f"Folios only:  {args.folios_only}")
     print(f"Business source only: {args.business_source_only}")
     print(f"Rate details only: {args.rate_details_only}")
+    print(f"Services and statements only: {args.services_and_statements_only}")
+    print(f"Statement details only: {args.statement_details_only}")
     print()
 
     try:
@@ -1565,6 +1814,164 @@ def main():
         print("=" * 60)
         print("ETL Complete")
         print("=" * 60)
+        return
+
+    if args.services_and_statements_only:
+        # Scans journal folders directly for {folder}_services.csv,
+        # {folder}_statements.csv, and {folder}_statement_details.csv,
+        # calling their respective loaders only — skips load_member()'s
+        # full LOADERS loop (profile/dependents/rooms/recent_activity/
+        # interests) entirely, so this doesn't waste time re-processing
+        # every other already-loaded file for ~38K members just to
+        # pick up new data. statement_details support re-added
+        # 2026-07-03 alongside the scraper itself re-adding itemized
+        # per-period drilling.
+        log.info("Skipping member/profile/folio load because --services-and-statements-only was used.")
+
+        if args.member:
+            folders = [os.path.join(JOURNAL_FOLDER, args.member)]
+            if not os.path.isdir(folders[0]):
+                log.error(f"Folder not found: {folders[0]}")
+                conn.close()
+                return
+        else:
+            folders = sorted([
+                f.path for f in os.scandir(JOURNAL_FOLDER)
+                if f.is_dir()
+            ])
+
+        if args.sample_rate < 1.0:
+            folders = [
+                f for f in folders
+                if keep_sample(os.path.basename(f), args.sample_rate)
+            ]
+
+        print(f"Members to check: {len(folders)}\n")
+
+        loaded_services, loaded_statements, loaded_details = [], [], []
+        skipped, failed = [], []
+        for folder in folders:
+            folder_name = os.path.basename(folder)
+            services_fp   = os.path.join(folder, f"{folder_name}_services.csv")
+            statements_fp = os.path.join(folder, f"{folder_name}_statements.csv")
+            details_fp    = os.path.join(folder, f"{folder_name}_statement_details.csv")
+
+            found_any = False
+            member_failed = False
+
+            if os.path.exists(services_fp):
+                found_any = True
+                try:
+                    load_services(conn, folder_name, services_fp, args.dry_run)
+                    loaded_services.append(folder_name)
+                except Exception as e:
+                    conn.rollback()
+                    log.error(f"Failed services for {folder_name}: {e}")
+                    member_failed = True
+
+            if os.path.exists(statements_fp):
+                found_any = True
+                try:
+                    load_statements(conn, folder_name, statements_fp, args.dry_run)
+                    loaded_statements.append(folder_name)
+                except Exception as e:
+                    conn.rollback()
+                    log.error(f"Failed statements for {folder_name}: {e}")
+                    member_failed = True
+
+            if os.path.exists(details_fp):
+                found_any = True
+                try:
+                    load_statement_details(conn, folder_name, details_fp, args.dry_run)
+                    loaded_details.append(folder_name)
+                except Exception as e:
+                    conn.rollback()
+                    log.error(f"Failed statement_details for {folder_name}: {e}")
+                    member_failed = True
+
+            if not found_any:
+                skipped.append(folder_name)
+                continue
+
+            if member_failed:
+                failed.append(folder_name)
+                continue
+
+            if not args.dry_run:
+                conn.commit()
+
+        conn.close()
+        print()
+        print("=" * 60)
+        print("ETL Complete (services + statements only)")
+        print("=" * 60)
+        print(f"  Loaded services:          {len(loaded_services)}")
+        print(f"  Loaded statements:        {len(loaded_statements)}")
+        print(f"  Loaded statement details: {len(loaded_details)}")
+        print(f"  Skipped (no CSVs yet):    {len(skipped)}")
+        print(f"  Failed:  {len(failed)}")
+        if failed:
+            print(f"  Failed members: {failed}")
+        return
+
+    if args.statement_details_only:
+        # Scans journal folders directly for {folder}_statement_details.csv
+        # only, calling load_statement_details() — skips everything else,
+        # including services.csv/statements.csv even if present in the
+        # same folder. Useful when you've re-scraped itemized statement
+        # detail specifically and don't want to waste time re-touching
+        # services/statements data that hasn't changed.
+        log.info("Skipping everything except statement_details because --statement-details-only was used.")
+
+        if args.member:
+            folders = [os.path.join(JOURNAL_FOLDER, args.member)]
+            if not os.path.isdir(folders[0]):
+                log.error(f"Folder not found: {folders[0]}")
+                conn.close()
+                return
+        else:
+            folders = sorted([
+                f.path for f in os.scandir(JOURNAL_FOLDER)
+                if f.is_dir()
+            ])
+
+        if args.sample_rate < 1.0:
+            folders = [
+                f for f in folders
+                if keep_sample(os.path.basename(f), args.sample_rate)
+            ]
+
+        print(f"Members to check: {len(folders)}\n")
+
+        loaded, skipped, failed = [], [], []
+        for folder in folders:
+            folder_name = os.path.basename(folder)
+            details_fp = os.path.join(folder, f"{folder_name}_statement_details.csv")
+
+            if not os.path.exists(details_fp):
+                skipped.append(folder_name)
+                continue
+
+            try:
+                load_statement_details(conn, folder_name, details_fp, args.dry_run)
+                if not args.dry_run:
+                    conn.commit()
+                loaded.append(folder_name)
+            except Exception as e:
+                conn.rollback()
+                log.error(f"Failed statement_details for {folder_name}: {e}")
+                failed.append(folder_name)
+
+        conn.close()
+        print()
+        print("=" * 60)
+        print("ETL Complete (statement details only)")
+        print("=" * 60)
+        print(f"  Loaded:  {len(loaded)}")
+        print(f"  Skipped (no _statement_details.csv yet): {len(skipped)}")
+        print(f"  Failed:  {len(failed)}")
+        if failed:
+            print(f"  Failed members: {failed}")
         return
 
     success, failed = [], []

@@ -28,8 +28,8 @@
 # needing two near-identical copies the way finance_backend.py currently
 # does (_villa_bookings_date_filter_sql / _rate_details_date_filter_sql).
 #
-# NOT date-filtered, on purpose: /member-status, /member-type, /amount-due,
-# /amount-due-by-period, /dependents. These describe CURRENT account/
+# NOT date-filtered, on purpose: /member-status, /member-type,
+# /dependents. These describe CURRENT account/
 # membership/balance state — there's no booking-stay date to filter them
 # against, and "members active as of [date range]" isn't a question this
 # data can answer. They stay as whole-portfolio snapshots regardless of
@@ -513,38 +513,13 @@ def overview_member_type(db: Session = Depends(overview_get_db)):
     """)
 
 
-# ─────────────────────────────────────────────────────────────────────────
-# /overview/amount-due
-#
-# Single-row rollup of total outstanding dues across all members. NOT
-# date-filtered — see module docstring at the top of this file.
-# ─────────────────────────────────────────────────────────────────────────
-@router.get("/amount-due")
-def overview_amount_due(db: Session = Depends(overview_get_db)):
-    return overview_one(db, """
-        SELECT overview_total_amount_due AS total_amount_due
-        FROM overview_statements_summary
-    """)
+# NOTE (2026-07-01): /overview/amount-due and /overview/amount-due-by-period
+# were removed here — folios stopped producing statements, so both endpoints
+# were only ever returning $0 / empty. The frontend no longer renders this
+# data (see OverviewTab.jsx). overview_statements_summary and
+# overview_statements_by_period (the SQL views these read from) are left
+# alone in overview_views.sql in case statement generation resumes later.
 
-
-# ─────────────────────────────────────────────────────────────────────────
-# /overview/amount-due-by-period
-#
-# Outstanding dues grouped by statement period. NOT date-filtered by the
-# Overview period picker — see module docstring at the top of this file
-# (this already has its OWN "period" dimension, statement_period, which
-# is a different concept from the booking-date filter everything else
-# here uses).
-# ─────────────────────────────────────────────────────────────────────────
-@router.get("/amount-due-by-period")
-def overview_amount_due_by_period(db: Session = Depends(overview_get_db)):
-    return overview_rows(db, """
-        SELECT
-            overview_statement_period  AS statement_period,
-            overview_total             AS total
-        FROM overview_statements_by_period
-        ORDER BY overview_statement_period
-    """)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -559,6 +534,185 @@ def overview_dependents(db: Session = Depends(overview_get_db)):
         SELECT overview_total_dependents AS total_dependents
         FROM overview_dependents_summary
     """)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /overview/email-on-file
+#
+# Single-row count of member/guest accounts with a non-blank email on
+# file. Snapshot, NOT date-filtered — same category as /member-status,
+# /member-type, /dependents above (see module docstring at the top of
+# this file).
+#
+# Reads the `members` table directly rather than a dedicated overview_*
+# view, since none exists yet for this — same precedent as
+# /villa-rack-rate-free's date-filtered branch, which also falls back to
+# a base table when the pre-built view can't answer the question. Powers
+# "With email on file" on the Members at a glance card, which used to
+# read this off a `directoryMembers` prop that dashboard.jsx always
+# passed as an empty array (never wired to a real data source) — added
+# 2026-07-01 to replace that dead path with an actual count.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/email-on-file")
+def overview_email_on_file(db: Session = Depends(overview_get_db)):
+    return overview_one(db, """
+        SELECT COUNT(*) AS with_email
+        FROM members
+        WHERE email IS NOT NULL AND TRIM(email) <> ''
+    """)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /overview/member-dues-summary
+#
+# Powers "Member vs guest revenue"'s Member dues figure, and (as of
+# 2026-07-03) Finance at a glance's Total revenue too. Folios has ZERO
+# membership-fee-type charges tied to Member accounts (confirmed by
+# joining every "Temp Membership Fee" folio line, AND independently by
+# transaction_category = 'Membership' — 122 rows either way, all Guest,
+# 0 Member). recent_activity is blank (that tab isn't scraped).
+#
+# Rebuilt 2026-07-03 to use REAL itemized statement charges
+# (statement_details — the itemized per-period detail scraped from
+# statementNonPrintable.jsp) instead of estimating from `services`
+# (Billing > Services enrollment) combined with statement balances.
+# `services` gave a known dues AMOUNT with no confirmation it was ever
+# actually charged/collected; `statement_details` gives the real, dated,
+# posted charge — no estimating needed.
+#
+# Filters to receivable_type = 'House and Dues Charges' only — excludes
+# 'Homeowner', a completely different concept (per-villa operating P&L
+# for owner-members, not membership dues). Within that, further filters
+# by description matching known dues-type charge names — the exact same
+# names as services.service_name (Capital Expenditure Contribution, F&B
+# minimum, Family Membership Dues, GCT - Family Membership Dues, Monthly
+# Maintenance Fee) — confirmed these appear verbatim as real line items
+# on the actual statement detail page, since both come from the same
+# underlying billing system. This excludes non-dues charges that might
+# also appear on a House-and-Dues statement (late fees, interest, etc.)
+# — mirrors exactly how "Temp Membership Fee" is isolated by description
+# for Guests in folios.
+#
+# Unlike the old services-based estimate, statement_details has a REAL
+# transaction_date per line — so this is now genuinely DATE-FILTERED by
+# the page's period picker, same as villa/amenity revenue elsewhere on
+# these two cards. column=end_column="transaction_date" in the shared
+# date-filter helper degenerates its stay-overlap logic into a plain
+# "does this single date fall within the requested period" check, which
+# is what a single point-in-time charge needs (no separate start/end
+# columns the way a booking has check-in/check-out).
+# ─────────────────────────────────────────────────────────────────────────
+DUES_DESCRIPTION_PATTERNS = [
+    "capital expenditure",
+    "f&b minimum",
+    "f & b minimum",
+    "membership dues",
+    "maintenance fee",
+]
+
+def _dues_description_filter_sql(alias="sd"):
+    """ILIKE OR-chain for known dues-type descriptions. Hardcoded list,
+    not user input, so building the SQL string directly is safe here."""
+    return " OR ".join(f"{alias}.description ILIKE '%{p}%'" for p in DUES_DESCRIPTION_PATTERNS)
+
+@router.get("/member-dues-summary")
+def overview_member_dues_summary(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    db: Session = Depends(overview_get_db),
+):
+    params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
+    dues_filter = _dues_description_filter_sql("sd")
+
+    overall = overview_one(db, f"""
+        SELECT
+            COUNT(*)                          AS charge_count,
+            COUNT(DISTINCT sd.member_number)  AS members_with_dues,
+            COALESCE(SUM(sd.amount), 0)       AS total_dues
+        FROM statement_details sd
+        WHERE sd.receivable_type = 'House and Dues Charges'
+          AND ({dues_filter})
+          {overview_date_filter_sql("sd", "transaction_date", "transaction_date")}
+    """, params)
+
+    by_type = overview_rows(db, f"""
+        SELECT
+            sd.description                AS service_name,
+            COUNT(*)                      AS enrollment_count,
+            COALESCE(SUM(sd.amount), 0)   AS total_amount
+        FROM statement_details sd
+        WHERE sd.receivable_type = 'House and Dues Charges'
+          AND ({dues_filter})
+          {overview_date_filter_sql("sd", "transaction_date", "transaction_date")}
+        GROUP BY sd.description
+        ORDER BY total_amount DESC
+        LIMIT 10
+    """, params)
+
+    return {**overall, "by_type": by_type}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /overview/outstanding-balance-summary
+#
+# Rebuilt 2026-07-03. An earlier "Outstanding" hero tile was removed on
+# 2026-07-01 because the OLD pipeline (statements generated from folios)
+# had stopped producing data — that figure was permanently stuck at $0.
+# That old pipeline has nothing to do with the `statements` table that
+# exists now — this is a completely separate, working scrape (Billing >
+# Statements, journal_scraper.py) with real amount_due balances across
+# BOTH receivable types (House and Dues Charges, Homeowner). Since real
+# data exists again, this rebuilds Outstanding using it.
+#
+# `amount_due` is a ROLLING balance per statement period, not a
+# per-period charge — summing every historical period for a member would
+# double/triple-count the same underlying balance as it carries forward.
+# Instead, takes each member's MOST RECENT statement PER RECEIVABLE TYPE
+# (DISTINCT ON) — a member can genuinely contribute to both a House-and-
+# Dues balance AND a Homeowner balance independently, since those are
+# separate ledgers. Only counts POSITIVE balances (> $0.01) as
+# "outstanding" — a $0 or credit balance means nothing is owed, same
+# threshold already used in /member-dues-summary above.
+#
+# Snapshot, NOT date-filtered by the period picker (same category as
+# /member-status, /member-type, /dependents above) — uses each account's
+# latest known statement, not anything tied to the page's date range.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/outstanding-balance-summary")
+def overview_outstanding_balance_summary(db: Session = Depends(overview_get_db)):
+    overall = overview_one(db, """
+        WITH latest_statement AS (
+            SELECT DISTINCT ON (member_number, receivable_type)
+                member_number, receivable_type, amount_due
+            FROM statements
+            ORDER BY member_number, receivable_type, due_date DESC NULLS LAST
+        )
+        SELECT
+            COUNT(*) FILTER (WHERE amount_due > 0.01)                      AS accounts_with_balance,
+            COALESCE(SUM(amount_due) FILTER (WHERE amount_due > 0.01), 0)  AS total_outstanding
+        FROM latest_statement
+    """)
+
+    by_type = overview_rows(db, """
+        WITH latest_statement AS (
+            SELECT DISTINCT ON (member_number, receivable_type)
+                member_number, receivable_type, amount_due
+            FROM statements
+            ORDER BY member_number, receivable_type, due_date DESC NULLS LAST
+        )
+        SELECT
+            receivable_type,
+            COUNT(*) FILTER (WHERE amount_due > 0.01)                      AS accounts_with_balance,
+            COALESCE(SUM(amount_due) FILTER (WHERE amount_due > 0.01), 0)  AS total_outstanding
+        FROM latest_statement
+        GROUP BY receivable_type
+        ORDER BY total_outstanding DESC
+    """)
+
+    return {**overall, "by_type": by_type}
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -758,15 +912,26 @@ def overview_reversals_summary(
     db: Session = Depends(overview_get_db),
 ):
     params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
+    # Fixed 2026-07-01: was filtering/summing overview_net_amount > 0, which
+    # silently EXCLUDED every "same-description" reversal (a charge and its
+    # reversal sharing one description, netted to a single net_amount = 0
+    # row before classification even runs — see overview_transaction_lines'
+    # docstring on 'Reversed' in overview_views.sql). The SQL view
+    # overview_reversals_summary was already fixed on 2026-06-28 to use
+    # overview_gross_charged_amount instead, but this endpoint (which
+    # re-implements the same logic inline so it can join overview_booking_meta
+    # for date filtering, which the plain view doesn't support) was never
+    # updated to match, and had been undercounting both reversed_count and
+    # reversed_total ever since. Now consistent with the view.
     return overview_one(db, f"""
         SELECT
-            COUNT(*)                                  AS reversed_count,
-            COALESCE(SUM(otl.overview_net_amount), 0) AS reversed_total
+            COUNT(*)                                          AS reversed_count,
+            COALESCE(SUM(otl.overview_gross_charged_amount), 0) AS reversed_total
         FROM overview_transaction_lines otl
         LEFT JOIN overview_booking_meta ovb
           ON ovb.overview_conf_code = otl.overview_conf_code
         WHERE otl.overview_line_status = 'Reversed'
-          AND otl.overview_net_amount > 0
+          AND otl.overview_gross_charged_amount > 0
           {overview_date_filter_sql("ovb")}
     """, params)
 
@@ -843,6 +1008,142 @@ def overview_anomalies_summary(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# /overview/tips-summary
+#
+# Single-row rollup of standalone Staff Tip lines (see overview_views.sql's
+# docstring on the 'Tip' status). Not product/service revenue, so excluded
+# from Amenity everywhere else on the Overview tab — this is the one place
+# the total is visible, same pattern as reversals/cash-advance/anomalies.
+# Added 2026-06-28.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/tips-summary")
+def overview_tips_summary(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    db: Session = Depends(overview_get_db),
+):
+    params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
+    return overview_one(db, f"""
+        SELECT
+            COUNT(*)                                  AS tip_count,
+            COALESCE(SUM(otl.overview_net_amount), 0) AS tip_total
+        FROM overview_transaction_lines otl
+        LEFT JOIN overview_booking_meta ovb
+          ON ovb.overview_conf_code = otl.overview_conf_code
+        WHERE otl.overview_line_status = 'Tip'
+          {overview_date_filter_sql("ovb")}
+    """, params)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /overview/internal-transfers-summary
+#
+# Single-row rollup of the 'InternalTransfer' lines — money reallocated
+# between sub-folios of one large multi-villa group booking, not a new
+# charge or a genuine refund to anyone (see overview_views.sql's docstring
+# on the 'InternalTransfer' status for two worked examples). Excluded from
+# Villa/Amenity revenue everywhere else on the Overview tab; this is the
+# one place the total is visible. Added 2026-06-28.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/internal-transfers-summary")
+def overview_internal_transfers_summary(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    db: Session = Depends(overview_get_db),
+):
+    params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
+    return overview_one(db, f"""
+        SELECT
+            COUNT(*)                                  AS internal_transfer_count,
+            COALESCE(SUM(otl.overview_net_amount), 0) AS internal_transfer_total
+        FROM overview_transaction_lines otl
+        LEFT JOIN overview_booking_meta ovb
+          ON ovb.overview_conf_code = otl.overview_conf_code
+        WHERE otl.overview_line_status = 'InternalTransfer'
+          {overview_date_filter_sql("ovb")}
+    """, params)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# /overview/payments-summary and /overview/payment-corrections-summary
+#
+# Total cash actually collected from guests (card/cash/check settlements
+# against folio balances), and corrections/reversals to those payments.
+# Unlike every other summary endpoint above, these query `folios` directly
+# rather than overview_transaction_lines — payment lines are excluded at
+# overview_charge_lines' very first WHERE clause and never reach the
+# netting/classification pipeline, since they're a fundamentally different
+# kind of row (a settlement, not a charge). Still joined to
+# overview_booking_meta for the date filter, same as every other endpoint
+# here, via conf_code. Added 2026-06-28.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/payments-summary")
+def overview_payments_summary(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    db: Session = Depends(overview_get_db),
+):
+    params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
+    return overview_one(db, f"""
+        SELECT
+            COUNT(*)                       AS payments_count,
+            COALESCE(SUM(f.amount), 0)     AS payments_total
+        FROM folios f
+        LEFT JOIN overview_booking_meta ovb
+          ON ovb.overview_conf_code = f.conf_code
+        WHERE f.conf_code IS NOT NULL
+          AND f.description IS NOT NULL
+          AND TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%payment%'
+          {overview_date_filter_sql("ovb")}
+    """, params)
+
+
+@router.get("/payment-corrections-summary")
+def overview_payment_corrections_summary(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    db: Session = Depends(overview_get_db),
+):
+    params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
+    return overview_one(db, f"""
+        SELECT
+            COUNT(*)                       AS payment_correction_count,
+            COALESCE(SUM(f.amount), 0)     AS payment_correction_total
+        FROM folios f
+        LEFT JOIN overview_booking_meta ovb
+          ON ovb.overview_conf_code = f.conf_code
+        WHERE f.conf_code IS NOT NULL
+          AND f.description IS NOT NULL
+          AND TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) NOT ILIKE '%payment%'
+          AND TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%rooms%'
+          AND (
+               TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%visa%'
+            OR TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%mastercard%'
+            OR TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%amex%'
+            OR TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%discover%'
+            OR TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%check%'
+            OR TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%cash%'
+            OR TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%bns%'
+            OR TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%ncb%'
+            OR TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%member charge%'
+          )
+          {overview_date_filter_sql("ovb")}
+    """, params)
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # /overview/anomalies
 #
 # The individual 'Anomaly' lines themselves — one row per line-item, for
@@ -900,33 +1201,68 @@ def overview_transaction_member_vs_guest_revenue(
 ):
     params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
     params["overview_line_status"] = overview_line_status
+    customer_type_case = """
+        CASE
+            WHEN ovb.overview_member_or_guest = 'Guest' THEN 'Guests'
+            ELSE 'Member'
+        END
+    """
+    # Fixed 2026-07-02: added the UNION ALL "Overall" branch below.
+    # uniqueAccounts is COUNT(DISTINCT conf_code) — that can't be
+    # correctly derived client-side by summing the Paid-row count and
+    # the Free-row count, since anyone with BOTH a paid and a free
+    # transaction would be double-counted (or, the way the frontend was
+    # actually doing it — via regroupSum, which only sums fields it's
+    # told to — uniqueAccounts wasn't being summed at all and the
+    # "Overall" view was just showing whichever of the Paid/Free rows
+    # happened to be encountered first, undercounting). This adds a
+    # genuinely combined COUNT(DISTINCT ...) row per customerType,
+    # tagged line_status='Overall', so the frontend can use it directly
+    # instead of trying to derive it. Deliberately ignores
+    # :overview_line_status (skipped entirely via the added
+    # ":overview_line_status IS NULL" condition below) since "Overall"
+    # always means every status combined, regardless of what a caller
+    # passed for the per-status rows above it.
     return overview_rows(db, f"""
-        SELECT
-            CASE
-                WHEN ovb.overview_member_or_guest = 'Guest' THEN 'Guests'
-                ELSE 'Member'
-            END                                                AS "customerType",
-            otl.overview_line_status                           AS line_status,
-            COALESCE(SUM(otl.overview_net_amount), 0)          AS revenue,
-            COALESCE(SUM(otl.overview_gross_charged_amount), 0) AS "valueGivenAway",
-            COUNT(*)                                            AS transactions,
-            COUNT(DISTINCT otl.overview_conf_code)               AS "uniqueAccounts"
-        FROM overview_transaction_lines otl
-        LEFT JOIN overview_booking_meta ovb
-          ON ovb.overview_conf_code = otl.overview_conf_code
-        WHERE otl.overview_line_status IN ('Paid', 'Free')
-          AND (
-            :overview_line_status IS NULL
-            OR otl.overview_line_status = :overview_line_status
-          )
-          {overview_date_filter_sql("ovb")}
-        GROUP BY
-            CASE
-                WHEN ovb.overview_member_or_guest = 'Guest' THEN 'Guests'
-                ELSE 'Member'
-            END,
-            otl.overview_line_status
+        SELECT "customerType", line_status, revenue, "valueGivenAway", transactions, "uniqueAccounts"
+        FROM (
+            SELECT
+                {customer_type_case}                                 AS "customerType",
+                otl.overview_line_status                             AS line_status,
+                COALESCE(SUM(otl.overview_net_amount), 0)            AS revenue,
+                COALESCE(SUM(otl.overview_gross_charged_amount), 0)  AS "valueGivenAway",
+                COUNT(*)                                             AS transactions,
+                COUNT(DISTINCT otl.overview_conf_code)               AS "uniqueAccounts"
+            FROM overview_transaction_lines otl
+            LEFT JOIN overview_booking_meta ovb
+              ON ovb.overview_conf_code = otl.overview_conf_code
+            WHERE otl.overview_line_status IN ('Paid', 'Free')
+              AND (
+                :overview_line_status IS NULL
+                OR otl.overview_line_status = :overview_line_status
+              )
+              {overview_date_filter_sql("ovb")}
+            GROUP BY {customer_type_case}, otl.overview_line_status
+
+            UNION ALL
+
+            SELECT
+                {customer_type_case}                                 AS "customerType",
+                'Overall'                                            AS line_status,
+                COALESCE(SUM(otl.overview_net_amount), 0)            AS revenue,
+                COALESCE(SUM(otl.overview_gross_charged_amount), 0)  AS "valueGivenAway",
+                COUNT(*)                                             AS transactions,
+                COUNT(DISTINCT otl.overview_conf_code)               AS "uniqueAccounts"
+            FROM overview_transaction_lines otl
+            LEFT JOIN overview_booking_meta ovb
+              ON ovb.overview_conf_code = otl.overview_conf_code
+            WHERE otl.overview_line_status IN ('Paid', 'Free')
+              AND :overview_line_status IS NULL
+              {overview_date_filter_sql("ovb")}
+            GROUP BY {customer_type_case}
+        ) combined
     """, params)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1061,15 +1397,71 @@ def overview_villa_rack_rate_free(
 
 
 # ─────────────────────────────────────────────────────────────────────────
+# /overview/rack-rate-summary
+#
+# Powers "Bookings at a glance"'s rack-rate-vs-ADR comparison (added
+# 2026-07-01, same request that added ADR to that card): total published
+# rack rate value ACROSS EVERY BOOKING (not just Free ones, unlike
+# /villa-rack-rate-free above), plus the room-night count needed to turn
+# that into a per-night rack rate average — so the frontend can compute
+# "how much of rack rate are we actually collecting" (ADR ÷ rack ADR) as
+# an effective-discount figure. Returns the same overall + by_payment_type
+# shape as /visits-summary-by-payment-type, so the frontend can pick the
+# row matching the Bookings card's own Paid/Free/Overall filter the same
+# way it already does for that endpoint.
+#
+# Reads rate_details_with_discount directly (same table /villa-rack-rate-
+# free's date-filtered branch uses) — ONE ROW PER NIGHT of a stay, so
+# COUNT(*) here is real room nights and SUM(rack_rate) is the total
+# would-be cost across every one of them. See villa-rack-rate-free's
+# docstring above (and overview_views.sql) for the full grain explanation.
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/rack-rate-summary")
+def overview_rack_rate_summary(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    db: Session = Depends(overview_get_db),
+):
+    params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
+
+    overview_overall_summary = overview_one(db, f"""
+        SELECT
+            COALESCE(SUM(rd.rack_rate), 0) AS rack_rate_total,
+            COUNT(*)                       AS total_room_nights
+        FROM rate_details_with_discount rd
+        WHERE rd.villa_name IS NOT NULL
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
+    """, params)
+
+    overview_summary_by_type = overview_rows(db, f"""
+        SELECT
+            rd.payment_type                AS villa_payment_type,
+            COALESCE(SUM(rd.rack_rate), 0) AS rack_rate_total,
+            COUNT(*)                       AS total_room_nights
+        FROM rate_details_with_discount rd
+        WHERE rd.villa_name IS NOT NULL
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
+        GROUP BY rd.payment_type
+    """, params)
+
+    return {
+        **overview_overall_summary,
+        "by_payment_type": overview_summary_by_type,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────
 # /overview/summary
 #
 # One-call bundle of everything the Overview tab needs, so the frontend
 # only needs a single fetch on page load. Accepts the same year / month /
 # date / start_date / end_date params as the individual endpoints and
 # threads them through to every date-aware sub-call; the snapshot
-# endpoints (member-status, member-type, amount-due, amount-due-by-
-# period, dependents) ignore them, per the module docstring at the top of
-# this file.
+# endpoints (member-status, member-type, dependents) ignore them, per the
+# module docstring at the top of this file.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/summary")
 def overview_summary(
@@ -1084,9 +1476,10 @@ def overview_summary(
     return {
         "overviewMemberStatus": overview_member_status(db=db),
         "overviewMemberType": overview_member_type(db=db),
-        "overviewAmountDue": overview_amount_due(db=db),
-        "overviewAmountDueByPeriod": overview_amount_due_by_period(db=db),
         "overviewDependents": overview_dependents(db=db),
+        "overviewEmailOnFile": overview_email_on_file(db=db),
+        "overviewMemberDuesSummary": overview_member_dues_summary(**date_kwargs, db=db),
+        "overviewOutstandingBalanceSummary": overview_outstanding_balance_summary(db=db),
         "overviewVillaStats": overview_villa_stats(overview_payment_type=None, **date_kwargs, db=db),
         "overviewBookingsByBedroom": overview_bookings_by_bedroom(overview_payment_type=None, **date_kwargs, db=db),
         "overviewMonthlyRevenue": overview_monthly_revenue(overview_payment_type=None, **date_kwargs, db=db),
@@ -1100,6 +1493,11 @@ def overview_summary(
         "overviewReversalsSummary": overview_reversals_summary(**date_kwargs, db=db),
         "overviewCashAdvanceSummary": overview_cash_advance_summary(**date_kwargs, db=db),
         "overviewAnomaliesSummary": overview_anomalies_summary(**date_kwargs, db=db),
+        "overviewTipsSummary": overview_tips_summary(**date_kwargs, db=db),
+        "overviewInternalTransfersSummary": overview_internal_transfers_summary(**date_kwargs, db=db),
+        "overviewPaymentsSummary": overview_payments_summary(**date_kwargs, db=db),
+        "overviewPaymentCorrectionsSummary": overview_payment_corrections_summary(**date_kwargs, db=db),
         "overviewAnomalies": overview_anomalies(**date_kwargs, db=db),
         "overviewVillaRackRateFree": overview_villa_rack_rate_free(**date_kwargs, db=db),
+        "overviewRackRateSummary": overview_rack_rate_summary(**date_kwargs, db=db),
     }

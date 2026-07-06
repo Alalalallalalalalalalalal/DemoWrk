@@ -1,8 +1,13 @@
 """
 journal_scraper.py — Build per-member journal folders.
-Scrapes the Rooms tab for each member, opens each reservation popup
-to extract contact info, and saves:
+For each member: scrapes Rooms (Member_Info tab, opening each
+reservation popup for contact info), then Services and Statements
+(Billing tab, both skipped for Guest accounts — see is_guest_folder()),
+before moving to the next member. Saves:
   - rooms CSV per member
+  - services CSV per member (Members only)
+  - statements CSV per member (Members only — both receivable types,
+    House and Dues Charges + Homeowner, summary rows only)
   - enriched profile CSV (contact/address fields filled from popup)
 """
 import os
@@ -41,7 +46,15 @@ TAB_MAX_RETRIES = 3
 
 GENERIC_LABELS = {"Guests", "Dependent", "Guest", "Staff"}
 
-TAB_HREF_FALLBACKS = {"rooms": "roomsInfo.do"}
+# Rooms, Services, and Statements tab identifiers — all three are
+# scraped in scrape_member() below, one after another, for every
+# member (Services/Statements skipped for Guests — see
+# is_guest_folder()).
+TAB_HREF_FALLBACKS = {
+    "rooms": "roomsInfo.do",
+    "services": "members_enrolled_services.jsp",
+    "statements": "memberStatements.jsp",
+}
 
 # Profile CSV fields to fill only if currently empty
 PROFILE_CONTACT_FIELDS = {
@@ -135,6 +148,23 @@ def load_profile_csv(folder_name):
     except Exception as e:
         print(f"    Could not load profile CSV: {e}")
         return None, None, None
+
+def is_guest_folder(folder_name):
+    """
+    True if the profile CSV says this account is a Guest, not a Member.
+    Services (dues/fees) only apply to actual members — added 2026-07-02
+    to skip attempting the Services tab entirely for guests, since it
+    would never have anything to find there.
+
+    Defaults to False (attempt Services) if the profile CSV is missing
+    or the field is blank/unrecognized — unsure means "try it" rather
+    than silently skipping someone who might actually be a member.
+    """
+    _, _, rows = load_profile_csv(folder_name)
+    if not rows:
+        return False
+    value = (rows[0].get("Member / Guest") or "").strip().lower()
+    return value == "guest"
 
 def enrich_profile_csv(folder_name, contact_data, prefix=""):
     """Write contact_data into profile CSV, only filling empty/null fields."""
@@ -539,26 +569,50 @@ def dump_popup_fields(frame, conf_code, prefix=""):
         print(f"    {prefix}[DEBUG] dump failed: {e}")
 
 def extract_table(table_el):
-    rows_data = []
+    """
+    Extract a <table> into a list of row dicts — same output shape as
+    before (keyed by header text, or col_0/col_1/... when headers don't
+    line up with the row's cell count).
+
+    Rewritten 2026-07-03 to do the whole extraction in ONE JavaScript
+    evaluate() call instead of looping in Python with .inner_text() on
+    every individual <th>/<td> — each of those was a separate
+    synchronous round-trip to the browser, so a 40-row x 8-column table
+    was 300+ round-trips. This does the equivalent logic natively
+    in-page and returns the finished result in a single call. Same
+    logic as the original Python loop, just executed where the DOM
+    already lives instead of round-tripping cell-by-cell.
+    """
     try:
-        headers = [th.inner_text().strip() for th in table_el.query_selector_all("th")]
-        if not headers:
-            first_row = table_el.query_selector("tr")
-            if first_row:
-                headers = [td.inner_text().strip() for td in first_row.query_selector_all("td")]
-        all_rows = table_el.query_selector_all("tr")
-        start = 1 if headers else 0
-        for row in all_rows[start:]:
-            cells = [td.inner_text().strip() for td in row.query_selector_all("td")]
-            if not any(cells):
-                continue
-            if headers and len(cells) == len(headers):
-                rows_data.append(dict(zip(headers, cells)))
-            else:
-                rows_data.append({f"col_{i}": v for i, v in enumerate(cells)})
+        return table_el.evaluate("""
+            (table) => {
+                const clean = (el) => (el.innerText || '').trim();
+                let headers = Array.from(table.querySelectorAll('th')).map(clean);
+                if (headers.length === 0) {
+                    const firstRow = table.querySelector('tr');
+                    if (firstRow) {
+                        headers = Array.from(firstRow.querySelectorAll('td')).map(clean);
+                    }
+                }
+                const allRows = Array.from(table.querySelectorAll('tr'));
+                const start = headers.length > 0 ? 1 : 0;
+                const out = [];
+                for (let i = start; i < allRows.length; i++) {
+                    const cells = Array.from(allRows[i].querySelectorAll('td')).map(clean);
+                    if (!cells.some(c => c)) continue;
+                    const obj = {};
+                    if (headers.length > 0 && cells.length === headers.length) {
+                        headers.forEach((h, idx) => { obj[h] = cells[idx]; });
+                    } else {
+                        cells.forEach((c, idx) => { obj['col_' + idx] = c; });
+                    }
+                    out.push(obj);
+                }
+                return out;
+            }
+        """)
     except Exception as e:
-        rows_data.append({"error": str(e)})
-    return rows_data
+        return [{"error": str(e)}]
 
 # ─────────────────────────────────────────────
 # RESERVATION POPUP — contact data only
@@ -764,6 +818,251 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
     return True, room_rows, merged_contact
 
 # ─────────────────────────────────────────────
+# SERVICES TAB (Billing > Services)
+# ─────────────────────────────────────────────
+# Integrated into the main scraper 2026-07-02 — previously a separate
+# interim script (services_scraper.py) that ran independently, now folded
+# directly into scrape_member() below so Rooms and Services both happen
+# before moving to the next member, sharing one done-log/one browser
+# session per member instead of two full separate passes over everyone.
+
+# The real Services table's column headers, per the actual page. A table
+# is only trusted as "the Services table" if its headers overlap enough
+# with this set, or it's explicitly the "No matching records found"
+# empty state — guards against unrelated tables (address widgets, hidden
+# dialog-framework <script> blobs) that can also be present on the page
+# getting scraped as if they were service data, which happened before
+# this check existed.
+EXPECTED_SERVICES_HEADERS = {
+    "Name", "Type", "Frequency", "Start Date", "Billed Upto", "End Date", "Amount"
+}
+
+def scrape_services(page, folder_name, prefix=""):
+    """
+    Extract the Billing > Services table: Name, Type, Frequency,
+    Start Date, Billed Upto, End Date, Amount. No popups needed here,
+    unlike Rooms — every column we want is already in the table itself.
+
+    Returns (success, service_rows).
+      success=True:  Services page loaded correctly, even with 0 records.
+      success=False: frame/table/page failed to load, no recognizable
+                      Services table was found, or an unexpected error
+                      occurred.
+    """
+    frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+    if not frame:
+        print(f"    {prefix}Services page failed: landing frame not found")
+        return False, []
+
+    try:
+        tables = frame.query_selector_all("table")
+        if not tables:
+            # The real Services table always renders something, even
+            # just the "No matching records found" empty state — zero
+            # tables on the page means we're not actually on Services.
+            print(f"    {prefix}No tables found — likely didn't land on the Services tab")
+            return False, []
+
+        matched_rows = None
+        for table in tables:
+            table_rows = extract_table(table)
+            if not table_rows:
+                continue
+
+            headers = set(table_rows[0].keys())
+            overlap = headers & EXPECTED_SERVICES_HEADERS
+            if len(overlap) >= 4:
+                matched_rows = table_rows
+                break
+
+            cell_values = {str(v).strip().lower() for row in table_rows for v in row.values()}
+
+            # Confirmed empty state — the page loaded fine and told us
+            # there's genuinely nothing there. Safe to record as [].
+            if "no matching records found" in cell_values:
+                matched_rows = []
+                break
+
+            # Error state (added 2026-07-02) — the page failed to load,
+            # NOT a confirmation of "no services". Must NOT be recorded
+            # as an empty result — that would wrongly mark a member as
+            # "checked, has nothing" when we actually don't know. Fall
+            # through to the retry path instead.
+            if "unable to process this request" in cell_values:
+                print(f"    {prefix}Page showed an error state ('Unable to process this request') — will retry")
+                return False, []
+
+        if matched_rows is None:
+            print(f"    {prefix}No recognizable Services table found on page")
+            return False, []
+
+        service_rows = []
+        for row in matched_rows:
+            row["_folder"]  = folder_name
+            row["_section"] = "Billing"
+            row["_tab"]     = "Services"
+            service_rows.append(row)
+
+        if not service_rows:
+            print(f"    {prefix}Services table is empty")
+        else:
+            print(f"    {prefix}Found {len(service_rows)} service row(s)")
+
+    except Exception as e:
+        print(f"    {prefix}Services scrape error: {e}")
+        return False, []
+
+    return True, service_rows
+
+# ─────────────────────────────────────────────
+# STATEMENTS TAB (Billing > Statements)
+# ─────────────────────────────────────────────
+# Added 2026-07-02, per request — summary-level only (Statement Period,
+# Due Date, Amount Due), NOT the itemized per-period detail page (which
+# would mean opening a separate page per statement period per member —
+# decided against for cost reasons at scale; can be added later as a
+# targeted follow-up if truly needed).
+#
+# Two receivable types exist behind a dropdown on this page
+# (select[name="arAccountTypeId"]) and BOTH are pulled, per request:
+#   value=1 "House and Dues Charges" — the actual membership dues/AR
+#            ledger (Amount Due per statement period).
+#   value=2 "Homeowner"              — a completely different concept:
+#            per-villa operating P&L for members who own a specific
+#            villa (staff wages, utilities, commissary charges, etc.),
+#            NOT membership dues. Kept as the same table with a
+#            receivable_type column rather than a separate table, since
+#            the summary-row SHAPE is identical for both — see
+#            cleaner.py's load_statements() for how they're
+#            distinguished downstream.
+
+EXPECTED_STATEMENTS_HEADERS = {"Statement Periods", "Due Date", "Amount Due"}
+
+RECEIVABLE_TYPES = [
+    ("1", "House and Dues Charges"),
+    ("2", "Homeowner"),
+]
+
+def scrape_statements(page, folder_name, prefix=""):
+    """
+    Extract the Billing > Statements summary table for BOTH receivable
+    types via the arAccountTypeId dropdown, tagging each row with which
+    type it came from.
+
+    Reverted 2026-07-03 to summary-only, per request — the itemized
+    per-period detail drilling (statement_details, back-navigation,
+    max_periods, etc.) has been fully removed. This is back to exactly
+    what it was before that feature was added: one row per statement
+    period, no drilling into individual statements.
+
+    Returns (success, statement_rows).
+      success=True:  at least one receivable type's table loaded
+                      correctly (even with 0 records for that type).
+      success=False: frame/dropdown failed entirely, or NEITHER
+                      receivable type produced a recognizable table.
+    """
+    frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+    if not frame:
+        print(f"    {prefix}Statements page failed: landing frame not found")
+        return False, []
+
+    all_rows = []
+    any_type_succeeded = False
+
+    for value, label in RECEIVABLE_TYPES:
+        try:
+            # Fixed 2026-07-03: was querying for the dropdown immediately
+            # after landing on the tab, with no wait — the generic
+            # "did content change" check in click_subtab() only confirms
+            # SOME content changed, not that this specific element has
+            # finished rendering yet. Explicitly wait for the dropdown
+            # itself before touching it.
+            #
+            # Shortened 2026-07-03 from 6000ms to 2500ms — most of your
+            # 38K accounts are Guests, and if their profile CSV doesn't
+            # exist yet, is_guest_folder() defaults to "attempt it"
+            # rather than silently skip a possible real member. For
+            # every one of those accounts that turns out to genuinely
+            # have no Statements dropdown, the old 6s wait meant up to
+            # 6s x 2 receivable types x 3 retry attempts = 36s of dead
+            # waiting apiece — at scale, this was very likely the
+            # actual cause of "way slower than initial runs." A
+            # dropdown either appears almost instantly on a real
+            # success, or never appears at all — there's rarely a
+            # legitimate slow-but-eventually-there case in between.
+            try:
+                frame.wait_for_selector('select[name="arAccountTypeId"]', timeout=2500)
+            except Exception:
+                pass
+
+            dropdown = frame.query_selector('select[name="arAccountTypeId"]')
+            if not dropdown:
+                print(f"    {prefix}Statements: receivable-type dropdown not found for {label}")
+                continue
+
+            dropdown.select_option(value=value)
+            page.wait_for_timeout(1500)
+
+            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not frame:
+                print(f"    {prefix}Statements: landing frame lost after switching to {label}")
+                continue
+
+            tables = frame.query_selector_all("table")
+            if not tables:
+                print(f"    {prefix}Statements: no tables found for {label}")
+                continue
+
+            # Header-validation pattern also used for Services — only
+            # trust a table that plausibly matches the real Statements
+            # shape, or is explicitly a confirmed-empty/error state,
+            # rather than grabbing whatever table happens to be on the
+            # page.
+            matched_rows = None
+            for table in tables:
+                table_rows = extract_table(table)
+                if not table_rows:
+                    continue
+
+                headers = set(table_rows[0].keys())
+                overlap = headers & EXPECTED_STATEMENTS_HEADERS
+                if len(overlap) >= 2:
+                    matched_rows = table_rows
+                    break
+
+                cell_values = {str(v).strip().lower() for row in table_rows for v in row.values()}
+                if "no matching records found" in cell_values:
+                    matched_rows = []
+                    break
+                if "unable to process this request" in cell_values:
+                    print(f"    {prefix}Statements: page showed an error state for {label}")
+                    continue
+
+            if matched_rows is None:
+                print(f"    {prefix}Statements: no recognizable table found for {label}")
+                continue
+
+            for row in matched_rows:
+                row["_folder"]          = folder_name
+                row["_section"]         = "Billing"
+                row["_tab"]             = "Statements"
+                row["_receivable_type"] = label
+                all_rows.append(row)
+
+            any_type_succeeded = True
+            print(f"    {prefix}Statements ({label}): {len(matched_rows)} row(s)")
+
+        except Exception as e:
+            print(f"    {prefix}Statements scrape error for {label}: {e}")
+            continue
+
+    if not any_type_succeeded:
+        return False, []
+
+    return True, all_rows
+
+
+# ─────────────────────────────────────────────
 # PER-MEMBER SCRAPE
 # ─────────────────────────────────────────────
 def scrape_member(page, member_number, member_id, prefix=""):
@@ -836,6 +1135,137 @@ def scrape_member(page, member_number, member_id, prefix=""):
         print(f"    {prefix}Rooms: exhausted retries")
         return False, saved
 
+    # ── Billing > Services (integrated 2026-07-02) ─────────────────
+    # Runs after Rooms, before moving to the next member — folded in
+    # from the interim services_scraper.py script so both happen in one
+    # pass per member instead of two separate full runs. Skipped
+    # entirely for Guest accounts, since services/dues only apply to
+    # actual Members (see is_guest_folder()). A Services failure does
+    # NOT fail the whole member — Rooms is the primary, load-bearing
+    # data and has already succeeded by this point; Services failures
+    # are just logged, and this member stays eligible for a later
+    # targeted re-run without losing the Rooms data already captured.
+    if is_guest_folder(folder_name):
+        print(f"    {prefix}Services: skipped (guest account)")
+        services_confirmed_empty = False
+    else:
+        services_done = False
+        services_confirmed_empty = False
+        for attempt in range(1, TAB_MAX_RETRIES + 1):
+            note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
+            print(f"    {prefix}Services{note}")
+
+            shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not shell:
+                print(f"    {prefix}Shell lost — re-navigating to member")
+                if not navigate_to_member(page, member_id, prefix):
+                    break
+                shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+                if not shell:
+                    break
+
+            open_member_dropdown(shell, page)
+            click_section(shell, page, "Billing")
+            if not click_subtab(shell, page, "members_enrolled_services", TAB_HREF_FALLBACKS["services"], prefix):
+                take_screenshot(page, f"no_tab_{folder_name}_services")
+                if attempt < TAB_MAX_RETRIES:
+                    page.wait_for_timeout(1000 * attempt)
+                continue
+
+            services_success, service_rows = scrape_services(page, folder_name, prefix)
+            if not services_success:
+                print(f"    {prefix}Services scraping failed")
+                if attempt < TAB_MAX_RETRIES:
+                    page.wait_for_timeout(1000 * attempt)
+                    continue
+                print(f"    {prefix}Services: exhausted retries — continuing anyway (Rooms already saved)")
+                break
+
+            if service_rows:
+                fp = save_tab_csv(folder_name, "services", service_rows)
+                if fp:
+                    saved["services"] = fp
+                    print(f"    {prefix}Services: {len(service_rows)} row(s) → {os.path.basename(fp)}")
+                else:
+                    print(f"    {prefix}Services CSV could not be saved")
+            else:
+                # Confirmed empty (Services genuinely loaded and had
+                # nothing) — NOT the same as a failed/uncertain attempt.
+                # Added 2026-07-03: confirmed pattern across many
+                # accounts — a member with zero Services enrollments
+                # also has zero Statements, so this skips the much
+                # more expensive Statements attempt below (2 receivable
+                # types x dropdown waits x retries) for accounts we
+                # already have real evidence about, rather than
+                # guessing. A FAILED Services attempt does NOT set this
+                # — "we don't know" still means "try Statements anyway."
+                services_confirmed_empty = True
+                print(f"    {prefix}Services: no data — processed successfully")
+
+            services_done = True
+            break
+
+        if not services_done:
+            print(f"    {prefix}Services: not completed this run")
+
+    # ── Billing > Statements (added 2026-07-02) ─────────────────────
+    # Runs after Services, before moving to the next member. Same
+    # guest-skip and non-fatal-failure treatment as Services above —
+    # statements/dues only apply to actual Members, and a Statements
+    # failure doesn't undo the Rooms/Services data already captured
+    # for this member.
+    if is_guest_folder(folder_name):
+        print(f"    {prefix}Statements: skipped (guest account)")
+    elif services_confirmed_empty:
+        print(f"    {prefix}Statements: skipped (Services confirmed empty — same account has no statements)")
+    else:
+        statements_done = False
+        for attempt in range(1, TAB_MAX_RETRIES + 1):
+            note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
+            print(f"    {prefix}Statements{note}")
+
+            shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not shell:
+                print(f"    {prefix}Shell lost — re-navigating to member")
+                if not navigate_to_member(page, member_id, prefix):
+                    break
+                shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+                if not shell:
+                    break
+
+            open_member_dropdown(shell, page)
+            click_section(shell, page, "Billing")
+            if not click_subtab(shell, page, "memberStatements", TAB_HREF_FALLBACKS["statements"], prefix):
+                take_screenshot(page, f"no_tab_{folder_name}_statements")
+                if attempt < TAB_MAX_RETRIES:
+                    page.wait_for_timeout(1000 * attempt)
+                continue
+
+            statements_success, statement_rows = scrape_statements(page, folder_name, prefix)
+            if not statements_success:
+                print(f"    {prefix}Statements scraping failed")
+                if attempt < TAB_MAX_RETRIES:
+                    page.wait_for_timeout(1000 * attempt)
+                    continue
+                print(f"    {prefix}Statements: exhausted retries — continuing anyway (Rooms/Services already saved)")
+                break
+
+            if statement_rows:
+                fp = save_tab_csv(folder_name, "statements", statement_rows)
+                if fp:
+                    saved["statements"] = fp
+                    print(f"    {prefix}Statements: {len(statement_rows)} row(s) → {os.path.basename(fp)}")
+                else:
+                    print(f"    {prefix}Statements CSV could not be saved")
+            else:
+                print(f"    {prefix}Statements: no data — processed successfully")
+
+            statements_done = True
+            break
+
+        if not statements_done:
+            print(f"    {prefix}Statements: not completed this run")
+
     return True, saved
 
 # ─────────────────────────────────────────────
@@ -901,7 +1331,7 @@ def scrape_chunk(args):
                     if saved:
                         print(f"  {prefix}✓ {member_number}: {len(saved)} file(s) saved")
                     else:
-                        print(f"  {prefix}✓ {member_number}: processed successfully — no room records")
+                        print(f"  {prefix}✓ {member_number}: processed successfully — no records")
                     results["success"].append(folder_name)
                 else:
                     print(f"  {prefix}✗ {member_number}: page or Rooms tab failed to load")
