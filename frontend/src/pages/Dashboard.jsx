@@ -122,8 +122,6 @@ export default function Dashboard() {
   const [totalRecentActivitySpend, setTotalRecentActivitySpend] =
     useState(null);
   const [topSpendDescriptions, setTopSpendDescriptions] = useState([]);
-  const [totalAmountDue, setTotalAmountDue] = useState(null);
-  const [amountDueByPeriod, setAmountDueByPeriod] = useState([]);
   const [totalDependents, setTotalDependents] = useState(null);
   const [dependentsPerHousehold, setDependentsPerHousehold] = useState([]);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
@@ -162,9 +160,17 @@ export default function Dashboard() {
   const [monthlyRevenueByCategory, setMonthlyRevenueByCategory] = useState([]);
   const [reversalsSummary, setReversalsSummary] = useState(null);
   const [villaRackRateFree, setVillaRackRateFree] = useState([]);
+  const [rackRateSummary, setRackRateSummary] = useState(null);
   const [cashAdvanceSummary, setCashAdvanceSummary] = useState(null);
   const [anomaliesSummary, setAnomaliesSummary] = useState(null);
   const [anomalies, setAnomalies] = useState([]);
+  const [tipsSummary, setTipsSummary] = useState(null);
+  const [internalTransfersSummary, setInternalTransfersSummary] = useState(null);
+  const [paymentsSummary, setPaymentsSummary] = useState(null);
+  const [paymentCorrectionsSummary, setPaymentCorrectionsSummary] = useState(null);
+  const [emailOnFile, setEmailOnFile] = useState(null);
+  const [memberDuesSummary, setMemberDuesSummary] = useState(null);
+  const [outstandingBalanceSummary, setOutstandingBalanceSummary] = useState(null);
 
   useEffect(() => {
     // ── Non-Overview data: members by country/state/gender/age, dependents
@@ -195,9 +201,11 @@ export default function Dashboard() {
         setDependentsByAgeGroup(data.dependentsByAgeGroup ?? []);
         setDependentsPerMember(data.dependentsPerMember ?? []);
         setDependentsPerHousehold(data.dependentsPerHousehold ?? []);
-        // NOTE: totalAmountDue, amountDueByPeriod, and totalDependents are
-        // intentionally NOT set here anymore — they now come from
-        // /overview/summary below, so there's only one writer for each.
+        // NOTE: totalDependents is intentionally NOT set here anymore — it
+        // now comes from /overview/summary below, so there's only one
+        // writer for it. (totalAmountDue/amountDueByPeriod removed
+        // 2026-07-01 — statements stopped generating from folios; see
+        // overview_analytics.py.)
       })
       .catch(console.error);
 
@@ -262,14 +270,20 @@ export default function Dashboard() {
           setMonthlyRevenueByCategory(
             data.overviewMonthlyRevenueByCategory ?? [],
           );
-          setTotalAmountDue(data.overviewAmountDue ?? null);
-          setAmountDueByPeriod(data.overviewAmountDueByPeriod ?? []);
           setTotalDependents(data.overviewDependents ?? null);
           setReversalsSummary(data.overviewReversalsSummary ?? null);
           setVillaRackRateFree(data.overviewVillaRackRateFree ?? []);
+          setRackRateSummary(data.overviewRackRateSummary ?? null);
           setCashAdvanceSummary(data.overviewCashAdvanceSummary ?? null);
           setAnomaliesSummary(data.overviewAnomaliesSummary ?? null);
           setAnomalies(data.overviewAnomalies ?? []);
+          setTipsSummary(data.overviewTipsSummary ?? null);
+          setInternalTransfersSummary(data.overviewInternalTransfersSummary ?? null);
+          setPaymentsSummary(data.overviewPaymentsSummary ?? null);
+          setPaymentCorrectionsSummary(data.overviewPaymentCorrectionsSummary ?? null);
+          setEmailOnFile(data.overviewEmailOnFile ?? null);
+          setMemberDuesSummary(data.overviewMemberDuesSummary ?? null);
+          setOutstandingBalanceSummary(data.overviewOutstandingBalanceSummary ?? null);
           // villaRevenue (rental-revenue-per-villa) is no longer fetched —
           // "Top villas by revenue" now uses villaAmenityRevenue instead.
           setVillaRevenue([]);
@@ -495,6 +509,7 @@ export default function Dashboard() {
             membersByCountry={membersByCountry}
             membersByState={membersByState}
             membersByMaritalStatus={membersByMaritalStatus}
+            newMembersPerYear={newMembersPerYear}
             averageTenure={averageTenure}
             averageLengthOfStay={averageLengthOfStay}
             bookingsByMonth={bookingsByMonth}
@@ -502,11 +517,11 @@ export default function Dashboard() {
             mostUsedRoomTypes={mostUsedRoomTypes}
             totalDependents={totalDependents}
             dependentsPerMember={dependentsPerMember}
-            totalAmountDue={totalAmountDue}
-            amountDueByPeriod={amountDueByPeriod}
             totalRecentActivitySpend={totalRecentActivitySpend}
             topSpendDescriptions={topSpendDescriptions}
-            directoryMembers={[]}
+            emailOnFile={emailOnFile}
+            memberDuesSummary={memberDuesSummary}
+            outstandingBalanceSummary={outstandingBalanceSummary}
             memberVsGuestRevenue={memberVsGuestRevenue}
             villaStats={villaStats}
             visitsTabSummary={visitsTabSummary}
@@ -522,9 +537,14 @@ export default function Dashboard() {
             monthlyRevenueByCategory={monthlyRevenueByCategory}
             reversalsSummary={reversalsSummary}
             villaRackRateFree={villaRackRateFree}
+            rackRateSummary={rackRateSummary}
             cashAdvanceSummary={cashAdvanceSummary}
             anomaliesSummary={anomaliesSummary}
             anomalies={anomalies}
+            tipsSummary={tipsSummary}
+            internalTransfersSummary={internalTransfersSummary}
+            paymentsSummary={paymentsSummary}
+            paymentCorrectionsSummary={paymentCorrectionsSummary}
           />
         )}
 

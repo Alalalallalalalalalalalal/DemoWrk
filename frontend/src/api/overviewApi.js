@@ -116,6 +116,35 @@ export const overviewApi = {
     // Backend route: GET /overview/cash-advance-summary
     cashAdvanceSummary: () => get("/cash-advance-summary"),
 
+    // [overview] Net total + count of standalone Staff Tip lines — NOT
+    // product/service revenue, so excluded from every Amenity total
+    // elsewhere on the page. Powers the "Tips" line on Finance at a
+    // glance, same pattern as cashAdvanceSummary above. Added 2026-06-28.
+    // Backend route: GET /overview/tips-summary
+    tipsSummary: () => get("/tips-summary"),
+
+    // [overview] Net total + count of 'InternalTransfer' lines — money
+    // reallocated between sub-folios of one large multi-villa group
+    // booking (weddings, events), not a new charge or a refund to
+    // anyone. Excluded from Villa/Amenity revenue elsewhere on the page.
+    // Powers the "Internal transfers" line on Finance at a glance. Added
+    // 2026-06-28.
+    // Backend route: GET /overview/internal-transfers-summary
+    internalTransfersSummary: () => get("/internal-transfers-summary"),
+
+    // [overview] Total cash actually collected from guests (card/cash/
+    // check settlements against folio balances) — and, separately, the
+    // smaller bucket of corrections/reversals to those payments. Neither
+    // of these flows through overview_transaction_lines (payment lines
+    // are excluded from that pipeline entirely, see overview_views.sql),
+    // so they're sourced directly from folios instead. Powers the
+    // "Payments collected" / "Payment corrections" lines on Finance at a
+    // glance. Added 2026-06-28.
+    // Backend routes: GET /overview/payments-summary,
+    //                 GET /overview/payment-corrections-summary
+    paymentsSummary: () => get("/payments-summary"),
+    paymentCorrectionsSummary: () => get("/payment-corrections-summary"),
+
     // [overview] Net total + count of 'Anomaly' lines (credits/refunds
     // that couldn't be matched cleanly enough to call Reversed) — already
     // excluded from every revenue total elsewhere; powers the
