@@ -207,25 +207,31 @@ def scrape_member_info_fields(page, prefix=""):
     frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not frame:
         return {}
+    
+    try:
+        frame.wait_for_function(
+            """() => {
+                const el = document.querySelector('input[name="FirstName"]');
+                return el && el.value && el.value.trim().length > 0;
+            }""",
+            timeout=4000
+        )
+    except Exception:
+        page.wait_for_timeout(1000)
+
     data = {
         "Deactivation Date": "",
         "Date of Death":     "",
-        "Billing Cycle":     "",
-        "Bill To Member":    "",
-        "FICO Score":        "",
     }
     field_map = {
         "Deactivation Date": 'input[name="DeactivationDate"]',
         "Date of Death":     'input[name="deathDate"]',
-        "Billing Cycle":     'input[name="BillingCycleIdDisplay"]',
-        "Bill To Member":    'input[name="BillTo"]',
-        "FICO Score":        'input[name="FICOScore"]',
     }
     try:
         for key, selector in field_map.items():
             el = frame.query_selector(selector)
             if el:
-                value = (el.get_attribute("value") or "").strip()
+                value = strip_val(el.evaluate("el => el.value || ''"))
                 if value:
                     data[key] = value
     except Exception as e:
