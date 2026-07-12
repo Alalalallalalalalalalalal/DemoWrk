@@ -7,7 +7,7 @@ from datetime import datetime
 from config import OUTPUT_FOLDER, REPORTS_FOLDER
 from report_utils import find_reports_frame
 
-REPORT_ID   = 5
+REPORT_ID   = 7
 REPORT_NAME = "member_demographics"
 SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
 
@@ -29,7 +29,7 @@ def download(page):
         raise Exception(f"Could not find radio button for reportId={REPORT_ID}")
     radio.click()
     print("  Radio button selected.")
-    page.wait_for_timeout(1000)
+    page.wait_for_timeout(500)
 
     # Click Run
     run_btn = reports_frame.query_selector("input[value='Run']")
@@ -47,7 +47,7 @@ def download(page):
         raise Exception("Could not find Run button.")
     run_btn.click()
     print("  Clicked Run.")
-    page.wait_for_timeout(4000)
+    page.wait_for_timeout(2500)
 
     # Find Generate Report button
     generate_frame = None

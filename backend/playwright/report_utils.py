@@ -31,7 +31,7 @@ def navigate_to_search_reports(page):
             except Exception:
                 continue
 
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(1500)
 
     # Click the Search button to load all reports
     for frame in page.frames:
@@ -40,7 +40,7 @@ def navigate_to_search_reports(page):
             if btn:
                 btn.click()
                 print("  Clicked Search button.")
-                page.wait_for_timeout(3000)
+                page.wait_for_timeout(2000)
                 break
         except Exception:
             continue

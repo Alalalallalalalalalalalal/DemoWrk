@@ -54,9 +54,8 @@ except ImportError:
 from playwright.sync_api import sync_playwright
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-# Adjust these to match your config.py
-BASE_URL       = "https://pms.tryallclub.com:8443/northstar-training"
-# ── PATH CONFIG — update FOLIO_CSV to point to your folio_report.csv ────────
+from config import BASE_URL
+
 FOLIO_CSV            = Path(__file__).parent / "reports" / "folio_report.csv"
 REPORTS_DIR          = Path(__file__).parent / "reports"
 FREE_DETAIL_CSV      = REPORTS_DIR / "rate_details_free.csv"

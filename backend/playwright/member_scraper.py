@@ -37,30 +37,6 @@ REPORTS = [
 ]
 
 
-def dismiss_notification_popup(page):
-    try:
-        for frame in page.frames:
-            try:
-                btn = frame.query_selector(
-                    "a[onclick*='close'], button[onclick*='close'], "
-                    ".ui-dialog-titlebar-close, button.close, .close"
-                )
-
-                if btn:
-                    btn.click()
-                    page.wait_for_timeout(1000)
-                    return
-
-            except Exception:
-                continue
-
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(500)
-
-    except Exception:
-        pass
-
-
 def main():
     print("=" * 60)
     print("Member Report Downloader")
@@ -75,7 +51,6 @@ def main():
 
         try:
             login(page)
-            dismiss_notification_popup(page)
 
             for i, report_module in enumerate(REPORTS, 1):
                 report_name = report_module.REPORT_NAME
@@ -85,10 +60,8 @@ def main():
                 print(f"{'=' * 40}")
 
                 open_reporting_menu(page)
-                dismiss_notification_popup(page)
 
                 navigate_to_search_reports(page)
-                dismiss_notification_popup(page)
 
                 try:
                     success = report_module.download(page)

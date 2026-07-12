@@ -6,8 +6,13 @@ reservation popup for contact info), then Services and Statements
 before moving to the next member. Saves:
   - rooms CSV per member
   - services CSV per member (Members only)
-  - statements CSV per member (Members only — both receivable types,
-    House and Dues Charges + Homeowner, summary rows only)
+  - statements CSV per member (Members only — Homeowner receivable
+    type only, statement periods from 2025-01-01 onward)
+  - statement details CSV per member (itemized line items drilled from
+    each kept statement period's detail page)
+  - rate_details CSV per member (per-night Room Rates for each
+    reservation, fetched from reservationRateDetail.do while the
+    reservation popup is open — stays overlapping 2025-01-01 onward)
   - enriched profile CSV (contact/address fields filled from popup)
 """
 import os
@@ -17,12 +22,28 @@ import math
 import time
 import signal
 import re
-from datetime import datetime
+from datetime import datetime, date
 from multiprocessing import Pool
 import sys
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from config import OUTPUT_FOLDER, BASE_URL
 from login import login, get_frame_by_url
+
+
+STATEMENT_MIN_DATE   = date(2025, 1, 1)
+RATE_DETAIL_MIN_DATE = date(2025, 1, 1)
+
+def parse_statement_date(val):
+    """Parse the Due Date cell into a date. Returns None if unparseable."""
+    val = (val or "").strip()
+    if not val:
+        return None
+    for fmt in ("%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d", "%m-%d-%Y", "%b %d, %Y", "%d-%b-%Y"):
+        try:
+            return datetime.strptime(val, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -207,6 +228,21 @@ def scrape_member_info_fields(page, prefix=""):
     frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not frame:
         return {}
+<<<<<<< Updated upstream
+=======
+
+    try:
+        frame.wait_for_function(
+            """() => {
+                const el = document.querySelector('input[name="FirstName"]');
+                return el && el.value && el.value.trim().length > 0;
+            }""",
+            timeout=4000
+        )
+    except Exception:
+        page.wait_for_timeout(1000)
+
+>>>>>>> Stashed changes
     data = {
         "Deactivation Date": "",
         "Date of Death":     "",
@@ -711,15 +747,222 @@ def scrape_reservation_popup(page, conf_code, prefix=""):
         return None
 
 # ─────────────────────────────────────────────
+# RESERVATION POPUP — per-night rate details
+# ─────────────────────────────────────────────
+# Added 2026-07-12, per request. While the reservation popup
+# (updateReservation.do) is open, its hidden fields hold everything
+# needed to build the Rate Details URL that the "Rate Range" button
+# opens (reservationRateDetail.do?operation=fetchForPopUp&...). Rather
+# than clicking through a nested dialog, we fetch that page directly
+# in-browser (same session cookies) and parse tbody#rateTable with
+# DOMParser — one fetch per reservation, no extra dialog juggling.
+# Output shape mirrors scrape_rate_revenue.py's parse_rate_html():
+#   Conf. Code, Reservation ID, Member #, Guest Name, Room #,
+#   Villa Name, Bedroom Count, Source, Payment Type, Check-In Date,
+#   Check-Out Date, Reservation Status, Date, Rate Name,
+#   Original Amount, Modified Amount, Addon Amount, Discounted Amount,
+#   Total Amount, Status, Total Rental
+# Stays whose Check-Out Date is entirely before RATE_DETAIL_MIN_DATE
+# are skipped; within kept stays, nightly rows are not date-filtered
+# (a stay overlapping the window keeps all its nights so totals still
+# reconcile against Total Rental).
+
+_RATE_FETCH_JS = """
+async (url) => {
+    const resp = await fetch(url, { credentials: 'include' });
+    if (!resp.ok) return { error: 'HTTP ' + resp.status };
+    const text = await resp.text();
+    const doc  = new DOMParser().parseFromString(text, 'text/html');
+    const tbody = doc.querySelector('tbody#rateTable');
+    if (!tbody) return { error: 'no rateTable' };
+    const totalEl = doc.querySelector('td#totalRental');
+    const total   = totalEl ? (totalEl.textContent || '').trim() : '';
+    const rows = [];
+    tbody.querySelectorAll('tr').forEach(tr => {
+        const dateInput = tr.querySelector("input[name='resRateDate']");
+        if (!dateInput) return;
+        const cells = tr.querySelectorAll('td');
+        const cellText = (i) => {
+            if (i >= cells.length) return '';
+            const inp = cells[i].querySelector("input[type='text']");
+            if (inp) return (inp.value || '').trim();
+            return (cells[i].textContent || '').trim();
+        };
+        // Cell indices (hidden cells still present in HTML):
+        // 0=Date, 1=RateName, 2=CurrOcc%(hidden), 3=OriginalAmt,
+        // 4=ModifiedAmt(input), 5=PackageAmt(hidden), 6=Qty(hidden),
+        // 7=AddonAmt, 8=DiscountedAmt, 9=TotalAmt, 10=Status
+        rows.push({
+            date:        (dateInput.value || '').trim(),
+            rate_name:   cellText(1),
+            original:    cellText(3),
+            modified:    cellText(4),
+            addon:       cellText(7),
+            discounted:  cellText(8),
+            total:       cellText(9),
+            status:      cellText(10),
+        });
+    });
+    return { rows: rows, total_rental: total };
+}
+"""
+
+def scrape_reservation_rate_details(page, conf_code, reservation_id,
+                                    room_row, folder_name, prefix=""):
+    """
+    Fetch and parse the per-night Rate Details for the reservation whose
+    popup is currently open. Returns a list of row dicts (one per night)
+    in the folio-report style, or [] on any failure / out-of-window stay.
+    """
+    popup_frame = get_popup_frame(page, timeout_ms=3000)
+    if not popup_frame:
+        return []
+
+    def hidden(*names):
+        for n in names:
+            try:
+                el = popup_frame.query_selector(
+                    f"input[name='{n}'], input[id='{n}']"
+                )
+                if el:
+                    v = strip_val(el.get_attribute("value"))
+                    if v and v != "0":
+                        return v
+            except Exception:
+                continue
+        return ""
+
+    res_id      = reservation_id or hidden("reservationId")
+    member_id   = hidden("memberId", "savedMemberId")
+    room_type   = hidden("roomTypeId", "roomTypeIdTemp",
+                         "parentWindowRoomTypeId", "parentWindowRateId")
+    from_date   = hidden("checkInDate", "fromDate")
+    to_date     = hidden("checkOutDate", "toDate")
+    tax_exempt  = hidden("isTaxExempt") or "false"
+    # memberType must be the NUMERIC id (e.g. 2) — memberTypeString
+    # holds display text like "Proprietary Members" which 500s the
+    # endpoint. Prefer memberTypeId; fall back through the others but
+    # only accept a numeric value.
+    member_type = ""
+    for cand in (hidden("memberTypeId"), hidden("savedMemberType"),
+                 hidden("memberTypeString")):
+        if cand and cand.isdigit():
+            member_type = cand
+            break
+    if not member_type:
+        member_type = "1"
+    is_perm     = hidden("isPermanent") or "false"
+    age_group   = hidden("ageGroupPersonCount") or "1_1,2_0"
+    # The endpoint expects a count pair for EVERY age group
+    # (e.g. "1_5,2_0"); the popup sometimes exposes only the adult
+    # group ("1_5"), which 500s the endpoint — pad the child group.
+    if "," not in age_group:
+        age_group = f"{age_group},2_0"
+
+    # Fall back to the rooms-table row for dates the popup doesn't expose
+    if not from_date:
+        from_date = strip_val(room_row.get("Check-In Date", "") or
+                              room_row.get("Check In Date", "") or
+                              room_row.get("Check-In", ""))
+    if not to_date:
+        to_date = strip_val(room_row.get("Check-Out Date", "") or
+                            room_row.get("Check Out Date", "") or
+                            room_row.get("Check-Out", ""))
+
+    if not res_id or not room_type:
+        print(f"    {prefix}Rate details: missing reservationId/roomTypeId "
+              f"for conf {conf_code} — skipping")
+        return []
+
+    # Skip stays that ended entirely before the window
+    co = parse_statement_date(to_date)
+    if co is not None and co < RATE_DETAIL_MIN_DATE:
+        return []
+
+    villa_name = ""
+    try:
+        el = popup_frame.query_selector("input[name='roomTypeName']")
+        if el:
+            villa_name = strip_val(el.get_attribute("value"))
+    except Exception:
+        pass
+    source_txt = get_select_text(
+        popup_frame, "select[name='businessSource'], #businessSource"
+    )
+    guest_name = get_input_val(
+        popup_frame,
+        "input[name='guestName'], #guestName, "
+        "input[name='memberName'], #memberName"
+    )
+
+    qs = (
+        f"operation=fetchForPopUp"
+        f"&RateId={room_type}&RoomTypeId={room_type}"
+        f"&fromDate={from_date}&toDate={to_date}"
+        f"&reservationId={res_id}&memberId={member_id}"
+        f"&isTaxExempt={tax_exempt}&isWalkIn=false&showGroupRates=false"
+        f"&memberType={member_type}&fromOtherModule=true"
+        f"&isPermanent={is_perm}&rateType=null&isGuestCard=false"
+        f"&ageGroupPersonCount={age_group}"
+    )
+    rate_url = f"{BASE_URL}/PMS/reservationRateDetail.do?{qs}"
+
+    try:
+        result = popup_frame.evaluate(_RATE_FETCH_JS, rate_url)
+    except Exception as e:
+        print(f"    {prefix}Rate details fetch failed for conf {conf_code}: {e}")
+        return []
+
+    if not result or result.get("error"):
+        err = (result or {}).get("error", "empty response")
+        print(f"    {prefix}Rate details: {err} for conf {conf_code}")
+        print(f"    {prefix}  URL was: {rate_url}")
+        return []
+
+    total_rental = result.get("total_rental", "")
+    out = []
+    for r in result.get("rows", []):
+        out.append({
+            "Conf. Code":         conf_code,
+            "Reservation ID":     res_id,
+            "Member #":           folder_name,
+            "Guest Name":         guest_name or strip_val(room_row.get("Guest Name", "")),
+            "Room #":             strip_val(room_row.get("Room #", "") or
+                                            room_row.get("Room Number", "") or
+                                            room_row.get("Room", "")),
+            "Villa Name":         villa_name,
+            "Bedroom Count":      "",
+            "Source":             source_txt,
+            "Payment Type":       "",
+            "Check-In Date":      from_date or strip_val(room_row.get("Check-In Date", "")),
+            "Check-Out Date":     to_date or strip_val(room_row.get("Check-Out Date", "")),
+            "Reservation Status": strip_val(room_row.get("Status", "") or
+                                            room_row.get("Reservation Status", "")),
+            "Date":               r["date"],
+            "Rate Name":          r["rate_name"],
+            "Original Amount":    r["original"],
+            "Modified Amount":    r["modified"],
+            "Addon Amount":       r["addon"],
+            "Discounted Amount":  r["discounted"],
+            "Total Amount":       r["total"],
+            "Status":             r["status"],
+            "Total Rental":       total_rental,
+        })
+
+    if out:
+        print(f"    {prefix}Rate details: {len(out)} night(s) for conf {conf_code}")
+    return out
+
+# ─────────────────────────────────────────────
 # ROOMS TAB
 # ─────────────────────────────────────────────
 def scrape_rooms_with_popups(page, folder_name, prefix=""):
     """
     1. Scrape the rooms table rows.
     2. For each row, click the confirmation code link to open the popup.
-    3. Extract contact info from the popup.
+    3. Extract contact info AND per-night rate details from the popup.
     4. Close the popup and move to the next row.
-    Returns (success, room_rows, merged_contact_data)
+    Returns (success, room_rows, merged_contact_data, rate_rows)
     success=True:
         Rooms page loaded correctly, even if it contains no records.
     success=False:
@@ -728,16 +971,17 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
     frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not frame:
         print(f"    {prefix}Rooms page failed: landing frame not found")
-        return False, [], {}
+        return False, [], {}, []
 
     room_rows      = []
     merged_contact = {}
+    rate_rows      = []
 
     try:
         tables = frame.query_selector_all("table")
         if not tables:
             print(f"    {prefix}No tables found in rooms tab")
-            return True, [], {}
+            return True, [], {}, []
 
         for table in tables:
             for row in extract_table(table):
@@ -748,7 +992,7 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
 
         if not room_rows:
             print(f"    {prefix}Rooms table is empty")
-            return True, [], {}
+            return True, [], {}, []
 
         print(f"    {prefix}Found {len(room_rows)} room row(s) — opening popups...")
 
@@ -769,14 +1013,22 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
             frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
             if not frame:
                 print(f"    {prefix}Rooms page failed: Lost landing frame at row {i}")
-                return False, room_rows, merged_contact
+                return False, room_rows, merged_contact, rate_rows
 
-            # Click the confirmation code link
+            # Click the confirmation code link — the link's
+            # openReservation(N) argument is the reservationId, capture
+            # it for the rate-details fetch.
             clicked = False
+            reservation_id = ""
             try:
                 for link in frame.query_selector_all("a"):
                     try:
                         if strip_val(link.inner_text()) == conf_code:
+                            blob = ((link.get_attribute("href") or "") +
+                                    (link.get_attribute("onclick") or ""))
+                            m = re.search(r"openReservation\((\d+)\)", blob)
+                            if m:
+                                reservation_id = m.group(1)
                             link.click()
                             clicked = True
                             break
@@ -788,6 +1040,11 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
                         f"a[onclick*='{conf_code}']"
                     )
                     if link:
+                        blob = ((link.get_attribute("href") or "") +
+                                (link.get_attribute("onclick") or ""))
+                        m = re.search(r"openReservation\((\d+)\)", blob)
+                        if m:
+                            reservation_id = m.group(1)
                         link.click()
                         clicked = True
             except Exception as e:
@@ -803,19 +1060,31 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
                     if val and not merged_contact.get(col):
                         merged_contact[col] = val
 
+            # Per-night rate details — fetched while the popup is still
+            # open (its hidden fields supply the fetch parameters).
+            try:
+                res_rates = scrape_reservation_rate_details(
+                    page, conf_code, reservation_id, room_row,
+                    folder_name, prefix
+                )
+                if res_rates:
+                    rate_rows.extend(res_rates)
+            except Exception as e:
+                print(f"    {prefix}Rate details error for conf {conf_code}: {e}")
+
             close_reservation_popup(page, prefix)
             page.wait_for_timeout(800)
 
             frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
             if not frame:
                 print(f"    {prefix}Rooms page failed: " "Landing frame lost after closing popup — stopping")
-                return False, room_rows, merged_contact
+                return False, room_rows, merged_contact, rate_rows
 
     except Exception as e:
         print(f"    {prefix}Rooms+popup scrape error: {e}")
-        return False, room_rows, merged_contact
+        return False, room_rows, merged_contact, rate_rows
 
-    return True, room_rows, merged_contact
+    return True, room_rows, merged_contact, rate_rows
 
 # ─────────────────────────────────────────────
 # SERVICES TAB (Billing > Services)
@@ -917,79 +1186,184 @@ def scrape_services(page, folder_name, prefix=""):
 # ─────────────────────────────────────────────
 # STATEMENTS TAB (Billing > Statements)
 # ─────────────────────────────────────────────
-# Added 2026-07-02, per request — summary-level only (Statement Period,
-# Due Date, Amount Due), NOT the itemized per-period detail page (which
-# would mean opening a separate page per statement period per member —
-# decided against for cost reasons at scale; can be added later as a
-# targeted follow-up if truly needed).
-#
-# Two receivable types exist behind a dropdown on this page
-# (select[name="arAccountTypeId"]) and BOTH are pulled, per request:
-#   value=1 "House and Dues Charges" — the actual membership dues/AR
-#            ledger (Amount Due per statement period).
-#   value=2 "Homeowner"              — a completely different concept:
-#            per-villa operating P&L for members who own a specific
-#            villa (staff wages, utilities, commissary charges, etc.),
-#            NOT membership dues. Kept as the same table with a
-#            receivable_type column rather than a separate table, since
-#            the summary-row SHAPE is identical for both — see
-#            cleaner.py's load_statements() for how they're
-#            distinguished downstream.
+# Changed 2026-07-12, per request:
+#   - HOMEOWNER receivable type only (value=2). House and Dues Charges
+#     (value=1) is no longer pulled. The page defaults to Homeowner, so
+#     the dropdown is only touched if it isn't already on value=2.
+#   - Only statement periods with Due Date >= 2025-01-01 are kept
+#     (STATEMENT_MIN_DATE). Rows with unparseable dates are kept rather
+#     than silently dropped.
+#   - Statement DETAILS are pulled again: for every kept summary row,
+#     the period's detail page is opened and its itemized line-item
+#     table (DATE, REF. / TRANSACTION ID, DESCRIPTION, CHARGE,
+#     Surcharge, Service Charge, SALES TAX, AMOUNT) is extracted,
+#     tagged with _receivable_type / _statement_period /
+#     _statement_due_date, and saved to {folder}_statement_details.csv
+#     — the exact shape cleaner.py's load_statement_details() expects.
+#     The per-period page cost is acceptable now that scope is limited
+#     to Homeowner + 2025-onward + non-guest + services-nonempty
+#     accounts.
 
 EXPECTED_STATEMENTS_HEADERS = {"Statement Periods", "Due Date", "Amount Due"}
 
 RECEIVABLE_TYPES = [
-    ("1", "House and Dues Charges"),
     ("2", "Homeowner"),
 ]
 
+EXPECTED_DETAIL_HEADER_WORDS = {"DATE", "DESCRIPTION", "AMOUNT", "CHARGE"}
+
+def scrape_statement_detail_table(frame):
+    """
+    Extract the itemized detail table from a statement period's detail
+    page (statementNonPrintable.jsp). Returns:
+      rows  — the line items (list of dicts keyed by header text)
+      []    — confirmed-empty state
+      None  — no recognizable detail table on the page (not loaded yet,
+              or we're not on the detail page at all)
+    The small header tables on that page (MEMBER NO./DATE/PAGE and
+    BALANCE DUE/DUE DATE) don't overlap enough with
+    EXPECTED_DETAIL_HEADER_WORDS to false-match.
+    """
+    for table in frame.query_selector_all("table"):
+        table_rows = extract_table(table)
+        if not table_rows:
+            continue
+        headers = {str(h).strip().upper() for h in table_rows[0].keys()}
+        if len(headers & EXPECTED_DETAIL_HEADER_WORDS) >= 3:
+            return table_rows
+        cell_values = {str(v).strip().lower() for row in table_rows for v in row.values()}
+        if "no matching records found" in cell_values:
+            return []
+    return None
+
+
+def drill_statement_details(page, folder_name, label, summary_rows, prefix=""):
+    """
+    For each (already filtered) statement summary row, open its period
+    detail page, extract the itemized lines, and return them tagged the
+    way cleaner.py's load_statement_details() expects. Navigates back
+    to the summary page between periods; stops drilling if it can't
+    get back (summary rows already captured are unaffected).
+    """
+    detail_rows = []
+
+    for srow in summary_rows:
+        period   = (strip_val(srow.get("Statement Periods", "")) or
+                    strip_val(srow.get("Statement Period", "")))
+        due_date = strip_val(srow.get("Due Date", ""))
+        if not period:
+            continue
+
+        frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+        if not frame:
+            print(f"    {prefix}Details: landing frame lost before period {period}")
+            break
+
+        # Find and click the period's link in the summary table
+        link = None
+        try:
+            for a in frame.query_selector_all("a"):
+                try:
+                    if strip_val(a.inner_text()) == period:
+                        link = a
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        if not link:
+            print(f"    {prefix}Details: no link found for period {period} — skipping")
+            continue
+
+        try:
+            link.click()
+        except Exception as e:
+            print(f"    {prefix}Details: click failed for {period}: {e}")
+            continue
+
+        # Wait for the detail page to render, then extract
+        frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+        rows = None
+        deadline = time.time() + 6
+        while time.time() < deadline:
+            if frame:
+                rows = scrape_statement_detail_table(frame)
+                if rows is not None:
+                    break
+            page.wait_for_timeout(400)
+            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+
+        if rows is None:
+            print(f"    {prefix}Details: no detail table for {period}")
+        else:
+            for r in rows:
+                r["_folder"]             = folder_name
+                r["_section"]            = "Billing"
+                r["_tab"]                = "StatementDetails"
+                r["_receivable_type"]    = label
+                r["_statement_period"]   = period
+                r["_statement_due_date"] = due_date
+                detail_rows.append(r)
+            print(f"    {prefix}Details ({period}): {len(rows)} line(s)")
+
+        # Navigate back to the summary page
+        try:
+            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if frame:
+                frame.evaluate("history.back()")
+        except Exception:
+            pass
+
+        # Confirm we're back — the receivable-type dropdown marks the
+        # summary page
+        back_ok = False
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+            try:
+                if frame and frame.query_selector('select[name="arAccountTypeId"]'):
+                    back_ok = True
+                    break
+            except Exception:
+                pass
+            page.wait_for_timeout(400)
+        if not back_ok:
+            print(f"    {prefix}Details: could not return to summary after {period} — stopping drill")
+            break
+
+    return detail_rows
+
+
 def scrape_statements(page, folder_name, prefix=""):
     """
-    Extract the Billing > Statements summary table for BOTH receivable
-    types via the arAccountTypeId dropdown, tagging each row with which
-    type it came from.
+    Extract the Billing > Statements summary table for the Homeowner
+    receivable type only (see RECEIVABLE_TYPES), keeping periods with
+    Due Date >= STATEMENT_MIN_DATE, then drill each kept period's
+    detail page for itemized line items.
 
-    Reverted 2026-07-03 to summary-only, per request — the itemized
-    per-period detail drilling (statement_details, back-navigation,
-    max_periods, etc.) has been fully removed. This is back to exactly
-    what it was before that feature was added: one row per statement
-    period, no drilling into individual statements.
-
-    Returns (success, statement_rows).
-      success=True:  at least one receivable type's table loaded
-                      correctly (even with 0 records for that type).
-      success=False: frame/dropdown failed entirely, or NEITHER
-                      receivable type produced a recognizable table.
+    Returns (success, statement_rows, statement_detail_rows).
+      success=True:  the summary table loaded correctly (even with 0
+                      records). Detail drilling failures do not flip
+                      success — summary rows already captured are kept.
+      success=False: frame/dropdown failed entirely, or no recognizable
+                      summary table was found.
     """
     frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not frame:
         print(f"    {prefix}Statements page failed: landing frame not found")
-        return False, []
+        return False, [], []
 
-    all_rows = []
+    all_rows        = []
+    all_detail_rows = []
     any_type_succeeded = False
 
     for value, label in RECEIVABLE_TYPES:
         try:
-            # Fixed 2026-07-03: was querying for the dropdown immediately
-            # after landing on the tab, with no wait — the generic
-            # "did content change" check in click_subtab() only confirms
-            # SOME content changed, not that this specific element has
-            # finished rendering yet. Explicitly wait for the dropdown
-            # itself before touching it.
-            #
-            # Shortened 2026-07-03 from 6000ms to 2500ms — most of your
-            # 38K accounts are Guests, and if their profile CSV doesn't
-            # exist yet, is_guest_folder() defaults to "attempt it"
-            # rather than silently skip a possible real member. For
-            # every one of those accounts that turns out to genuinely
-            # have no Statements dropdown, the old 6s wait meant up to
-            # 6s x 2 receivable types x 3 retry attempts = 36s of dead
-            # waiting apiece — at scale, this was very likely the
-            # actual cause of "way slower than initial runs." A
-            # dropdown either appears almost instantly on a real
-            # success, or never appears at all — there's rarely a
-            # legitimate slow-but-eventually-there case in between.
+            # Explicitly wait for the dropdown itself before touching it
+            # — the generic "did content change" check in click_subtab()
+            # only confirms SOME content changed, not that this specific
+            # element has finished rendering yet.
             try:
                 frame.wait_for_selector('select[name="arAccountTypeId"]', timeout=2500)
             except Exception:
@@ -1000,13 +1374,17 @@ def scrape_statements(page, folder_name, prefix=""):
                 print(f"    {prefix}Statements: receivable-type dropdown not found for {label}")
                 continue
 
-            dropdown.select_option(value=value)
-            page.wait_for_timeout(1500)
+            current = (dropdown.evaluate("el => el.value") or "").strip()
+            if current != value:
+                dropdown.select_option(value=value)
+                page.wait_for_timeout(1500)
 
-            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
-            if not frame:
-                print(f"    {prefix}Statements: landing frame lost after switching to {label}")
-                continue
+                frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+                if not frame:
+                    print(f"    {prefix}Statements: landing frame lost after switching to {label}")
+                    continue
+            # else: page already on Homeowner (its default) — table is
+            # ready as-is, no reload needed
 
             tables = frame.query_selector_all("table")
             if not tables:
@@ -1042,24 +1420,38 @@ def scrape_statements(page, folder_name, prefix=""):
                 print(f"    {prefix}Statements: no recognizable table found for {label}")
                 continue
 
+            kept = 0
             for row in matched_rows:
+                due = parse_statement_date(row.get("Due Date", ""))
+                # Keep rows from STATEMENT_MIN_DATE onward; keep
+                # unparseable dates too rather than silently dropping
+                # data
+                if due is not None and due < STATEMENT_MIN_DATE:
+                    continue
                 row["_folder"]          = folder_name
                 row["_section"]         = "Billing"
                 row["_tab"]             = "Statements"
                 row["_receivable_type"] = label
                 all_rows.append(row)
+                kept += 1
 
             any_type_succeeded = True
-            print(f"    {prefix}Statements ({label}): {len(matched_rows)} row(s)")
+            print(f"    {prefix}Statements ({label}): {kept} row(s) kept (of {len(matched_rows)})")
+
+            # ── Drill each kept period's detail page ────────────────
+            if kept:
+                period_rows = [r for r in all_rows if r["_receivable_type"] == label]
+                details = drill_statement_details(page, folder_name, label, period_rows, prefix)
+                all_detail_rows.extend(details)
 
         except Exception as e:
             print(f"    {prefix}Statements scrape error for {label}: {e}")
             continue
 
     if not any_type_succeeded:
-        return False, []
+        return False, [], []
 
-    return True, all_rows
+    return True, all_rows, all_detail_rows
 
 
 # ─────────────────────────────────────────────
@@ -1105,10 +1497,11 @@ def scrape_member(page, member_number, member_id, prefix=""):
                 page.wait_for_timeout(1000 * attempt)
             continue
 
-        rooms_success, room_rows, merged_contact = scrape_rooms_with_popups(page, folder_name, prefix)
+        rooms_success, room_rows, merged_contact, rate_rows = \
+            scrape_rooms_with_popups(page, folder_name, prefix)
         if not rooms_success:
             print(f"    {prefix}Rooms scraping failed")
-            
+
             if attempt < TAB_MAX_RETRIES:
                 page.wait_for_timeout(1000 * attempt)
                 continue
@@ -1125,6 +1518,13 @@ def scrape_member(page, member_number, member_id, prefix=""):
                 return False, saved
             if merged_contact:
                 enrich_profile_csv(folder_name, merged_contact, prefix)
+            if rate_rows:
+                fp = save_tab_csv(folder_name, "rate_details", rate_rows)
+                if fp:
+                    saved["rate_details"] = fp
+                    print(f"    {prefix}Rate details: {len(rate_rows)} night row(s) → {os.path.basename(fp)}")
+                else:
+                    print(f"    {prefix}Rate details CSV could not be saved")
         else:
             print(f"    {prefix}Rooms: no data — processed successfully")
 
@@ -1191,14 +1591,14 @@ def scrape_member(page, member_number, member_id, prefix=""):
             else:
                 # Confirmed empty (Services genuinely loaded and had
                 # nothing) — NOT the same as a failed/uncertain attempt.
-                # Added 2026-07-03: confirmed pattern across many
-                # accounts — a member with zero Services enrollments
-                # also has zero Statements, so this skips the much
-                # more expensive Statements attempt below (2 receivable
-                # types x dropdown waits x retries) for accounts we
-                # already have real evidence about, rather than
-                # guessing. A FAILED Services attempt does NOT set this
-                # — "we don't know" still means "try Statements anyway."
+                # Confirmed with club 2026-07-12: every homeowner with
+                # statements is also enrolled in at least one Service,
+                # so confirmed-empty Services safely implies no
+                # Statements — this skips the much more expensive
+                # Statements attempt below for accounts we already have
+                # real evidence about. A FAILED Services attempt does
+                # NOT set this — "we don't know" still means "try
+                # Statements anyway."
                 services_confirmed_empty = True
                 print(f"    {prefix}Services: no data — processed successfully")
 
@@ -1208,12 +1608,11 @@ def scrape_member(page, member_number, member_id, prefix=""):
         if not services_done:
             print(f"    {prefix}Services: not completed this run")
 
-    # ── Billing > Statements (added 2026-07-02) ─────────────────────
+    # ── Billing > Statements ────────────────────────────────────────
     # Runs after Services, before moving to the next member. Same
-    # guest-skip and non-fatal-failure treatment as Services above —
-    # statements/dues only apply to actual Members, and a Statements
-    # failure doesn't undo the Rooms/Services data already captured
-    # for this member.
+    # guest-skip and non-fatal-failure treatment as Services above.
+    # Homeowner receivable type only, 2025+ periods, with per-period
+    # detail drilling — see the STATEMENTS TAB section comments.
     if is_guest_folder(folder_name):
         print(f"    {prefix}Statements: skipped (guest account)")
     elif services_confirmed_empty:
@@ -1241,7 +1640,8 @@ def scrape_member(page, member_number, member_id, prefix=""):
                     page.wait_for_timeout(1000 * attempt)
                 continue
 
-            statements_success, statement_rows = scrape_statements(page, folder_name, prefix)
+            statements_success, statement_rows, statement_detail_rows = \
+                scrape_statements(page, folder_name, prefix)
             if not statements_success:
                 print(f"    {prefix}Statements scraping failed")
                 if attempt < TAB_MAX_RETRIES:
@@ -1259,6 +1659,14 @@ def scrape_member(page, member_number, member_id, prefix=""):
                     print(f"    {prefix}Statements CSV could not be saved")
             else:
                 print(f"    {prefix}Statements: no data — processed successfully")
+
+            if statement_detail_rows:
+                fp = save_tab_csv(folder_name, "statement_details", statement_detail_rows)
+                if fp:
+                    saved["statement_details"] = fp
+                    print(f"    {prefix}Statement details: {len(statement_detail_rows)} line(s) → {os.path.basename(fp)}")
+                else:
+                    print(f"    {prefix}Statement details CSV could not be saved")
 
             statements_done = True
             break
