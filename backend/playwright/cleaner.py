@@ -1,3 +1,54 @@
+"""
+cleaner.py — ETL loader: reads all scraped CSVs, cleans/normalizes them,
+and upserts everything into PostgreSQL (Supabase).
+
+Run AFTER the scrapers have produced their outputs:
+  1. member_scraper.py        -> reports/member_demographics_*.csv, member_dependents_*.csv
+  2. build_journal_profiles.py-> journal/{member}/{member}_profile.csv (+ _dependents.csv)
+  3. journal_scraper.py       -> journal/{member}/ rooms, rate_details, services,
+                                 statements, statement_details CSVs
+  4. folio_report.py / folio_scraper.py -> reports/folio_report.csv + journal folio CSVs
+  5. scrape_rate_revenue.py   -> reports/rate_details_free.csv, rate_details_paid.csv
+  (+ reports/business_source.csv for the Source -> Payment Type mapping)
+
+What the default run loads (python cleaner.py):
+  Per member folder in journal/ (one transaction per member):
+    _profile.csv            -> members, member_addresses, member_phones
+    _dependents.csv         -> dependents, dependent_addresses, dependent_phones
+    _rooms.csv              -> rooms
+    _rate_details.csv       -> rate_details       (per-night Room Rates, 2025+)
+    _recent_activity.csv    -> recent_activity
+    _statements.csv         -> statements         (Homeowner receivable, 2025+)
+    _statement_details.csv  -> statement_details  (itemized lines per period)
+    _services.csv           -> services
+    _interests.csv          -> interests
+  Then the folio pipeline outputs:
+    journal folio CSVs / reports/folio_report.csv -> folios (+ reservation_guests)
+    reports/business_source.csv -> business_source, then stamps payment_type
+                                   onto matching folios AND rate_details rows
+    reports/rate_details_free|paid.csv -> rate_details (same table as journal
+                                   rate details; data-derived keys dedupe them)
+  Finishes with a data quality report.
+
+Safety features:
+  - Upserts everywhere -> safe to re-run; reloading is idempotent
+  - Profile column-drift guard: if the demographics report loses columns
+    (e.g. Employer), those DB fields are left untouched, not NULL-wiped
+  - Dependent status derived: deactivation/death date overrides the
+    report's incorrect "Active"
+
+Usage:
+    python cleaner.py                          # Everything (default)
+    python cleaner.py --member 17A             # One member folder
+    python cleaner.py --dry-run                # No writes, just logs
+    python cleaner.py --recreate-tables        # Drop + recreate schema first
+    python cleaner.py --sample-rate 0.10       # 10% deterministic sample (skips folios)
+    python cleaner.py --folios-only            # Just folios/business_source/report rate details
+    python cleaner.py --business-source-only   # Just the Source -> Payment Type mapping
+    python cleaner.py --rate-details-only      # Just reports/ rate detail CSVs
+    python cleaner.py --services-and-statements-only
+    python cleaner.py --statement-details-only
+"""
 import os
 import csv
 import re
@@ -48,6 +99,29 @@ DB_CONFIG = {
 
 # Metadata columns added by scraper — excluded from DB inserts
 SCRAPER_META_COLS = {"_folder", "_section", "_tab"}
+
+# Column-drift protection: the demographics report can lose columns
+# without notice (Employer did). Missing optional columns are warned
+# about and dropped from the upsert so existing DB values survive.
+EXPECTED_PROFILE_COLS = {
+    "Marital Status", "Member Number", "Member Name", "Member Full Name",
+    "Member Type", "Member / Guest", "Gender", "Employer", "Status",
+    "Age", "Membership Tenure", "Occupation", "Member Activation",
+    "Member Since", "Date of Birth", "Email", "Home Phone",
+    "Business Phone", "Cell Phone", "Fax Phone", "Address Line1",
+    "Address Line2", "Postal Code", "City", "State", "Country",
+}
+
+# db_column -> source CSV column; only updated when present in the CSV.
+OPTIONAL_PROFILE_COLS = {
+    "employer":          "Employer",
+    "age":               "Age",
+    "membership_tenure": "Membership Tenure",
+    "occupation":        "Occupation",
+    "marital_status":    "Marital Status",
+    "gender":            "Gender",
+    "email":             "Email",
+}
 
 # ─────────────────────────────────────────────
 # LOGGING
@@ -280,17 +354,8 @@ CREATE TABLE IF NOT EXISTS statements (
     UNIQUE (member_number, statement_period)
 );
 
--- Re-added 2026-07-03: itemized line items drilled from each statement
--- period's detail page (statementNonPrintable.jsp), across BOTH
--- receivable types (House and Dues Charges, Homeowner). One row per
--- transaction line within a statement. See load_statement_details()
--- below. Previously removed, then re-added per request to use real
--- itemized membership dues instead of estimating via services+statements.
---
--- Primary key is a hash (statement_detail_key), not a raw UNIQUE
--- constraint, since ref_transaction_id is sometimes blank (e.g.
--- "Balance Forward" rows) and can't be relied on alone — same pattern
--- already used for folios/rate_details.
+-- Itemized statement lines (Homeowner receivable type, periods due
+-- 2025-01-01+). Hash PK because ref_transaction_id can be blank.
 CREATE TABLE IF NOT EXISTS statement_details (
     statement_detail_key    VARCHAR(64) PRIMARY KEY,
     member_number           VARCHAR(50) REFERENCES members(member_number) ON DELETE CASCADE,
@@ -325,18 +390,9 @@ CREATE TABLE IF NOT EXISTS interests (
 );
 """
 
-# Derived rack-rate / discount-given logic, kept as a view rather than
-# precomputed columns so the formula can be refined later (e.g. if more
-# edge cases like seasonal-rate corrections turn up) without re-scraping
-# or re-loading data — just CREATE OR REPLACE the view.
-#
-#   rack_rate = original_amount if it's been overridden away from 0,
-#               else modified_amount + addon_amount (the as-entered rate
-#               when no rate-plan override ever happened)
-#   discount_given = rack_rate - total_amount
-#       positive -> comped/discounted away from the reference rate
-#       negative -> rate was corrected/increased after original_amount
-#                   was first set (e.g. season change mid-booking)
+# rack_rate = original_amount when overridden, else modified + addon.
+# discount_given = rack_rate - total_amount. Kept as a view so the
+# formula can change without re-loading data.
 RATE_DETAILS_VIEW_DDL = """
 CREATE OR REPLACE VIEW rate_details_with_discount AS
 SELECT
@@ -676,14 +732,7 @@ def create_tables(conn, recreate=False):
             DROP COLUMN IF EXISTS source_file
         """)
 
-        # ── services: extended 2026-07-02 ──────────────────────────
-        # Was originally just a bare enrolled-service NAME list. Now
-        # also captures the dues/fee detail from Billing > Services
-        # (members_enrolled_services.jsp) — Type, Frequency, Start Date,
-        # Billed Upto, End Date, Amount — see load_services() below.
-        # Populated by journal_scraper.py (scrape_services(), folded
-        # into the main per-member pass alongside Rooms and Statements
-        # — no separate standalone script for this anymore).
+        # services: dues/fee detail columns from Billing > Services
         cur.execute("""
             ALTER TABLE IF EXISTS services
             ADD COLUMN IF NOT EXISTS service_type VARCHAR(100),
@@ -694,15 +743,8 @@ def create_tables(conn, recreate=False):
             ADD COLUMN IF NOT EXISTS amount NUMERIC(12, 2)
         """)
 
-        # The original UNIQUE (member_number, service_name) is no longer
-        # enough on its own — the same service name (e.g. "Family
-        # Membership Dues") can legitimately recur across renewal
-        # periods with different Start/Billed Upto/End dates, and the
-        # old constraint would silently collapse those into one row on
-        # upsert. Swap it for a composite key that includes start_date.
-        # Guarded with a pg_constraint existence check since Postgres
-        # has no "ADD CONSTRAINT IF NOT EXISTS", so this stays safe to
-        # run every time create_tables() runs, not just the first time.
+        # Same service name can recur across renewal periods — the
+        # composite key with start_date keeps each period as its own row.
         cur.execute("""
             ALTER TABLE IF EXISTS services
             DROP CONSTRAINT IF EXISTS services_member_number_service_name_key
@@ -721,15 +763,8 @@ def create_tables(conn, recreate=False):
             END $$;
         """)
 
-        # ── statements: extended 2026-07-02 ────────────────────────
-        # Added receivable_type — the same Statement Period can
-        # legitimately appear under BOTH "House and Dues Charges" and
-        # "Homeowner" for the same member (they're two completely
-        # different receivable ledgers, not duplicates of each other).
-        # The original UNIQUE (member_number, statement_period) would
-        # have silently collapsed those two different statements into
-        # one row on upsert — same class of bug already fixed for
-        # services' start_date. See load_statements() below.
+        # statements: receivable_type in the key (scraper is Homeowner-
+        # only now, but the composite key stays correct either way).
         cur.execute("""
             ALTER TABLE IF EXISTS statements
             ADD COLUMN IF NOT EXISTS receivable_type VARCHAR(50)
@@ -866,12 +901,24 @@ def upsert_multi(conn, table, rows, conflict_cols, dry_run=False):
 # ─────────────────────────────────────────────
 
 def load_profile(conn, member_number, filepath, dry_run=False):
-    """Load _profile.csv into members, member_addresses, member_phones."""
+    """
+    Load _profile.csv into members, member_addresses, member_phones.
+    OPTIONAL_PROFILE_COLS missing from the CSV are dropped from the
+    upsert so existing DB values aren't NULL-wiped by column drift.
+    """
     try:
         df = pd.read_csv(filepath)
     except Exception as e:
         log.warning(f"  Could not read {filepath}: {e}")
         return
+
+    present = set(df.columns)
+    missing_expected = EXPECTED_PROFILE_COLS - present
+    if missing_expected:
+        log.warning(
+            f"  Profile CSV missing expected columns: {sorted(missing_expected)} "
+            f"— protected fields among these will NOT be updated in the DB."
+        )
 
     # ── Collect all rows first, then upsert once per table ───────
     member_rows   = []
@@ -938,6 +985,15 @@ def load_profile(conn, member_number, filepath, dry_run=False):
                     "phone_number":  num,
                 })
 
+    # ── Column-drift guard: drop DB fields whose source column is
+    #    absent so the upsert preserves existing values ─────────────
+    absent_keys = [db_col for db_col, csv_col in OPTIONAL_PROFILE_COLS.items()
+                   if csv_col not in present]
+    if absent_keys and member_rows:
+        for r in member_rows:
+            for k in absent_keys:
+                r.pop(k, None)
+
     # ── Single upsert per table ───────────────────────────────────
     if member_rows:
         upsert(conn, "members", member_rows, "member_number", dry_run)
@@ -949,7 +1005,11 @@ def load_profile(conn, member_number, filepath, dry_run=False):
 
 
 def load_dependents(conn, member_number, filepath, dry_run=False):
-    """Load _dependents.csv into dependents, dependent_addresses, dependent_phones."""
+    """
+    Load _dependents.csv into dependents, dependent_addresses,
+    dependent_phones. The report wrongly marks many inactive dependents
+    as Active — a deactivation date or date of death overrides it.
+    """
     try:
         df = pd.read_csv(filepath)
     except Exception as e:
@@ -968,6 +1028,12 @@ def load_dependents(conn, member_number, filepath, dry_run=False):
         dep_name = row.get("Dependant Name")
         first_name, middle_name, last_name = split_name(dep_name)
 
+        # Deactivation/death dates override the report's status.
+        deactivation = clean_date(row.get("Dependant Member Deactivation"))
+        death        = clean_date(row.get("Dependant Date of Death"))
+        raw_status   = clean_status(row.get("Dependant Status"))
+        status       = "Inactive" if (deactivation or death) else raw_status
+
         dep_rows.append({
             "dependent_number": dn,
             "member_number":    clean_str(row.get("Member Number")) or member_number,
@@ -979,15 +1045,15 @@ def load_dependents(conn, member_number, filepath, dry_run=False):
             "marital_status":   clean_category(row.get("Dependant Marital Status"), 50),
             "age":              clean_int(row.get("Dependant Age")),
             "date_of_birth":    clean_date(row.get("Dependant Date of Birth")),
-            "date_of_death":    clean_date(row.get("Dependant Date of Death")),
+            "date_of_death":    death,
             "activation_date":  clean_date(row.get("Dependant Member Activation")),
-            "deactivation_date": clean_date(row.get("Dependant Member Deactivation")),
+            "deactivation_date": deactivation,
             "since_date":       clean_date(row.get("Dependant Member Since")),
             "billing_cycle":    clean_str(row.get("Dependant Billing Cycle"), 50),
             "bill_to_member":   clean_str(row.get("Dependant Bill To Member"), 50),
             "fico_score":       clean_int(row.get("Dependant FICO Score")),
             "email":            clean_email(row.get("Dependant Email")),
-            "status":           clean_status(row.get("Dependant Status")),
+            "status":           status,
         })
 
         addr = {
@@ -1087,25 +1153,7 @@ def load_recent_activity(conn, member_number, filepath, dry_run=False):
 
 
 def load_statements(conn, member_number, filepath, dry_run=False):
-    """
-    Load _statements.csv into statements table.
-
-    Extended 2026-07-02 to capture receivable_type — the scraper now
-    pulls BOTH receivable types (House and Dues Charges, Homeowner) via
-    the arAccountTypeId dropdown on the Statements page, tagging each
-    row with which one it came from (_receivable_type). These are two
-    genuinely different ledgers (membership dues/AR vs. per-villa
-    operating P&L for owner-members), so the same Statement Period can
-    legitimately appear once under each type for the same member.
-
-    Conflict key is (member_number, statement_period, receivable_type),
-    not just (member_number, statement_period) — the old key would
-    have silently collapsed a member's House-and-Dues and Homeowner
-    statements for the same period into a single row.
-
-    Falls back to receivable_type = NULL for any older-style CSVs that
-    predate this change (single receivable type, no tag column).
-    """
+    """Load _statements.csv (Homeowner receivable type, 2025+ periods)."""
     try:
         df = pd.read_csv(filepath)
     except Exception as e:
@@ -1135,23 +1183,10 @@ def load_statements(conn, member_number, filepath, dry_run=False):
 
 def load_statement_details(conn, member_number, filepath, dry_run=False):
     """
-    Load _statement_details.csv into statement_details table.
-
-    Re-added 2026-07-03 — itemized line items drilled from each statement
-    period's detail page (statementNonPrintable.jsp), across BOTH
-    receivable types. Expected columns from that page:
-        DATE, REF. / TRANSACTION ID, DESCRIPTION, CHARGE, Surcharge,
-        Service Charge, SALES TAX, AMOUNT
-    plus the scraper-tagged _receivable_type, _statement_period,
-    _statement_due_date columns identifying which summary row each
-    line item belongs to. Tries a couple of casing variants per column
-    since exact header casing on the live page wasn't independently
-    confirmed at build time.
-
-    Primary key is a hash (see statement_detail_key in the DDL), not a
-    raw multi-column UNIQUE constraint — ref_transaction_id is
-    sometimes blank (e.g. "Balance Forward" rows) and can't be relied
-    on alone as a distinguishing key.
+    Load _statement_details.csv — itemized lines per statement period
+    (DATE, REF./TRANSACTION ID, DESCRIPTION, CHARGE, Surcharge,
+    Service Charge, SALES TAX, AMOUNT + scraper tags). Hash PK because
+    ref_transaction_id can be blank (Balance Forward rows).
     """
     try:
         df = pd.read_csv(filepath)
@@ -1204,26 +1239,9 @@ def load_statement_details(conn, member_number, filepath, dry_run=False):
 
 def load_services(conn, member_number, filepath, dry_run=False):
     """
-    Load _services.csv into services table.
-
-    Extended 2026-07-02 to capture the full Billing > Services detail
-    (members_enrolled_services.jsp) rather than just a bare service
-    name — dues/fees like Capital Expenditure Contribution, F&B
-    minimum, Family Membership Dues, GCT - Family Membership Dues,
-    Monthly Maintenance Fee, etc. Expected columns from that page:
-        Name, Type, Frequency, Start Date, Billed Upto, End Date, Amount
-
-    Falls back to a bare name-only column (Service/service_name/col_0)
-    for any older-style CSVs that predate the richer scrape — those
-    rows just get NULLs for type/frequency/dates/amount, same as
-    before this change.
-
-    Conflict key is (member_number, service_name, start_date), not just
-    (member_number, service_name) — the same service name can
-    legitimately recur across renewal periods (e.g. "Family Membership
-    Dues" billed 2019-2023, then again 2024-2025 at a different rate),
-    and collapsing those into one row would silently lose the older
-    period's amount/dates.
+    Load _services.csv — Name, Type, Frequency, Start Date, Billed
+    Upto, End Date, Amount. Conflict key includes start_date since the
+    same service name recurs across renewal periods.
     """
     try:
         df = pd.read_csv(filepath)
@@ -1246,15 +1264,8 @@ def load_services(conn, member_number, filepath, dry_run=False):
         svc = clean_str(get_first(row, "Name", "Service", "service_name", "col_0"))
         if not svc or svc.lower() in PAGE_ERROR_PHRASES:
             continue
-        # Defensive sanity check (added 2026-07-02): a scraper bug briefly
-        # let unrelated table content — including a raw <script> JS blob
-        # from the site's popup-dialog framework — through as if it were
-        # a real service name, for a handful of members before the
-        # scraper itself was fixed to validate table headers. A real
-        # service/dues name is always short and free of code-like
-        # tokens; reject anything that looks like it wasn't actually
-        # from the Services table, as a second line of defense even
-        # with the scraper fix in place.
+        # Reject anything that looks like scraped page code, not a
+        # real service name (second line of defense behind the scraper).
         if len(svc) > 150 or any(tok in svc for tok in ("function(", "var ", "\n", "{", "};")):
             log.warning(f"  Skipping implausible service_name for {member_number}: {svc[:60]!r}...")
             continue
@@ -1447,6 +1458,8 @@ def load_journal_folios(conn, journal_folder=JOURNAL_FOLDER, dry_run=False):
             base = os.path.basename(filepath).lower()
             if base.endswith("_guests.csv"):
                 continue
+            if base.endswith("_rate_details.csv"):
+                continue
             if "folio" not in base:
                 continue
             total += load_folio_file(conn, filepath, folder_name, dry_run)
@@ -1514,7 +1527,24 @@ def load_business_source(conn, filepath=BUSINESS_SOURCE_FILE, dry_run=False):
         """)
         updated = cur.rowcount
 
-    log.info(f"business_source: {count} mapping rows, updated {updated} folio rows")
+        # Journal-scraped rate_details rows carry Source (e.g. "HB -
+        # Homeowner Booking") but a blank Payment Type — fill it from
+        # the same mapping. Match on the source code prefix since
+        # business_source names may be stored as code or full label.
+        cur.execute("""
+            UPDATE rate_details rd
+            SET payment_type = bs.payment_type,
+                updated_at = NOW()
+            FROM business_source bs
+            WHERE rd.source IS NOT NULL
+              AND (rd.source = bs.source_name
+                   OR split_part(rd.source, ' - ', 1) = split_part(bs.source_name, ' - ', 1))
+              AND COALESCE(rd.payment_type, '') IS DISTINCT FROM COALESCE(bs.payment_type, '')
+        """)
+        updated_rd = cur.rowcount
+
+    log.info(f"business_source: {count} mapping rows, updated {updated} folio rows, "
+             f"{updated_rd} rate_detail rows")
     return updated
 
 def load_folios(conn, filepath=FOLIO_REPORT_FILE, dry_run=False):
@@ -1555,10 +1585,11 @@ def load_folios(conn, filepath=FOLIO_REPORT_FILE, dry_run=False):
 
 def normalize_rate_detail_row(row, source_file=None):
     """
-    Normalize one row from rate_details_free.csv / rate_details_paid.csv
-    to the rate_details table shape. original_amount is left as scraped
-    (0 when no override happened) — see rate_details_with_discount for
-    the derived rack_rate/discount_given logic, no cleanup needed here.
+    Normalize one per-night rate detail row (reports/ CSVs or journal
+    {folder}_rate_details.csv — same shape) to the rate_details table.
+    The key is data-derived (no source_file) so the same night from
+    either pipeline upserts instead of duplicating. source_file param
+    kept for call compatibility, intentionally unused.
     """
     conf_code      = clean_str(get_first(row, "Conf. Code"), 100)
     reservation_id = clean_str(get_first(row, "Reservation ID"), 100)
@@ -1572,7 +1603,7 @@ def normalize_rate_detail_row(row, source_file=None):
 
     return {
         "rate_detail_key": make_folio_key(
-            source_file, conf_code, reservation_id, rate_date, rate_name,
+            conf_code, reservation_id, rate_date, rate_name,
             original_amount, modified_amount, addon_amount,
             discounted_amount, total_amount,
         ),
@@ -1637,6 +1668,30 @@ def load_rate_details(conn, dry_run=False):
     return total
 
 
+def load_member_rate_details(conn, member_number, filepath, dry_run=False):
+    """Load a journal {folder}_rate_details.csv into rate_details."""
+    try:
+        df = pd.read_csv(filepath)
+    except Exception as e:
+        log.warning(f"  Could not read {filepath}: {e}")
+        return
+
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+
+    rows = []
+    for _, row in df.iterrows():
+        out = normalize_rate_detail_row(row, filepath)
+        if not any([out["conf_code"], out["rate_date"]]):
+            continue
+        if not out["member_number"]:
+            out["member_number"] = clean_str(member_number, 50)
+        rows.append(out)
+
+    if rows:
+        upsert(conn, "rate_details", rows, "rate_detail_key", dry_run)
+        log.info(f"  rate_details (journal): {len(rows)} rows")
+
+
 # ─────────────────────────────────────────────
 # PER-MEMBER LOADER  — one commit per member
 # ─────────────────────────────────────────────
@@ -1645,6 +1700,7 @@ LOADERS = {
     "profile":            load_profile,
     "dependents":         load_dependents,
     "rooms":              load_rooms,
+    "rate_details":       load_member_rate_details,
     "recent_activity":    load_recent_activity,
     "statements":         load_statements,
     "statement_details":  load_statement_details,
@@ -1713,6 +1769,11 @@ def data_quality_report(conn):
         "Dependents missing date of birth": """
             SELECT COUNT(*) FROM dependents WHERE date_of_birth IS NULL;
         """,
+        "Dependents marked Active with deactivation/death date": """
+            SELECT COUNT(*) FROM dependents
+            WHERE status = 'Active'
+              AND (deactivation_date IS NOT NULL OR date_of_death IS NOT NULL);
+        """,
         "Recent activity missing amount": """
             SELECT COUNT(*) FROM recent_activity WHERE amount IS NULL;
         """,
@@ -1748,7 +1809,8 @@ def main():
     parser.add_argument("--sample-rate", type=float, default=1.0,
                         help="Load deterministic sample, e.g. 0.10 for 10%")
     parser.add_argument("--folios-only", action="store_true",
-                        help="Only load folios/reservation guests, skip member profile data")
+                        help="Only load folios/reservation guests/business_source/"
+                             "reports rate details, skip member profile data")
     parser.add_argument("--business-source-only", action="store_true",
                         help="Only load reports/business_source.csv and update folios.payment_type")
     parser.add_argument("--rate-details-only", action="store_true",
@@ -1817,15 +1879,6 @@ def main():
         return
 
     if args.services_and_statements_only:
-        # Scans journal folders directly for {folder}_services.csv,
-        # {folder}_statements.csv, and {folder}_statement_details.csv,
-        # calling their respective loaders only — skips load_member()'s
-        # full LOADERS loop (profile/dependents/rooms/recent_activity/
-        # interests) entirely, so this doesn't waste time re-processing
-        # every other already-loaded file for ~38K members just to
-        # pick up new data. statement_details support re-added
-        # 2026-07-03 alongside the scraper itself re-adding itemized
-        # per-period drilling.
         log.info("Skipping member/profile/folio load because --services-and-statements-only was used.")
 
         if args.member:
@@ -1915,12 +1968,6 @@ def main():
         return
 
     if args.statement_details_only:
-        # Scans journal folders directly for {folder}_statement_details.csv
-        # only, calling load_statement_details() — skips everything else,
-        # including services.csv/statements.csv even if present in the
-        # same folder. Useful when you've re-scraped itemized statement
-        # detail specifically and don't want to waste time re-touching
-        # services/statements data that hasn't changed.
         log.info("Skipping everything except statement_details because --statement-details-only was used.")
 
         if args.member:
@@ -2011,6 +2058,7 @@ def main():
     else:
         log.info("Skipping member/profile load because --folios-only was used.")
 
+    # Folio pipeline data — part of the default run.
     try:
         if args.sample_rate >= 1.0 or args.folios_only:
             load_folios(conn, FOLIO_REPORT_FILE, dry_run=args.dry_run)
