@@ -2426,19 +2426,41 @@ function AmenityRevenueSection({ data, onBarClick }) {
     </div>
   );
 }
-
 function AmenityHeatmapSection({ data, onCellClick }) {
-  const [year, setYear] = useState("All");
-  const years = useMemo(() => getYearOptionsFromRows(data), [data]);
+  const [dateFilter, setDateFilter] = useState(createDateFilter());
+  const [season, setSeason] = useState("All");
+
+  const dateYears = useMemo(() => getDateFilterYearsFromRows(data), [data]);
+
+  const dateFilteredData = useMemo(
+    () => data.filter((row) => rowMatchesDateFilter(row, dateFilter)),
+    [data, dateFilter],
+  );
+
+  const seasons = useMemo(
+    () => [
+      "All",
+      ...new Set(dateFilteredData.map((d) => d.season).filter(Boolean)),
+    ],
+    [dateFilteredData],
+  );
 
   useEffect(() => {
-    if (!years.includes(year)) setYear("All");
-  }, [year, years]);
+    if (!seasons.includes(season)) setSeason("All");
+  }, [season, seasons]);
 
   const filteredData = useMemo(
-    () => data.filter((row) => rowMatchesYear(row, year)),
-    [data, year],
+    () =>
+      season === "All"
+        ? dateFilteredData
+        : dateFilteredData.filter((row) => row.season === season),
+    [dateFilteredData, season],
   );
+
+  // Only ym-mode carries a clean "year" for the drilldown table below;
+  // day/range filters still work on the heatmap itself, they just don't
+  // pre-seed the visit table's year selector.
+  const drillYear = dateFilter.mode === "ym" ? dateFilter.year : "All";
 
   return (
     <div style={card}>
@@ -2456,15 +2478,51 @@ function AmenityHeatmapSection({ data, onCellClick }) {
       <div
         style={{
           display: "flex",
-          justifyContent: "flex-end",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: 10,
+          flexWrap: "wrap",
           marginBottom: 12,
         }}
       >
-        <YearFilterControl value={year} onChange={setYear} years={years} />
+        <DateFilterControl
+          value={dateFilter}
+          onChange={setDateFilter}
+          years={dateYears}
+        />
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.07em",
+              color: C.textMuted,
+              fontFamily: "sans-serif",
+            }}
+          >
+            Season
+          </span>
+          <select
+            style={select}
+            value={season}
+            onChange={(e) => setSeason(e.target.value)}
+          >
+            {seasons.map((s) => (
+              <option key={s} value={s}>
+                {s === "All" ? "All Seasons" : s}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
+
       <AmenitySeasonHeatmap
         data={filteredData}
-        onCellClick={(amenity, season) => onCellClick(amenity, season, year)}
+        onCellClick={(amenity, seasonName) =>
+          onCellClick(amenity, seasonName, drillYear)
+        }
       />
     </div>
   );
