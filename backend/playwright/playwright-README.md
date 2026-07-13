@@ -35,10 +35,15 @@
 
     python backend/playwright/journal_scraper.py --id 32845         # Single member by portal ID
 
-9. cleaner.py (add '--rate-details-only' to load just rate_details)
+9. python backend/playwright/cleaner.py (add '--rate-details-only' to load just rate_details)
 
 10. python backend/playwright/member_enricher.py --apply
 
+11. python backend/playwright/overview_sql.py
+
+12. python backend\machinelearning\ml_amenity_seasons.py
+13. python backend\machinelearning\season_tables.py
+14. python backend\machinelearning\segmentation.py
 
 
 ## Notes: (These files do not affect playwright's function)

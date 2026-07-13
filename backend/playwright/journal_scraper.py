@@ -228,8 +228,6 @@ def scrape_member_info_fields(page, prefix=""):
     frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not frame:
         return {}
-<<<<<<< Updated upstream
-=======
 
     try:
         frame.wait_for_function(
@@ -242,7 +240,6 @@ def scrape_member_info_fields(page, prefix=""):
     except Exception:
         page.wait_for_timeout(1000)
 
->>>>>>> Stashed changes
     data = {
         "Deactivation Date": "",
         "Date of Death":     "",

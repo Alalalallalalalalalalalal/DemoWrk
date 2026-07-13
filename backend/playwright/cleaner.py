@@ -53,6 +53,7 @@ import os
 import csv
 import re
 import glob
+import time
 import argparse
 import logging
 import hashlib
@@ -78,6 +79,7 @@ FOLIO_REPORT_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "folio_report.csv
 BUSINESS_SOURCE_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "business_source.csv")
 FREE_RATE_DETAILS_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "rate_details_free.csv")
 PAID_RATE_DETAILS_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "rate_details_paid.csv")
+CLEANER_DONE_LOG       = os.path.join(PLAYWRIGHT_FOLDER, "cleaner_done.txt")
 
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST"),
@@ -443,7 +445,10 @@ def clean_date(val):
 
 
 def clean_amount(val):
-    if not val or str(val).strip() in ("", "nan", "-", "--"):
+    # val is None / NaN / blank -> None; but a genuine 0 or 0.0 is a
+    # real amount and must NOT be treated as falsy (pandas parses bare
+    # "0.00" columns as float 0.0, and `not 0.0` is True).
+    if val is None or str(val).strip() in ("", "nan", "-", "--"):
         return None
 
     val = str(val).strip()
@@ -580,8 +585,8 @@ def clean_gender(val):
 
 
 def clean_int(val):
-    """Parse integer. Returns None if empty or non-numeric."""
-    if not val or str(val).strip() in ("", "nan"):
+    """Parse integer. Returns None if empty or non-numeric. Zero is a value."""
+    if val is None or str(val).strip() in ("", "nan"):
         return None
     try:
         return int(float(str(val).strip()))
@@ -700,6 +705,50 @@ def keep_sample(key, sample_rate):
 
 def get_connection():
     return psycopg2.connect(**DB_CONFIG)
+
+
+def reconnect(max_attempts=5, delay=5):
+    """Reconnect with retries — the Supabase pooler drops long sessions."""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            conn = get_connection()
+            conn.autocommit = False
+            log.info(f"Reconnected to PostgreSQL (attempt {attempt}).")
+            return conn
+        except Exception as e:
+            log.warning(f"Reconnect attempt {attempt}/{max_attempts} failed: {e}")
+            time.sleep(delay * attempt)
+    raise ConnectionError("Could not reconnect to PostgreSQL.")
+
+
+def connection_alive(conn):
+    try:
+        if conn is None or conn.closed:
+            return False
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        return True
+    except Exception:
+        return False
+
+
+def safe_rollback(conn):
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+
+
+def load_cleaner_done():
+    if not os.path.exists(CLEANER_DONE_LOG):
+        return set()
+    with open(CLEANER_DONE_LOG, "r", encoding="utf-8") as f:
+        return set(line.strip() for line in f if line.strip())
+
+
+def mark_cleaner_done(folder_name):
+    with open(CLEANER_DONE_LOG, "a", encoding="utf-8") as f:
+        f.write(f"{folder_name}\n")
 
 
 
@@ -1724,8 +1773,12 @@ def load_member(conn, member_folder_path, dry_run=False):
         if os.path.exists(filepath):
             try:
                 loader_fn(conn, member_number, filepath, dry_run)
+            except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                # Dead connection — let the caller reconnect and retry
+                # this member from the top.
+                raise
             except Exception as e:
-                conn.rollback()
+                safe_rollback(conn)
                 log.error(f"  Error loading {suffix} for {folder_name}: {e}")
         else:
             log.debug(f"  No {suffix} file for {folder_name}")
@@ -1806,6 +1859,8 @@ def main():
                         help="Test run — no data written to DB")
     parser.add_argument("--recreate-tables", action="store_true",
                         help="Drop and recreate all tables before loading")
+    parser.add_argument("--reload", action="store_true",
+                        help="Ignore cleaner_done.txt and re-load every member folder")
     parser.add_argument("--sample-rate", type=float, default=1.0,
                         help="Load deterministic sample, e.g. 0.10 for 10%")
     parser.add_argument("--folios-only", action="store_true",
@@ -1843,6 +1898,10 @@ def main():
     except Exception as e:
         log.error(f"Could not connect to PostgreSQL: {e}")
         return
+
+    if args.recreate_tables and os.path.exists(CLEANER_DONE_LOG):
+        os.remove(CLEANER_DONE_LOG)
+        log.info("cleaner_done.txt cleared (tables being recreated).")
 
     create_tables(conn, recreate=args.recreate_tables)
 
@@ -2044,22 +2103,52 @@ def main():
                 if keep_sample(os.path.basename(f), args.sample_rate)
             ]
 
+        done = set() if (args.reload or args.member) else load_cleaner_done()
+        if done:
+            before = len(folders)
+            folders = [f for f in folders if os.path.basename(f) not in done]
+            log.info(f"Resuming — {before - len(folders)} folders already loaded "
+                     f"(cleaner_done.txt), {len(folders)} remaining. "
+                     f"Use --reload to re-load everything.")
+
         print(f"Members available: {total_before_sample}")
         print(f"Members to load:   {len(folders)}\n")
 
         for folder in folders:
-            try:
-                load_member(conn, folder, dry_run=args.dry_run)
-                success.append(os.path.basename(folder))
-            except Exception as e:
-                conn.rollback()
-                log.error(f"Failed {os.path.basename(folder)}: {e}")
-                failed.append(os.path.basename(folder))
+            name = os.path.basename(folder)
+            for attempt in (1, 2):
+                try:
+                    if not connection_alive(conn):
+                        log.warning("Connection lost — reconnecting...")
+                        conn = reconnect()
+                    load_member(conn, folder, dry_run=args.dry_run)
+                    success.append(name)
+                    if not args.dry_run:
+                        mark_cleaner_done(name)
+                    break
+                except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                    log.warning(f"Connection error on {name} (attempt {attempt}/2): {e}")
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = reconnect()
+                    if attempt == 2:
+                        log.error(f"Failed {name}: connection error persisted")
+                        failed.append(name)
+                except Exception as e:
+                    safe_rollback(conn)
+                    log.error(f"Failed {name}: {e}")
+                    failed.append(name)
+                    break
     else:
         log.info("Skipping member/profile load because --folios-only was used.")
 
     # Folio pipeline data — part of the default run.
     try:
+        if not connection_alive(conn):
+            log.warning("Connection lost before folio load — reconnecting...")
+            conn = reconnect()
         if args.sample_rate >= 1.0 or args.folios_only:
             load_folios(conn, FOLIO_REPORT_FILE, dry_run=args.dry_run)
             load_business_source(conn, BUSINESS_SOURCE_FILE, dry_run=args.dry_run)
@@ -2069,10 +2158,12 @@ def main():
         else:
             log.info("Skipping full folio load during sampled member run.")
     except Exception as e:
-        conn.rollback()
+        safe_rollback(conn)
         log.error(f"Failed loading folios: {e}")
 
     if not args.dry_run:
+        if not connection_alive(conn):
+            conn = reconnect()
         data_quality_report(conn)
 
     conn.close()
