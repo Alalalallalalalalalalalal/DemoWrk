@@ -289,6 +289,15 @@ def demographics_summary(
                 TRIM(m.member_type) AS member_type,
                 TRIM(m.member_or_guest)
                     AS account_category,
+
+                COUNT(*) FILTER (
+                    WHERE TRIM(m.status) = 'Active'
+                )::int AS active_total,
+
+                COUNT(*) FILTER (
+                    WHERE TRIM(m.status) IS DISTINCT FROM 'Active'
+                )::int AS inactive_total,
+
                 COUNT(*)::int AS total
             FROM members m
             WHERE m.member_type IS NOT NULL
