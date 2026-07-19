@@ -122,6 +122,8 @@ export default function Dashboard() {
   const [totalRecentActivitySpend, setTotalRecentActivitySpend] =
     useState(null);
   const [topSpendDescriptions, setTopSpendDescriptions] = useState([]);
+  const [totalAmountDue, setTotalAmountDue] = useState(null);
+  const [amountDueByPeriod, setAmountDueByPeriod] = useState([]);
   const [totalDependents, setTotalDependents] = useState(null);
   const [dependentsPerHousehold, setDependentsPerHousehold] = useState([]);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
@@ -160,7 +162,6 @@ export default function Dashboard() {
   const [monthlyRevenueByCategory, setMonthlyRevenueByCategory] = useState([]);
   const [reversalsSummary, setReversalsSummary] = useState(null);
   const [villaRackRateFree, setVillaRackRateFree] = useState([]);
-  const [rackRateSummary, setRackRateSummary] = useState(null);
   const [cashAdvanceSummary, setCashAdvanceSummary] = useState(null);
   const [anomaliesSummary, setAnomaliesSummary] = useState(null);
   const [anomalies, setAnomalies] = useState([]);
@@ -168,9 +169,15 @@ export default function Dashboard() {
   const [internalTransfersSummary, setInternalTransfersSummary] = useState(null);
   const [paymentsSummary, setPaymentsSummary] = useState(null);
   const [paymentCorrectionsSummary, setPaymentCorrectionsSummary] = useState(null);
-  const [emailOnFile, setEmailOnFile] = useState(null);
+  // Added 2026-07-17 — three datasets OverviewTab already consumed via
+  // props that were never wired up here (their backend endpoints didn't
+  // exist until the same day; see overview_analytics.py):
+  //   memberDuesSummary — member dues added to Combined total
+  //   emailOnFile       — "With email on file" on Members at a glance
+  //   rackRateSummary   — Rack ADR / Effective discount on Bookings at a glance
   const [memberDuesSummary, setMemberDuesSummary] = useState(null);
-  const [outstandingBalanceSummary, setOutstandingBalanceSummary] = useState(null);
+  const [emailOnFile, setEmailOnFile] = useState(null);
+  const [rackRateSummary, setRackRateSummary] = useState(null);
 
   useEffect(() => {
     // ── Non-Overview data: members by country/state/gender/age, dependents
@@ -201,11 +208,9 @@ export default function Dashboard() {
         setDependentsByAgeGroup(data.dependentsByAgeGroup ?? []);
         setDependentsPerMember(data.dependentsPerMember ?? []);
         setDependentsPerHousehold(data.dependentsPerHousehold ?? []);
-        // NOTE: totalDependents is intentionally NOT set here anymore — it
-        // now comes from /overview/summary below, so there's only one
-        // writer for it. (totalAmountDue/amountDueByPeriod removed
-        // 2026-07-01 — statements stopped generating from folios; see
-        // overview_analytics.py.)
+        // NOTE: totalAmountDue, amountDueByPeriod, and totalDependents are
+        // intentionally NOT set here anymore — they now come from
+        // /overview/summary below, so there's only one writer for each.
       })
       .catch(console.error);
 
@@ -270,10 +275,11 @@ export default function Dashboard() {
           setMonthlyRevenueByCategory(
             data.overviewMonthlyRevenueByCategory ?? [],
           );
+          setTotalAmountDue(data.overviewAmountDue ?? null);
+          setAmountDueByPeriod(data.overviewAmountDueByPeriod ?? []);
           setTotalDependents(data.overviewDependents ?? null);
           setReversalsSummary(data.overviewReversalsSummary ?? null);
           setVillaRackRateFree(data.overviewVillaRackRateFree ?? []);
-          setRackRateSummary(data.overviewRackRateSummary ?? null);
           setCashAdvanceSummary(data.overviewCashAdvanceSummary ?? null);
           setAnomaliesSummary(data.overviewAnomaliesSummary ?? null);
           setAnomalies(data.overviewAnomalies ?? []);
@@ -281,9 +287,9 @@ export default function Dashboard() {
           setInternalTransfersSummary(data.overviewInternalTransfersSummary ?? null);
           setPaymentsSummary(data.overviewPaymentsSummary ?? null);
           setPaymentCorrectionsSummary(data.overviewPaymentCorrectionsSummary ?? null);
-          setEmailOnFile(data.overviewEmailOnFile ?? null);
           setMemberDuesSummary(data.overviewMemberDuesSummary ?? null);
-          setOutstandingBalanceSummary(data.overviewOutstandingBalanceSummary ?? null);
+          setEmailOnFile(data.overviewEmailOnFile ?? null);
+          setRackRateSummary(data.overviewRackRateSummary ?? null);
           // villaRevenue (rental-revenue-per-villa) is no longer fetched —
           // "Top villas by revenue" now uses villaAmenityRevenue instead.
           setVillaRevenue([]);
@@ -509,7 +515,6 @@ export default function Dashboard() {
             membersByCountry={membersByCountry}
             membersByState={membersByState}
             membersByMaritalStatus={membersByMaritalStatus}
-            newMembersPerYear={newMembersPerYear}
             averageTenure={averageTenure}
             averageLengthOfStay={averageLengthOfStay}
             bookingsByMonth={bookingsByMonth}
@@ -517,11 +522,11 @@ export default function Dashboard() {
             mostUsedRoomTypes={mostUsedRoomTypes}
             totalDependents={totalDependents}
             dependentsPerMember={dependentsPerMember}
+            totalAmountDue={totalAmountDue}
+            amountDueByPeriod={amountDueByPeriod}
             totalRecentActivitySpend={totalRecentActivitySpend}
             topSpendDescriptions={topSpendDescriptions}
-            emailOnFile={emailOnFile}
-            memberDuesSummary={memberDuesSummary}
-            outstandingBalanceSummary={outstandingBalanceSummary}
+            directoryMembers={[]}
             memberVsGuestRevenue={memberVsGuestRevenue}
             villaStats={villaStats}
             visitsTabSummary={visitsTabSummary}
@@ -537,7 +542,6 @@ export default function Dashboard() {
             monthlyRevenueByCategory={monthlyRevenueByCategory}
             reversalsSummary={reversalsSummary}
             villaRackRateFree={villaRackRateFree}
-            rackRateSummary={rackRateSummary}
             cashAdvanceSummary={cashAdvanceSummary}
             anomaliesSummary={anomaliesSummary}
             anomalies={anomalies}
@@ -545,6 +549,10 @@ export default function Dashboard() {
             internalTransfersSummary={internalTransfersSummary}
             paymentsSummary={paymentsSummary}
             paymentCorrectionsSummary={paymentCorrectionsSummary}
+            memberDuesSummary={memberDuesSummary}
+            emailOnFile={emailOnFile}
+            rackRateSummary={rackRateSummary}
+            newMembersPerYear={newMembersPerYear}
           />
         )}
 

@@ -157,6 +157,25 @@ export const overviewApi = {
     // Backend route: GET /overview/anomalies
     anomalies: () => get("/anomalies"),
 
+    // [overview] Net total + count of member DUES lines from
+    // statement_details — added to the Combined total on Member vs guest
+    // revenue (and optionally the Finance total). Built 2026-07-17; the
+    // frontend had referenced it since 2026-06-26.
+    // Backend route: GET /overview/member-dues-summary
+    memberDuesSummary: () => get("/member-dues-summary"),
+
+    // [overview] Snapshot count of accounts with an email address —
+    // powers "With email on file" on Members at a glance. Built
+    // 2026-07-17; referenced since 2026-07-01.
+    // Backend route: GET /overview/email-on-file
+    emailOnFile: () => get("/email-on-file"),
+
+    // [overview] Rack-rate total + room nights, overall and by Paid/Free
+    // — powers Rack ADR and Effective discount on Bookings at a glance.
+    // Built 2026-07-17; referenced since 2026-07-01.
+    // Backend route: GET /overview/rack-rate-summary
+    rackRateSummary: () => get("/rack-rate-summary"),
+
     // [overview] One bundled call that returns every dataset the
     // Overview tab needs in a single round trip — this is what
     // dashboard.jsx uses, rather than calling the individual endpoints
