@@ -110,6 +110,15 @@ def dashboard_summary(db: Session = Depends(get_db)):
             SELECT
                 member_type AS member_type,
                 member_or_guest AS account_category,
+
+                COUNT(*) FILTER (
+                    WHERE TRIM(status) = 'Active'
+                ) AS active_total,
+
+                COUNT(*) FILTER (
+                    WHERE TRIM(status) IS DISTINCT FROM 'Active'
+                ) AS inactive_total,
+
                 COUNT(*) AS total
             FROM members
             WHERE member_type IS NOT NULL

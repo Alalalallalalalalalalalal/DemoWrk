@@ -2011,6 +2011,7 @@ export default function DemographicsTab({
                     />
                     <XAxis
                     type="number"
+                    domain={[0, "dataMax"]}
                     stroke={AX}
                     fontSize={11}
                     allowDecimals={false}
@@ -2025,33 +2026,52 @@ export default function DemographicsTab({
                     tickLine={false}
                     />
                     <Tooltip
-                    contentStyle={TIP}
-                    formatter={(value) => [
-                        Number(value).toLocaleString(),
-                        accountTypeView === "Member"
-                        ? "Members"
-                        : "Guests",
-                    ]}
+                        contentStyle={TIP}
+                        formatter={(value, name) => [
+                            Number(value).toLocaleString(),
+                            name,
+                        ]}
+                    />
+                    <Legend
+                        wrapperStyle={{
+                            fontSize: 11,
+                            paddingTop: 6,
+                        }}
                     />
                     <Bar
-                        dataKey="total"
-                        name="Accounts"
+                        dataKey="active_total"
+                        name="Active"
+                        stackId="accountType"
                         fill={
                             accountTypeView === "Member"
-                            ? "#FFB162"
-                            : "var(--dashboard-truffle)"
+                                ? "#FFB162"
+                                : "var(--dashboard-truffle)"
                         }
-                        radius={[0, 6, 6, 0]}
                         maxBarSize={20}
                         cursor="pointer"
                         onClick={handleAccountTypeClick}
                         background={(props) => (
                             <ClickableBarRow
-                            {...props}
-                            onRowClick={handleAccountTypeClick}
+                                {...props}
+                                onRowClick={handleAccountTypeClick}
                             />
                         )}
-                        />
+                    />
+                    <Bar
+                        dataKey="inactive_total"
+                        name="Inactive"
+                        stackId="accountType"
+                        fill={
+                            accountTypeView === "Member"
+                                ? "#fad1a9"
+                                : "#7b79ae"
+                        }
+                        fillOpacity={0.4}
+                        radius={[0, 6, 6, 0]}
+                        maxBarSize={20}
+                        cursor="pointer"
+                        onClick={handleAccountTypeClick}
+                    />
                 </BarChart>
                 </ResponsiveContainer>
             </div>
