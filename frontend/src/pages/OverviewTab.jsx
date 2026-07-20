@@ -1214,6 +1214,7 @@ export default function OverviewTab({
                             <StatRow
                                 label="Payments collected"
                                 value={paymentsSummary?.payments_total != null ? money(Math.abs(paymentsSummary.payments_total)) : "—"}
+                                sub="Guest folios and owner statements"
                             />
                             <StatRow
                                 label="Payment corrections"

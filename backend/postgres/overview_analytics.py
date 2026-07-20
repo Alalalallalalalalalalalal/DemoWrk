@@ -80,7 +80,8 @@ def overview_payment_type_filter_sql(alias: str = "ovb"):
     """
 
 
-def overview_date_filter_sql(alias="ovb", column="overview_check_in_date", end_column="overview_check_out_date"):
+def overview_date_filter_sql(alias="ovb", column="overview_check_in_date",
+                            end_column="overview_check_out_date", mode="checkin"):
     """
     Date-range OVERLAP filter — "does this booking's stay overlap the
     requested period" — same semantics and priority order as
@@ -103,6 +104,34 @@ def overview_date_filter_sql(alias="ovb", column="overview_check_in_date", end_c
     """
     d = f"{alias}.{column}"
     out = f"{alias}.{end_column}"
+
+    if mode == "checkin":
+        # [2026-07-19] ONE STAY, ONE PERIOD. The stay is attributed to the
+        # period containing its CHECK-IN date, so it is counted exactly
+        # once. See this function's docstring for the $1.22M/55-stay
+        # double count this replaced.
+        return f"""
+        AND (
+            CASE
+                WHEN :start_date IS NOT NULL OR :end_date IS NOT NULL THEN
+                    {d} >= COALESCE(:start_date, {d})
+                    AND {d} <= COALESCE(:end_date, {d})
+                WHEN :date IS NOT NULL THEN
+                    {d} = :date
+                WHEN :year IS NOT NULL AND :month IS NOT NULL THEN
+                    {d} >= MAKE_DATE(:year, :month, 1)
+                    AND {d} <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::date
+                WHEN :year IS NOT NULL THEN
+                    {d} >= MAKE_DATE(:year, 1, 1)
+                    AND {d} <= MAKE_DATE(:year, 12, 31)
+                ELSE TRUE
+            END
+        )
+    """
+
+    # mode="overlap": kept for per-NIGHT sources (rate_details_with_discount),
+    # where each row already belongs to exactly one date and overlap is the
+    # correct "which nights fall in this period" test.
     return f"""
         AND (
             CASE
@@ -231,22 +260,72 @@ def overview_villa_stats(
     params["overview_payment_type"] = overview_payment_type
     return overview_rows(db, f"""
         SELECT
-            overview_villa_name                                AS villa_name,
-            overview_bedroom_count                              AS bedroom_count,
-            overview_payment_type AS villa_payment_type,
-            COUNT(*)                                            AS bookings,
-            SUM(overview_nights)                                AS total_nights,
-            ROUND(AVG(overview_nights)::numeric, 1)             AS avg_stay,
-            COUNT(DISTINCT overview_member_number)               AS unique_members,
-            SUM(overview_persons)                                AS total_guests,
-            ROUND(AVG(overview_persons)::numeric, 1)            AS avg_party_size,
-            SUM(overview_villa_revenue)                          AS revenue
-        FROM overview_villa_bookings ovb
-        WHERE 1=1
-          {overview_payment_type_filter_sql("ovb")}
-          {overview_date_filter_sql("ovb")}
-        GROUP BY overview_villa_name, overview_bedroom_count, overview_payment_type
-        ORDER BY bookings DESC, overview_villa_name, overview_bedroom_count NULLS LAST
+            b.villa_name,
+            b.bedroom_count,
+            b.villa_payment_type,
+            b.bookings,
+            b.total_nights,
+            b.avg_stay,
+            b.unique_members,
+            b.total_guests,
+            b.avg_party_size,
+            -- [2026-07-19] Revenue comes from the TRANSACTION LEDGER, not
+            -- from overview_villa_bookings. Booking-level revenue is
+            -- zeroed for rental-programme villas by the double-count
+            -- guard, and payout lines are excluded from the bookings view
+            -- (a payout is not a booking) — so the highest-earning villas
+            -- reported $0. Villa Amana showed $0 against $552,040 actual.
+            -- This is the same source the hero tile and Finance card use.
+            COALESCE(r.revenue, 0)                              AS revenue
+        FROM (
+            SELECT
+                overview_villa_name                             AS villa_name,
+                overview_bedroom_count                          AS bedroom_count,
+                overview_payment_type                           AS villa_payment_type,
+                COUNT(*)                                        AS bookings,
+                SUM(overview_nights)                            AS total_nights,
+                ROUND(AVG(overview_nights)::numeric, 1)         AS avg_stay,
+                COUNT(DISTINCT overview_member_number)          AS unique_members,
+                SUM(overview_persons)                           AS total_guests,
+                ROUND(AVG(overview_persons)::numeric, 1)        AS avg_party_size,
+                -- [2026-07-19] One row per villa+payment_type carries the
+                -- revenue; see the join below. Without this, a villa with
+                -- N bedroom_count values had its revenue attached N times
+                -- and the frontend's per-villa sum multiplied it
+                -- (Villa Amana: $552,041 shown as $1,656,122).
+                ROW_NUMBER() OVER (
+                    PARTITION BY overview_villa_name, overview_payment_type
+                    ORDER BY COUNT(*) DESC, overview_bedroom_count NULLS LAST
+                )                                               AS revenue_row
+            FROM overview_villa_bookings ovb
+            WHERE 1=1
+              {overview_payment_type_filter_sql("ovb")}
+              {overview_date_filter_sql("ovb")}
+            GROUP BY overview_villa_name, overview_bedroom_count, overview_payment_type
+        ) b
+        LEFT JOIN (
+            -- Joined on villa name + payment type only. Allocated
+            -- programme lines inherit bedroom_count from the stay, which
+            -- can be NULL, and joining on it would drop those rows.
+            SELECT
+                otl.overview_villa_name                         AS villa_name,
+                ovb2.overview_payment_type                      AS villa_payment_type,
+                SUM(otl.overview_net_amount)                    AS revenue
+            FROM overview_transaction_lines otl
+            JOIN overview_booking_meta ovb2 USING (overview_conf_code)
+            WHERE otl.overview_line_category = 'Villa'
+              AND otl.overview_line_status   = 'Paid'
+              AND otl.overview_villa_name IS NOT NULL
+              {overview_payment_type_filter_sql("ovb2")}
+              {overview_date_filter_sql("ovb2")}
+            GROUP BY otl.overview_villa_name, ovb2.overview_payment_type
+        ) r
+          ON  r.villa_name         = b.villa_name
+          AND r.villa_payment_type = b.villa_payment_type
+          -- Revenue lands on one bedroom-count row only; the others get 0,
+          -- so summing per villa gives the true total exactly once.
+          AND b.revenue_row        = 1
+        ORDER BY b.bookings DESC, b.villa_name, b.bedroom_count NULLS LAST
     """, params)
 
 
@@ -620,7 +699,35 @@ def overview_member_dues_summary(
             COALESCE(SUM(sd.amount), 0) AS total_dues,
             COUNT(*)                    AS dues_count
         FROM statement_details sd
-        WHERE LOWER(sd.description) LIKE '%dues%'
+        WHERE (
+                 -- [2026-07-19] Anchored on actual charge types. The old
+                 -- '%dues%' keyword match caught only "Family Membership
+                 -- Dues" and missed the Monthly Maintenance Fee entirely,
+                 -- showing $178,020 where the real total is ~$1,963,997.
+                 sd.description ILIKE 'Monthly Maintenance Fee%'
+              OR sd.description ILIKE '%Family Membership Dues%'
+              OR sd.description ILIKE '%Corporate Golf Membership%'
+                 -- CAPEX: Capital Expenditure Contribution is deliberately
+                 -- EXCLUDED (~$489,271 for 2026). It funds a reserve for
+                 -- future capital works — a balance-sheet item, not
+                 -- operating revenue, and every other figure on this page
+                 -- is operating revenue. Uncomment both lines to include
+                 -- it if finance rules the other way.
+                 -- OR sd.description ILIKE 'Capital Expenditure Contribution%'
+                 -- OR sd.description ILIKE 'Adj- Capital Expenditure Contribution%'
+          )
+          -- Each dues charge posts a separate 15% GCT line whose
+          -- description also ends in "Dues" ($23,220 of the old figure).
+          -- Everything else on this page is net of tax.
+          AND LOWER(sd.description) NOT LIKE '%g.c.t%'
+          AND LOWER(sd.description) NOT LIKE '%gct%'
+          -- Vendor invoices ("4659 - Range Wood Constr. ... maintenance
+          -- work", $109,997) are third-party costs billed to owners, not
+          -- dues owed to the club. Identified by the leading vendor number.
+          -- NB: POSIX classes, no braces/backslashes — this SQL lives in an
+          -- f-string, where {3,} would be read as a format placeholder and
+          -- silently corrupt the pattern.
+          AND sd.description !~ '^[[:space:]]*[0-9][0-9][0-9]'
           AND LOWER(sd.description) NOT LIKE '%villa income%'
           {overview_date_filter_sql("sd", "transaction_date", "transaction_date")}
     """, params)
@@ -702,7 +809,7 @@ def overview_rack_rate_summary(
           -- completed stays only — matches overview_villa_bookings, so
           -- ADR and rack ADR cover the same nights
           AND rd.check_out_date < CURRENT_DATE
-          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date", mode="overlap")}
     """, params)
 
     overview_rack_by_type = overview_rows(db, f"""
@@ -720,7 +827,7 @@ def overview_rack_rate_summary(
         WHERE COALESCE(LOWER(rd.reservation_status), '')
                   NOT IN ('cancelled', 'canceled', 'no-show')
           AND rd.check_out_date < CURRENT_DATE
-          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date", mode="overlap")}
         GROUP BY COALESCE(NULLIF(TRIM(rd.payment_type), ''), 'Unknown')
     """, params)
 
@@ -1098,16 +1205,47 @@ def overview_payments_summary(
 ):
     params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
     return overview_one(db, f"""
+        -- [2026-07-19] Guest folio payments UNION owner statement
+        -- settlements. This read `folios` only, so the $4.84M (2026) that
+        -- homeowners wire in against their statement balances was
+        -- invisible — and since statement_amenity_lines already excludes
+        -- payment-worded lines from amenity (correctly, a payment is not
+        -- spend), those lines were dropped from revenue and never counted
+        -- as payments either.
         SELECT
-            COUNT(*)                       AS payments_count,
-            COALESCE(SUM(f.amount), 0)     AS payments_total
-        FROM folios f
-        LEFT JOIN overview_booking_meta ovb
-          ON ovb.overview_conf_code = f.conf_code
-        WHERE f.conf_code IS NOT NULL
-          AND f.description IS NOT NULL
-          AND TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%payment%'
-          {overview_date_filter_sql("ovb")}
+            COALESCE(SUM(payments_count), 0) AS payments_count,
+            COALESCE(SUM(payments_total), 0) AS payments_total
+        FROM (
+            SELECT
+                COUNT(*)                   AS payments_count,
+                COALESCE(SUM(f.amount), 0) AS payments_total
+            FROM folios f
+            LEFT JOIN overview_booking_meta ovb
+              ON ovb.overview_conf_code = f.conf_code
+            WHERE f.conf_code IS NOT NULL
+              AND f.description IS NOT NULL
+              AND TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%payment%'
+              {overview_date_filter_sql("ovb")}
+
+            UNION ALL
+
+            SELECT
+                COUNT(*)                        AS payments_count,
+                -- ABS(): statement payments post NEGATIVE (credits
+                -- reducing the balance) while folio payments post
+                -- positive. Without this they would cancel each other.
+                COALESCE(SUM(ABS(sd.amount)), 0) AS payments_total
+            FROM statement_details sd
+            WHERE LOWER(sd.description) ~
+                  '(wire|payment|thank you|lodgement|funds received|bns transfer|jmmb|cheque)'
+              -- Insurance settlements are money from an insurer, not
+              -- someone settling an account.
+              AND sd.description !~* '(insurance|settlement|policy no|property damage)'
+              -- Vendor invoice references are money going OUT to a
+              -- contractor, not a payment on account.
+              AND sd.description !~* 'invoice'
+              {overview_date_filter_sql("sd", "transaction_date", "transaction_date")}
+        ) all_payments
     """, params)
 
 
@@ -1359,7 +1497,7 @@ def overview_villa_rack_rate_free(
         FROM rate_details_with_discount rd
         WHERE rd.payment_type = 'Free'
           AND rd.villa_name IS NOT NULL
-          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date", mode="overlap")}
         GROUP BY rd.villa_name
         ORDER BY rack_rate_total DESC
     """, params)

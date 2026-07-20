@@ -458,6 +458,24 @@ WITH classified AS (
         sd.amount,
         CASE
             WHEN LOWER(sd.description) LIKE '%villa income%'                          THEN NULL
+            -- [2026-07-19] THIRD-PARTY COSTS ARE NOT AMENITY SPEND.
+            -- Vendor-numbered lines ("NNNN - Supplier / INV / detail") are
+            -- villa operating costs billed to owners: TVs, dishwashers,
+            -- landscaping, golf cart parts, generator servicing. Excluded
+            -- UNLESS the vendor is a club outlet, because commissary, wine
+            -- sales and the RSL boutique/dive shop ARE genuine club sales
+            -- and share the same numbered format ($75,051.77 for 2026 —
+            -- these must stay).
+            -- POSIX classes, no braces: this block is inside a Python
+            -- string where {3,} would be misread as a format placeholder.
+            WHEN sd.description ~ '^[[:space:]]*[0-9][0-9][0-9]'
+                 AND sd.description !~* '(commissary|wine sales|RSL)'      THEN NULL
+            -- A donation is not amenity revenue.
+            WHEN sd.description ~* 'donation'                              THEN NULL
+            -- Utilities and insurance billed on to owners are cost
+            -- recovery, not spend.
+            WHEN sd.description ~* '(insurance|electricity bill|water bill|propane|utility charge)'
+                                                                           THEN NULL
             -- [2026-07-18] STAY-REFERENCE BILLINGS: lines like
             -- 'Flanagan (Pinnac - 04/22/2026 to 04/26/2026 Pinnacle/V08
             -- 4 nights' are per-stay charges billed to a member's
@@ -737,34 +755,163 @@ WHERE mss.on_property_stay
 --   member_number: the owner -> classifies under Member
 --   villa_name: from villa_owner_map -> per-villa breakdowns work
 CREATE OR REPLACE VIEW synthetic_villa_income_lines AS
+WITH payouts AS (
+    SELECT
+        sd.statement_detail_key,
+        sd.transaction_date,
+        sd.description,
+        sd.member_number                                AS owner_member_number,
+        ROUND((-sd.amount)::numeric, 2)                 AS amount,
+        ROUND(sd.ref_transaction_id::numeric)::bigint   AS ref_id,
+        vom.villa_name,
+        DATE_TRUNC('month', sd.transaction_date)::date  AS income_month
+    FROM statement_details sd
+    LEFT JOIN villa_owner_map vom
+           ON vom.member_number = sd.member_number
+    WHERE LOWER(sd.description) LIKE '%villa income%'
+      AND sd.ref_transaction_id IS NOT NULL
+      AND TRIM(sd.ref_transaction_id::text) ~ '^\d+(\.\d+)?$'
+      AND vom.villa_name IS NOT NULL
+),
+-- Every charged villa stay, from the two base sources (journal folios and
+-- rate-derived lines). Comped stays are excluded by the SUM(amount) > 0
+-- check below: a free stay generated no rental income, so it should not
+-- absorb any of the payout.
+villa_charge_lines AS (
+    SELECT f.conf_code::text        AS conf_code,
+           f.member_number,
+           f.guest_name,
+           f.villa_name,
+           f.room_number,
+           f.bedroom_count,
+           f.check_in_date,
+           f.check_out_date,
+           f.villa_payment_type,
+           f.reservation_status,
+           f.amount
+    FROM folios f
+    WHERE f.transaction_category = 'Villa'
+    UNION ALL
+    SELECT s.conf_code::text,
+           s.member_number,
+           s.guest_name,
+           s.villa_name,
+           s.room_number,
+           s.bedroom_count,
+           s.check_in_date,
+           s.check_out_date,
+           s.villa_payment_type,
+           s.reservation_status,
+           s.amount
+    FROM synthetic_villa_folio_lines s
+    WHERE s.line_status = 'Posted'
+),
+stay_candidates AS (
+    SELECT
+        v.villa_name,
+        DATE_TRUNC('month', v.check_in_date)::date  AS stay_month,
+        v.conf_code,
+        MAX(v.member_number)                        AS member_number,
+        MAX(v.guest_name)                           AS guest_name,
+        MAX(v.room_number)                          AS room_number,
+        MAX(v.bedroom_count)                        AS bedroom_count,
+        MIN(v.check_in_date)                        AS check_in_date,
+        MAX(v.check_out_date)                       AS check_out_date,
+        SUM(v.amount)                               AS weight
+    FROM villa_charge_lines v
+    WHERE v.villa_name    IS NOT NULL
+      AND v.check_in_date IS NOT NULL
+      AND COALESCE(LOWER(v.reservation_status), '')
+            NOT IN ('cancelled', 'canceled', 'no-show')
+    GROUP BY v.villa_name, DATE_TRUNC('month', v.check_in_date), v.conf_code
+    HAVING SUM(v.amount) > 0
+),
+allocated AS (
+    SELECT
+        p.statement_detail_key,
+        p.transaction_date,
+        p.description,
+        p.ref_id,
+        p.villa_name,
+        s.member_number,
+        s.guest_name,
+        s.room_number,
+        s.bedroom_count,
+        s.check_in_date                             AS stay_check_in,
+        s.check_out_date                            AS stay_check_out,
+        ROUND((p.amount * s.weight
+               / SUM(s.weight) OVER (PARTITION BY p.statement_detail_key))::numeric, 2)
+                                                    AS amount,
+        ROW_NUMBER() OVER (PARTITION BY p.statement_detail_key
+                           ORDER BY s.conf_code)    AS seq
+    FROM payouts p
+    JOIN stay_candidates s
+      ON s.villa_name = p.villa_name
+     AND s.stay_month = p.income_month
+),
+unallocated AS (
+    SELECT p.*
+    FROM payouts p
+    WHERE NOT EXISTS (
+        SELECT 1 FROM stay_candidates s
+        WHERE s.villa_name = p.villa_name
+          AND s.stay_month = p.income_month
+    )
+)
+-- Allocated: attributed to the member or guest who actually stayed.
 SELECT
-    'synthvi-' || sd.statement_detail_key         AS folio_key,
-    sd.transaction_date,
-    sd.description,
-    ROUND((-sd.amount)::numeric, 2)               AS amount,
-    ((9000000 + ROUND(sd.ref_transaction_id::numeric))::int)::text AS conf_code,
-    sd.member_number,
-    NULL::text                                    AS guest_name,
-    DATE_TRUNC('month', sd.transaction_date)::date AS check_in_date,
-    sd.transaction_date                           AS check_out_date,
-    NULL::text                                    AS room_number,
-    vom.villa_name,
-    NULL::int                                     AS bedroom_count,
-    'Rental Programme'                            AS source,
-    'Paid'                                        AS villa_payment_type,
-    'Checked Out'                                 AS reservation_status,
-    'Villa'                                       AS transaction_category,
-    CASE WHEN sd.amount <= 0 THEN 'Charge' ELSE 'Credit' END AS transaction_flow,
-    'Posted'                                      AS line_status,
-    'synthetic_villa_income'                      AS folio_source,
-    'Paid'                                        AS payment_type,
-    NULL::int                                     AS persons
-FROM statement_details sd
-LEFT JOIN villa_owner_map vom
-       ON vom.member_number = sd.member_number
-WHERE LOWER(sd.description) LIKE '%villa income%'
-  AND sd.ref_transaction_id IS NOT NULL
-  AND TRIM(sd.ref_transaction_id::text) ~ '^\d+(\.\d+)?$';
+    'synthvi-' || a.statement_detail_key || '-' || a.seq     AS folio_key,
+    a.transaction_date,
+    a.description,
+    a.amount,
+    ((9000000 + a.ref_id) * 100 + a.seq)::text              AS conf_code,
+    a.member_number,
+    a.guest_name,
+    a.stay_check_in                                         AS check_in_date,
+    a.stay_check_out                                        AS check_out_date,
+    a.room_number,
+    a.villa_name,
+    a.bedroom_count,
+    'Rental Programme'                                      AS source,
+    'Paid'                                                  AS villa_payment_type,
+    'Checked Out'                                           AS reservation_status,
+    'Villa'                                                 AS transaction_category,
+    CASE WHEN a.amount >= 0 THEN 'Charge' ELSE 'Credit' END AS transaction_flow,
+    'Posted'                                                AS line_status,
+    'synthetic_villa_income'                                AS folio_source,
+    'Paid'                                                  AS payment_type,
+    NULL::int                                               AS persons
+FROM allocated a
+WHERE a.amount <> 0
+ 
+UNION ALL
+ 
+-- Residual: no charged stay found for that villa-month, so it stays with
+-- the owner and reports as Member, exactly as before.
+SELECT
+    'synthvi-' || u.statement_detail_key                    AS folio_key,
+    u.transaction_date,
+    u.description,
+    u.amount,
+    ((9000000 + u.ref_id) * 100)::text                      AS conf_code,
+    u.owner_member_number                                   AS member_number,
+    NULL::text                                              AS guest_name,
+    u.income_month                                          AS check_in_date,
+    u.transaction_date                                      AS check_out_date,
+    NULL::text                                              AS room_number,
+    u.villa_name,
+    NULL::int                                               AS bedroom_count,
+    'Rental Programme'                                      AS source,
+    'Paid'                                                  AS villa_payment_type,
+    'Checked Out'                                           AS reservation_status,
+    'Villa'                                                 AS transaction_category,
+    CASE WHEN u.amount >= 0 THEN 'Charge' ELSE 'Credit' END AS transaction_flow,
+    'Posted'                                                AS line_status,
+    'synthetic_villa_income'                                AS folio_source,
+    'Paid'                                                  AS payment_type,
+    NULL::int                                               AS persons
+FROM unallocated u
+WHERE u.amount <> 0;
 
 
 -- The complete charge ledger.
@@ -934,6 +1081,14 @@ overview_charge_lines AS (
         CASE
             WHEN overview_stripped_description ILIKE 'Temp Membership Fee%'
             THEN 'Membership'
+            -- [2026-07-19] Prepaid-TMD transfers and refunds are worded
+            -- "Miscellaneous Charge - ... Prepaid TMD - Debit Folio 5",
+            -- so they fell through to the Amenity catch-all, where they
+            -- netted -$1,671.59 against amenity revenue. TMD is temp
+            -- membership fee: these belong in Membership so debits,
+            -- credits and refunds net against the fee they relate to.
+            WHEN overview_stripped_description ~* '(^|[^a-z])tmd([^a-z]|$)'
+            THEN 'Membership'
             WHEN overview_stripped_description ILIKE 'Villa Rental -%'
               OR overview_stripped_description ILIKE '%room rate%'
               OR overview_stripped_description ILIKE '%room portion%'
@@ -1098,7 +1253,9 @@ SELECT
         WHEN nl.overview_line_description ILIKE '%cash advance%'
           OR nl.overview_is_cash_advance_category
         THEN 'CashAdvance'
-        WHEN nl.overview_line_description ILIKE '%staff tip%' THEN 'Tip'
+        WHEN nl.overview_line_description ILIKE '%staff tip%'
+          OR nl.overview_line_description ~* 'villa[ _]tips'
+        THEN 'Tip'
         WHEN nl.overview_line_description ILIKE '%folio%'
           OR nl.overview_line_description ~* 'from v[0-9]+|to v[0-9]+'
         THEN 'InternalTransfer'
@@ -1106,6 +1263,16 @@ SELECT
         WHEN nl.overview_net_amount = 0 AND nl.overview_gross_charged_amount > 0 THEN 'Reversed'
         WHEN nl.overview_net_amount > 0 THEN 'Paid'
         WHEN nl.overview_net_amount = 0 THEN 'Free'
+        -- [2026-07-19] Rental-programme income CORRECTIONS. The club
+        -- occasionally reverses previously-paid Villa Income (owner 15,
+        -- June 2026: -$16,316.24). The payout being corrected was
+        -- recorded in a different month, so there is no matching charge
+        -- to pair with and these fell through to Anomaly — held outside
+        -- revenue, leaving villa revenue overstated by the correction
+        -- and "Unexplained reversals" inflated by an entirely
+        -- explainable adjustment. They belong in Paid, where they net
+        -- against the payouts they correct.
+        WHEN nl.overview_line_description ILIKE '%villa income%' THEN 'Paid'
         ELSE 'Anomaly'
     END AS overview_line_status,
     nl.overview_gross_charged_amount
