@@ -1,24 +1,26 @@
 # backend/postgres/analytics_villas.py
 """
 Villa / room booking analytics using:
-  * rate_details      -> booking dates, villa, bedrooms and stay metrics
-  * statement_details -> member/guest evidence only (never booking revenue)
-  * statement_villa_income_summary -> official Villa Income (owner_payout_total)
-  * statement_details -> reconciliation of gross Villa Income components
-  * rooms             -> occupied-room evidence (confirmation_code)
-  * reservation_guests -> party size and guest detail per conf_code
-  * members           -> Member / Guest classification and contact information
+  * rate_details       -> booking dates, villa, bedrooms and rental values
+  * statement_details  -> separate Villa Income reconciliation
+  * villa_owner_map    -> maps statement member numbers to villas
+  * statement_villa_income_summary -> monthly official-income reference
+  * rooms              -> occupied-room evidence
+  * reservation_guests -> party size and guest details
+  * members            -> Member / Guest details
 
 IMPORTANT DEDUPLICATION RULE
 ----------------------------
-Every source is reduced before it is joined:
-  * rate_details:       one row per conf_code
-  * rooms:              one aggregate per confirmation_code
+Each confirmation code is counted once using the latest valid rate_details row.
 
-statement_details has no confirmation code or stay dates. It is therefore used
-only as an additional source of distinct member numbers for Member/Guest counts.
-Official Villa Income comes from statement_villa_income_summary.owner_payout_total.
-statement_details is used only as a reconciliation check because its signed amount can be negative.
+Different confirmation codes remain separate bookings, including when they
+have the same villa and check-in date.
+
+Rows with status Unposted and cancelled/no-show reservations are excluded.
+
+Paid and Free/Comp values come directly from rate_details.total_rental.
+Statement income is used separately for reconciliation and does not determine
+whether a booking's total_rental is included.
 """
 from datetime import date
 
@@ -134,49 +136,214 @@ def statement_reconciliation_cte(alias: str = "sd") -> str:
         )
     """
 
-
 def booking_base_cte(alias: str = "rd") -> str:
-    """Return one booking row per confirmation code without statement fan-out."""
-    return f"""
-        rate_booking_rows AS (
+    """
+    Return one booking per unique confirmation code.
+
+    Revenue rules:
+      * The latest valid row for each conf_code supplies total_rental.
+      * Unposted rows are excluded.
+      * Cancelled, canceled and no-show reservations are excluded.
+      * Different confirmation codes remain separate, even when they have
+        the same villa and check-in date.
+      * Paid and Free/Comp totals come directly from rate_details.total_rental.
+    """
+    return rf"""
+        filtered_rate_details AS (
             SELECT
-                {alias}.conf_code,
-                MAX(NULLIF(TRIM({alias}.villa_name), '')) AS villa_name,
-                MAX({alias}.bedroom_count) AS bedroom_count,
-                MAX({alias}.member_number) AS member_number,
-                MAX(NULLIF(TRIM({alias}.guest_name), '')) AS guest_name,
-                MIN({alias}.check_in_date) AS check_in_date,
-                MAX({alias}.check_out_date) AS check_out_date,
-                GREATEST(MAX({alias}.check_out_date) - MIN({alias}.check_in_date), 0) AS nights,
-                COUNT(DISTINCT ({alias}.room_number, {alias}.rate_date))::int AS room_nights,
-                COALESCE(NULLIF(TRIM(MAX({alias}.source)), ''), 'Unknown') AS source,
-                COALESCE(NULLIF(TRIM(MAX({alias}.payment_type)), ''), 'Unknown') AS payment_type,
-                MAX({alias}.reservation_status) AS reservation_status,
-                ROUND(COALESCE(MAX({alias}.total_rental), SUM({alias}.total_amount), 0)::numeric, 2)
-                    AS booking_revenue
+                {alias}.rate_detail_key,
+                TRIM({alias}.conf_code) AS conf_code,
+                {alias}.reservation_id,
+                {alias}.member_number,
+                NULLIF(TRIM({alias}.guest_name), '') AS guest_name,
+                NULLIF(TRIM({alias}.room_number), '') AS room_number,
+                NULLIF(TRIM({alias}.villa_name), '') AS villa_name,
+                {alias}.bedroom_count,
+                COALESCE(
+                    NULLIF(TRIM({alias}.source), ''),
+                    'Unknown'
+                ) AS source,
+                COALESCE(
+                    NULLIF(TRIM({alias}.payment_type), ''),
+                    'Unknown'
+                ) AS payment_type,
+                {alias}.check_in_date,
+                {alias}.check_out_date,
+                {alias}.rate_date,
+                {alias}.reservation_status,
+                {alias}.status,
+                COALESCE({alias}.total_rental, 0)::numeric AS total_rental,
+                {alias}.created_at,
+                {alias}.updated_at
             FROM rate_details {alias}
             WHERE {alias}.conf_code IS NOT NULL
+              AND TRIM({alias}.conf_code) <> ''
               AND {alias}.check_in_date IS NOT NULL
               AND {alias}.check_out_date IS NOT NULL
-              AND COALESCE(LOWER({alias}.reservation_status), '') NOT IN (
-                    'cancelled', 'canceled', 'no-show'
+
+              -- Do not include unposted rows.
+              AND COALESCE(
+                    LOWER(TRIM({alias}.status)),
+                    ''
+                  ) <> 'unposted'
+
+              -- Do not include cancelled bookings.
+              AND COALESCE(
+                    LOWER(TRIM({alias}.reservation_status)),
+                    ''
+                  ) NOT IN (
+                    'cancelled',
+                    'canceled',
+                    'no-show',
+                    'no show'
               )
+
               {date_filter_sql(alias)}
-            GROUP BY {alias}.conf_code
         ),
+
+        ranked_booking_values AS (
+            SELECT
+                frd.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY frd.conf_code
+                    ORDER BY
+                        frd.updated_at DESC NULLS LAST,
+                        frd.created_at DESC NULLS LAST,
+                        frd.rate_detail_key DESC
+                ) AS booking_row_number
+            FROM filtered_rate_details frd
+        ),
+
+        unique_booking_values AS (
+            SELECT
+                rbv.rate_detail_key,
+                rbv.conf_code,
+                rbv.reservation_id,
+                rbv.member_number,
+                rbv.guest_name,
+                rbv.villa_name,
+                rbv.bedroom_count,
+                rbv.source,
+                rbv.payment_type,
+                rbv.check_in_date,
+                rbv.check_out_date,
+                rbv.reservation_status,
+                rbv.status,
+                ROUND(
+                    COALESCE(rbv.total_rental, 0)::numeric,
+                    2
+                ) AS total_rental,
+
+                CASE
+                    WHEN LOWER(
+                        TRIM(COALESCE(rbv.payment_type, ''))
+                    ) IN (
+                        'free',
+                        'comp',
+                        'complimentary',
+                        'free/comp',
+                        'free / comp'
+                    )
+                    OR LOWER(
+                        TRIM(COALESCE(rbv.payment_type, ''))
+                    ) LIKE '%free%'
+                    OR LOWER(
+                        TRIM(COALESCE(rbv.payment_type, ''))
+                    ) LIKE '%comp%'
+                    OR LOWER(
+                        TRIM(COALESCE(rbv.payment_type, ''))
+                    ) LIKE '%complimentary%'
+                    OR LOWER(
+                        TRIM(COALESCE(rbv.payment_type, ''))
+                    ) LIKE '%gratis%'
+                    OR LOWER(
+                        TRIM(COALESCE(rbv.payment_type, ''))
+                    ) LIKE '%no charge%'
+                    THEN TRUE
+                    ELSE FALSE
+                END AS is_free
+            FROM ranked_booking_values rbv
+            WHERE rbv.booking_row_number = 1
+        ),
+
+        booking_stay_rollup AS (
+            SELECT
+                frd.conf_code,
+                MIN(frd.check_in_date) AS check_in_date,
+                MAX(frd.check_out_date) AS check_out_date,
+
+                GREATEST(
+                    MAX(frd.check_out_date) - MIN(frd.check_in_date),
+                    0
+                )::int AS nights,
+
+                COUNT(
+                    DISTINCT (
+                        frd.room_number,
+                        frd.rate_date
+                    )
+                ) FILTER (
+                    WHERE frd.room_number IS NOT NULL
+                      AND frd.rate_date IS NOT NULL
+                )::int AS room_nights
+            FROM filtered_rate_details frd
+            GROUP BY frd.conf_code
+        ),
+
+        rate_booking_rows AS (
+            SELECT
+                ubv.conf_code,
+                ubv.reservation_id,
+                ubv.villa_name,
+                ubv.bedroom_count,
+                ubv.member_number,
+                ubv.guest_name,
+                COALESCE(
+                    bsr.check_in_date,
+                    ubv.check_in_date
+                ) AS check_in_date,
+                COALESCE(
+                    bsr.check_out_date,
+                    ubv.check_out_date
+                ) AS check_out_date,
+                COALESCE(bsr.nights, 0)::int AS nights,
+                COALESCE(
+                    NULLIF(bsr.room_nights, 0),
+                    bsr.nights,
+                    0
+                )::int AS room_nights,
+                ubv.source,
+                ubv.payment_type,
+                ubv.reservation_status,
+                ubv.status,
+                ubv.total_rental,
+                ubv.is_free
+            FROM unique_booking_values ubv
+            LEFT JOIN booking_stay_rollup bsr
+              ON bsr.conf_code = ubv.conf_code
+        ),
+
         room_detail_rows AS (
             SELECT DISTINCT
-                r.confirmation_code AS conf_code,
+                TRIM(r.confirmation_code) AS conf_code,
                 r.room_number,
                 r.member_number,
                 r.check_in_date,
                 r.check_out_date
             FROM rooms r
             WHERE r.confirmation_code IS NOT NULL
-              AND COALESCE(LOWER(r.status), '') NOT IN (
-                    'cancelled', 'canceled', 'no-show'
+              AND TRIM(r.confirmation_code) <> ''
+              AND COALESCE(
+                    LOWER(TRIM(r.status)),
+                    ''
+                  ) NOT IN (
+                    'cancelled',
+                    'canceled',
+                    'no-show',
+                    'no show'
               )
         ),
+
         room_rollup AS (
             SELECT
                 conf_code,
@@ -184,9 +351,10 @@ def booking_base_cte(alias: str = "rd") -> str:
             FROM room_detail_rows
             GROUP BY conf_code
         ),
+
         reservation_guest_rows AS (
             SELECT DISTINCT
-                rg.conf_code,
+                TRIM(rg.conf_code) AS conf_code,
                 rg.member_number,
                 NULLIF(TRIM(rg.guest_name), '') AS guest_name,
                 rg.is_owner,
@@ -195,34 +363,46 @@ def booking_base_cte(alias: str = "rd") -> str:
                 rg.check_out_date
             FROM reservation_guests rg
             WHERE rg.conf_code IS NOT NULL
+              AND TRIM(rg.conf_code) <> ''
         ),
+
         reservation_guest_rollup AS (
             SELECT
                 conf_code,
+
                 COUNT(*) FILTER (
-                    WHERE guest_name IS NOT NULL OR member_number IS NOT NULL
+                    WHERE guest_name IS NOT NULL
+                       OR member_number IS NOT NULL
                 )::int AS party_size,
+
                 COALESCE(
-                    json_agg(
-                        jsonb_build_object(
+                    JSON_AGG(
+                        JSONB_BUILD_OBJECT(
                             'guest_name', guest_name,
                             'member_number', member_number,
                             'is_owner', is_owner,
                             'room_number', room_number,
                             'check_in_date', check_in_date,
                             'check_out_date', check_out_date
-                        ) ORDER BY room_number, guest_name, member_number
+                        )
+                        ORDER BY
+                            room_number,
+                            guest_name,
+                            member_number
                     ) FILTER (
-                        WHERE guest_name IS NOT NULL OR member_number IS NOT NULL
+                        WHERE guest_name IS NOT NULL
+                           OR member_number IS NOT NULL
                     ),
                     '[]'::json
                 ) AS guests
             FROM reservation_guest_rows
             GROUP BY conf_code
         ),
+
         booking_base AS (
             SELECT
                 rb.conf_code,
+                rb.reservation_id,
                 rb.villa_name,
                 rb.bedroom_count,
                 rb.member_number,
@@ -230,26 +410,38 @@ def booking_base_cte(alias: str = "rd") -> str:
                 rb.check_in_date,
                 rb.check_out_date,
                 rb.nights,
-                COALESCE(NULLIF(rb.room_nights, 0), rb.nights, 0)::int AS room_nights,
+                rb.room_nights,
                 rb.source,
                 rb.payment_type,
                 rb.reservation_status,
-                GREATEST(COALESCE(NULLIF(rgr.party_size, 0), 1), 1)::int AS persons,
+                rb.status,
+
+                GREATEST(
+                    COALESCE(NULLIF(rgr.party_size, 0), 1),
+                    1
+                )::int AS persons,
+
                 COALESCE(rr.occupied_rooms, 0)::int AS occupied_rooms,
                 COALESCE(rgr.guests, '[]'::json) AS guests,
-                COALESCE(rb.booking_revenue, 0)::numeric AS revenue,
-                CASE
-                    WHEN LOWER(rb.payment_type) ILIKE '%comp%'
-                      OR LOWER(rb.payment_type) ILIKE '%free%'
-                      OR LOWER(rb.payment_type) ILIKE '%complimentary%'
-                      OR LOWER(rb.payment_type) ILIKE '%gratis%'
-                      OR LOWER(rb.payment_type) ILIKE '%no charge%'
-                    THEN TRUE
-                    ELSE FALSE
-                END AS is_free
+
+                -- Revenue comes directly from the unique conf_code row.
+                rb.total_rental AS revenue,
+                rb.total_rental,
+                rb.is_free,
+
+                -- Retained for compatibility with existing responses.
+                NULL::text AS statement_detail_key,
+                NULL::numeric AS statement_amount,
+                NULL::numeric AS payout_ratio,
+                FALSE AS revenue_matched
+
             FROM rate_booking_rows rb
-            LEFT JOIN room_rollup rr ON rr.conf_code = rb.conf_code
-            LEFT JOIN reservation_guest_rollup rgr ON rgr.conf_code = rb.conf_code
+
+            LEFT JOIN room_rollup rr
+              ON rr.conf_code = rb.conf_code
+
+            LEFT JOIN reservation_guest_rollup rgr
+              ON rgr.conf_code = rb.conf_code
         )
     """
 
@@ -360,12 +552,38 @@ def villa_stats(
             bedroom_count AS min_bedrooms,
             bedroom_count AS max_bedrooms,
             COUNT(*)::int AS bookings,
+            COUNT(*) FILTER (WHERE NOT is_free)::int AS paid_bookings,
+            COUNT(*) FILTER (WHERE is_free)::int AS free_bookings,
             COALESCE(SUM(room_nights), 0)::int AS total_nights,
             ROUND(AVG(nights)::numeric, 1) AS avg_stay,
             COUNT(DISTINCT member_number)::int AS unique_members,
             COALESCE(SUM(persons), 0)::int AS total_guests,
             ROUND(AVG(persons)::numeric, 1) AS avg_party_size,
-            ROUND(COALESCE(SUM(revenue), 0)::numeric, 2) AS revenue
+            ROUND(
+                COALESCE(
+                    SUM(total_rental) FILTER (WHERE NOT is_free),
+                    0
+                )::numeric,
+                2
+            ) AS paid_total_rental,
+            ROUND(
+                COALESCE(
+                    SUM(total_rental) FILTER (WHERE is_free),
+                    0
+                )::numeric,
+                2
+            ) AS free_total_rental,
+            ROUND(
+                COALESCE(SUM(total_rental), 0)::numeric,
+                2
+            ) AS total_rental,
+            ROUND(
+                COALESCE(
+                    SUM(total_rental) FILTER (WHERE NOT is_free),
+                    0
+                )::numeric,
+                2
+            ) AS revenue
         FROM booking_base
         WHERE villa_name IS NOT NULL
         GROUP BY villa_name, bedroom_count
@@ -531,6 +749,17 @@ def visits_tab_summary(
             ROUND(AVG(b.nights)::numeric, 1) AS avg_length_of_stay,
             ROUND(AVG(b.persons)::numeric, 1) AS avg_party_size,
             COALESCE(SUM(b.room_nights), 0)::int AS total_room_nights,
+            COUNT(*) FILTER (WHERE NOT b.is_free)::int AS paid_bookings,
+            COUNT(*) FILTER (WHERE b.is_free)::int AS free_bookings,
+            ROUND(
+                COALESCE(SUM(b.revenue) FILTER (WHERE NOT b.is_free), 0)::numeric,
+                2
+            ) AS paid_revenue,
+            ROUND(
+                COALESCE(SUM(b.revenue) FILTER (WHERE b.is_free), 0)::numeric,
+                2
+            ) AS free_value,
+            ROUND(COALESCE(SUM(b.revenue), 0)::numeric, 2) AS total_booking_value,
             (
                 SELECT ROUND(COALESCE(SUM(vi.villa_income), 0)::numeric, 2)
                 FROM villa_income_rows vi
@@ -681,6 +910,232 @@ def booked_people(
     """, filter_params(year, month, date, start_date, end_date))
 
 
+@router.get("/booking-summary")
+def booking_summary(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    villa: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """
+    Return paid/free booking totals and the detailed homeowner Villa Income match.
+
+    One booking is retained per unique confirmation code. Different confirmation
+    codes on the same day remain separate bookings. Unposted rows are excluded.
+    """
+    params = {
+        "villa": villa,
+        **filter_params(year, month, date, start_date, end_date),
+    }
+
+    cte = r"""
+        statement_income AS (
+            SELECT
+                sd.member_number,
+                sd.statement_period,
+                DATE_TRUNC('month', sd.transaction_date)::date AS statement_month,
+                ROUND(SUM(COALESCE(sd.amount, 0) * -1)::numeric, 2)
+                    AS homeowner_villa_income
+            FROM statement_details sd
+            WHERE sd.description ILIKE '%villa income%'
+              AND sd.member_number IS NOT NULL
+            GROUP BY
+                sd.member_number,
+                sd.statement_period,
+                DATE_TRUNC('month', sd.transaction_date)
+        ),
+        homeowner_income AS (
+            SELECT
+                si.member_number,
+                NULLIF(TRIM(vom.villa_name), '') AS villa_name,
+                si.statement_period,
+                si.statement_month,
+                si.homeowner_villa_income
+            FROM statement_income si
+            JOIN villa_owner_map vom
+              ON TRIM(vom.member_number::text) = TRIM(si.member_number::text)
+            WHERE NULLIF(TRIM(vom.villa_name), '') IS NOT NULL
+        ),
+        deduplicated_bookings AS (
+            SELECT
+                rd.rate_detail_key,
+                rd.conf_code,
+                rd.reservation_id,
+                rd.member_number,
+                rd.guest_name,
+                rd.villa_name,
+                rd.bedroom_count,
+                rd.source,
+                rd.payment_type,
+                rd.check_in_date,
+                rd.check_out_date,
+                rd.reservation_status,
+                rd.status,
+                rd.total_rental,
+                ROW_NUMBER() OVER (
+                    PARTITION BY TRIM(rd.conf_code)
+                    ORDER BY
+                        rd.updated_at DESC NULLS LAST,
+                        rd.created_at DESC NULLS LAST,
+                        rd.rate_detail_key DESC
+                ) AS booking_row_number
+            FROM rate_details rd
+            WHERE rd.conf_code IS NOT NULL
+              AND TRIM(rd.conf_code) <> ''
+              AND rd.villa_name IS NOT NULL
+              AND rd.check_in_date IS NOT NULL
+              AND COALESCE(LOWER(TRIM(rd.status)), '') <> 'unposted'
+              AND COALESCE(LOWER(TRIM(rd.reservation_status)), '') NOT IN (
+                    'cancelled', 'canceled', 'no-show'
+              )
+              AND (:villa IS NULL OR LOWER(TRIM(rd.villa_name)) = LOWER(TRIM(:villa)))
+              AND (
+                    :date IS NULL
+                    OR rd.check_in_date = :date
+              )
+              AND (
+                    :date IS NOT NULL
+                    OR :start_date IS NULL
+                    OR rd.check_in_date >= :start_date
+              )
+              AND (
+                    :date IS NOT NULL
+                    OR :end_date IS NULL
+                    OR rd.check_in_date <= :end_date
+              )
+              AND (
+                    :date IS NOT NULL OR :start_date IS NOT NULL OR :end_date IS NOT NULL
+                    OR :year IS NULL
+                    OR EXTRACT(YEAR FROM rd.check_in_date)::int = :year
+              )
+              AND (
+                    :date IS NOT NULL OR :start_date IS NOT NULL OR :end_date IS NOT NULL
+                    OR :month IS NULL
+                    OR EXTRACT(MONTH FROM rd.check_in_date)::int = :month
+              )
+        ),
+        booking_details AS (
+            SELECT
+                rd.conf_code,
+                rd.reservation_id,
+                rd.member_number AS booking_member_number,
+                rd.guest_name,
+                NULLIF(TRIM(rd.villa_name), '') AS villa_name,
+                rd.bedroom_count,
+                COALESCE(NULLIF(TRIM(rd.source), ''), 'Unknown') AS source,
+                COALESCE(NULLIF(TRIM(rd.payment_type), ''), 'Unknown') AS payment_type,
+                rd.check_in_date,
+                rd.check_out_date,
+                rd.reservation_status,
+                rd.status,
+                ROUND(COALESCE(rd.total_rental, 0)::numeric, 2) AS total_rental,
+                CASE
+                    WHEN LOWER(TRIM(COALESCE(rd.payment_type, ''))) IN (
+                        'free', 'comp', 'complimentary', 'free/comp', 'free / comp'
+                    )
+                    OR LOWER(TRIM(COALESCE(rd.payment_type, ''))) LIKE '%free%'
+                    OR LOWER(TRIM(COALESCE(rd.payment_type, ''))) LIKE '%comp%'
+                    THEN TRUE
+                    ELSE FALSE
+                END AS is_free
+            FROM deduplicated_bookings rd
+            WHERE rd.booking_row_number = 1
+        ),
+        matched_bookings AS (
+            SELECT
+                hi.member_number AS homeowner_member_number,
+                hi.villa_name AS homeowner_villa,
+                hi.statement_period,
+                hi.statement_month,
+                hi.homeowner_villa_income,
+                bd.conf_code,
+                bd.reservation_id,
+                bd.booking_member_number,
+                bd.guest_name,
+                bd.villa_name,
+                bd.bedroom_count,
+                bd.source,
+                bd.check_in_date,
+                bd.check_out_date,
+                bd.payment_type,
+                CASE WHEN bd.is_free THEN 'Free/Comp' ELSE 'Paid' END AS booking_type,
+                bd.is_free,
+                bd.total_rental,
+                bd.reservation_status,
+                bd.status
+            FROM homeowner_income hi
+            LEFT JOIN booking_details bd
+              ON LOWER(TRIM(bd.villa_name)) = LOWER(TRIM(hi.villa_name))
+             AND DATE_TRUNC('month', bd.check_in_date)::date = hi.statement_month
+            WHERE :villa IS NULL
+               OR LOWER(TRIM(hi.villa_name)) = LOWER(TRIM(:villa))
+        )
+    """
+
+    summary = one(db, f"""
+        WITH {cte}
+        SELECT
+            COUNT(*)::int AS total_bookings,
+            COUNT(*) FILTER (WHERE NOT bd.is_free)::int AS paid_bookings,
+            COUNT(*) FILTER (WHERE bd.is_free)::int AS free_bookings,
+            ROUND(
+                COALESCE(SUM(bd.total_rental) FILTER (WHERE NOT bd.is_free), 0)::numeric,
+                2
+            ) AS paid_revenue,
+            ROUND(
+                COALESCE(SUM(bd.total_rental) FILTER (WHERE bd.is_free), 0)::numeric,
+                2
+            ) AS free_value,
+            ROUND(COALESCE(SUM(bd.total_rental), 0)::numeric, 2) AS total_booking_value,
+            (
+                SELECT ROUND(COALESCE(SUM(hi.homeowner_villa_income), 0)::numeric, 2)
+                FROM homeowner_income hi
+                WHERE :villa IS NULL
+                   OR LOWER(TRIM(hi.villa_name)) = LOWER(TRIM(:villa))
+            ) AS homeowner_villa_income
+        FROM booking_details bd
+    """, params)
+
+    details = rows(db, f"""
+        WITH {cte}
+        SELECT
+            homeowner_member_number,
+            homeowner_villa,
+            statement_period,
+            statement_month,
+            homeowner_villa_income,
+            conf_code,
+            reservation_id,
+            booking_member_number,
+            guest_name,
+            villa_name,
+            bedroom_count,
+            source,
+            check_in_date,
+            check_out_date,
+            payment_type,
+            booking_type,
+            is_free,
+            total_rental,
+            reservation_status,
+            status
+        FROM matched_bookings
+        ORDER BY
+            statement_month DESC,
+            homeowner_villa,
+            check_in_date,
+            conf_code
+    """, params)
+
+    return {
+        "summary": summary,
+        "bookings": details,
+    }
+
+
 @router.get("/visits-rooms-dashboard")
 def visits_rooms_dashboard(
     year: int | None = Query(default=None),
@@ -695,6 +1150,15 @@ def visits_rooms_dashboard(
     villa_stats_data = villa_stats(year, month, date, start_date, end_date, db)
     bedroom_stats = bookings_by_bedroom(year, month, date, start_date, end_date, db)
     monthly_revenue_data = monthly_revenue(year, month, date, start_date, end_date, db)
+    paid_free_totals = villa_paid_free_totals(
+        year=year,
+        month=month,
+        date=date,
+        start_date=start_date,
+        end_date=end_date,
+        villa=villa,
+        db=db,
+    )
 
     selected_villa = villa
     if not selected_villa and villa_stats_data:
@@ -718,6 +1182,7 @@ def visits_rooms_dashboard(
     return {
         "summary": summary,
         "villa_stats": villa_stats_data,
+        "villa_paid_free_totals": paid_free_totals,
         "bookings_by_bedroom": bedroom_stats,
         "monthly_revenue": monthly_revenue_data,
         "villa_monthly": villa_monthly_data,
@@ -729,6 +1194,83 @@ def visits_rooms_dashboard(
 # Villa x business-source endpoints
 # -----------------------------------------------------------------------------
 
+@router.get("/villa-paid-free-totals")
+def villa_paid_free_totals(
+    year: int | None = Query(default=None),
+    month: int | None = Query(default=None),
+    date: date | None = Query(default=None),
+    start_date: date | None = Query(default=None),
+    end_date: date | None = Query(default=None),
+    villa: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """
+    Return one row per villa with paid and free total_rental values.
+
+    Each conf_code is counted once using its latest valid rate_details row.
+    Different conf_codes for the same villa and date are counted separately.
+    """
+    params = {
+        "villa": villa,
+        **filter_params(year, month, date, start_date, end_date),
+    }
+
+    return rows(db, f"""
+        WITH {booking_base_cte()}
+        SELECT
+            b.villa_name,
+
+            COUNT(DISTINCT b.conf_code)::int AS total_unique_bookings,
+
+            COUNT(DISTINCT b.conf_code) FILTER (
+                WHERE NOT b.is_free
+            )::int AS paid_unique_bookings,
+
+            COUNT(DISTINCT b.conf_code) FILTER (
+                WHERE b.is_free
+            )::int AS free_unique_bookings,
+
+            ROUND(
+                COALESCE(
+                    SUM(b.total_rental) FILTER (
+                        WHERE NOT b.is_free
+                    ),
+                    0
+                )::numeric,
+                2
+            ) AS paid_total_rental,
+
+            ROUND(
+                COALESCE(
+                    SUM(b.total_rental) FILTER (
+                        WHERE b.is_free
+                    ),
+                    0
+                )::numeric,
+                2
+            ) AS free_total_rental,
+
+            ROUND(
+                COALESCE(SUM(b.total_rental), 0)::numeric,
+                2
+            ) AS overall_total_rental
+
+        FROM booking_base b
+
+        WHERE b.villa_name IS NOT NULL
+          AND (
+                :villa IS NULL
+                OR LOWER(TRIM(b.villa_name)) =
+                   LOWER(TRIM(:villa))
+          )
+
+        GROUP BY b.villa_name
+
+        ORDER BY
+            paid_total_rental DESC,
+            b.villa_name
+    """, params)
+    
 @router.get("/villa-source-breakdown")
 def villa_source_breakdown(
     year: int | None = Query(default=None),
