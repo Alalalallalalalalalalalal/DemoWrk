@@ -42,6 +42,15 @@
 # longer derived from folios. It is now sourced from rate_details
 # (SUM(COALESCE(original_amount, 0)) where payment_type = 'Free'),
 # excluding Villa Lolita / Wonderland. See _villa_forgone_revenue_sql().
+#
+# VILLA GROSS REVENUE SOURCE CHANGE: /overview's villasRevenue card and
+# /villa-revenue's per-villa table are now sourced from rate_details
+# (reservation-deduped, payment_type = 'Paid') instead of
+# overview_villa_bookings. See _villa_gross_revenue_cte_sql() for why
+# the dedup is required and what it assumes. New endpoint
+# GET /finance/villa-revenue-reconciliation adds Net Revenue (from
+# statement_details via villa_owner_map) and gross-vs-net comparison,
+# additively — it does not change any existing response shape.
 # ─────────────────────────────────────────────────────────────────
 
 from fastapi import APIRouter, Query
@@ -168,6 +177,15 @@ def _bucket_case_sql() -> str:
 
 def _villa_bookings_date_filter_sql() -> str:
     """
+    ⚠️ DEPRECATED / CURRENTLY UNUSED as of the rate_details Villa
+    Revenue migration: /overview and /villa-revenue no longer read
+    overview_villa_bookings — see _villa_gross_revenue_cte_sql() and
+    _villa_revenue_date_filter_sql(). Left in place (not deleted) since
+    removing dead code wasn't part of this change and something outside
+    this file may still reference overview_villa_bookings directly.
+    Safe to delete in a follow-up cleanup once confirmed unused
+    project-wide.
+
     Date-range overlap filter for overview_villa_bookings (alias `ovb`),
     intended to match the semantics of analytics_shared.date_filter_sql()
     — "does this booking's stay overlap the requested period" — but
@@ -324,6 +342,142 @@ def _villa_forgone_revenue_row(params: dict, villa: Optional[str] = None) -> dic
         "uniqueAccounts":      int(row["unique_accounts"] or 0),
         "calculationCoverage": coverage,
     }
+
+
+def _villa_revenue_date_filter_sql(alias: str = "vr") -> str:
+    """
+    Period filter for the rate_details-sourced Villa Gross Revenue
+    calculation (see _villa_gross_revenue_cte_sql()).
+
+    DELIBERATELY DIFFERENT from _rate_details_date_filter_sql(): that
+    one is a stay-OVERLAP filter (used for Forgone Revenue, which
+    counts each free row on its own rate_date). Gross Revenue instead
+    buckets an entire reservation into a single revenue month based on
+    check_in_date only, per the business rule ("use check_in_date to
+    determine the revenue month/year"). A 7-night stay spanning two
+    calendar months contributes its whole total_rental to the
+    check-in month, not split across both.
+
+    {alias} must expose a `check_in_date` column — the dedup CTE's
+    output column, not rate_details' raw (repeated) one.
+
+    Expects the same bind params filter_params() already produces:
+    :year, :month, :date, :start_date, :end_date.
+    """
+    return f"""
+        AND (
+            CASE
+                WHEN :start_date IS NOT NULL OR :end_date IS NOT NULL THEN
+                    {alias}.check_in_date >= COALESCE(:start_date, {alias}.check_in_date)
+                    AND {alias}.check_in_date <= COALESCE(:end_date, {alias}.check_in_date)
+                WHEN :date IS NOT NULL THEN
+                    {alias}.check_in_date = :date
+                WHEN :year IS NOT NULL AND :month IS NOT NULL THEN
+                    {alias}.check_in_date >= MAKE_DATE(:year, :month, 1)
+                    AND {alias}.check_in_date <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::date
+                WHEN :year IS NOT NULL THEN
+                    {alias}.check_in_date >= MAKE_DATE(:year, 1, 1)
+                    AND {alias}.check_in_date <= MAKE_DATE(:year, 12, 31)
+                ELSE TRUE
+            END
+        )
+    """
+
+
+def _villa_gross_revenue_cte_sql() -> str:
+    """
+    Reservation-level dedup CTE — SOURCE OF TRUTH FOR GROSS VILLA
+    REVENUE. Replaces the prior overview_villa_bookings source for
+    /overview's villasRevenue card and /villa-revenue's per-villa table.
+
+    WHY THE DEDUP IS NECESSARY:
+    rate_details is a nightly/rate-date grain table — one row per
+    (reservation, rate_date). total_rental is a RESERVATION-level
+    total that is repeated verbatim on every nightly row belonging to
+    that reservation. Summing total_rental directly over raw rows
+    would multiply every reservation's revenue by its length of stay
+    (e.g. a 7-night, $76,727.49 reservation would sum to $537,092.43
+    instead of $76,727.49). This CTE collapses each reservation down
+    to exactly one row before any SUM() happens.
+
+    DEDUP KEY: COALESCE(NULLIF(TRIM(reservation_id), ''), NULLIF(TRIM(conf_code), ''))
+    reservation_id is preferred; conf_code is the fallback for rows
+    where reservation_id is null/blank. Rows where BOTH are null/blank
+    are excluded (res_key IS NULL) — there is no safe way to identify
+    which rows belong to the same reservation for those, so they
+    cannot be deduplicated and are dropped rather than risk either
+    double-counting or under-counting. This should be rare; monitor
+    row counts if it isn't.
+
+    SCOPE: payment_type = 'Paid' only, per the business rule. Rows
+    with payment_type = 'Free' (and anything else) are excluded, same
+    as before — this endpoint no longer touches Forgone Revenue at
+    all, that stays on _villa_forgone_revenue_sql().
+
+    NOTE: does NOT filter on reservation_status (e.g. cancelled
+    bookings). The business rule as given only specifies payment_type
+    = 'Paid'; if cancelled-but-paid reservations should be excluded
+    from gross revenue, that's a follow-up filter to add here, not
+    assumed by this change.
+
+    Selects one row per reservation with: res_key, villa_name,
+    member_number, total_rental, check_in_date, check_out_date.
+    Callers wrap this CTE with their own SELECT ... FROM
+    villa_reservations vr {_villa_revenue_date_filter_sql()} GROUP BY ...
+    """
+    return """
+        WITH rd_keyed AS (
+            SELECT
+                rd.villa_name,
+                rd.member_number,
+                rd.total_rental,
+                rd.check_in_date,
+                rd.check_out_date,
+                rd.rate_date,
+                COALESCE(NULLIF(TRIM(rd.reservation_id), ''), NULLIF(TRIM(rd.conf_code), '')) AS res_key
+            FROM rate_details rd
+            WHERE rd.payment_type = 'Paid'
+              AND rd.villa_name IS NOT NULL
+              AND rd.status = 'Posted'
+        ),
+        villa_reservations AS (
+            SELECT DISTINCT ON (res_key)
+                res_key, villa_name, member_number, total_rental, check_in_date, check_out_date
+            FROM rd_keyed
+            WHERE res_key IS NOT NULL
+            ORDER BY res_key, rate_date
+        )
+    """
+
+
+def _statement_period_filter_sql(alias: str = "sd") -> str:
+    """
+    Filters {alias}.statement_period by year and/or month, PARSED via
+    TO_DATE({alias}.statement_period, 'Month, YYYY') rather than built
+    and string-matched — this mirrors the exact parsing approach
+    validated against real data (statement_period is stored as e.g.
+    "March, 2025": full month name, comma, space, 4-digit year), and
+    is more robust than an equality match against a hand-built string
+    (tolerant of any stray whitespace/case in the stored text that a
+    generated string wouldn't happen to reproduce).
+
+    Both :year and :month are OPTIONAL (unlike _rate_details_date_filter_sql's
+    bind set) — this lets one query answer three different questions,
+    matching the three granularities actually needed:
+      year AND month given -> single-month total
+      year given, month NULL -> that year's total
+      neither given          -> all-time total
+    """
+    return f"""
+        AND (
+            :year IS NULL
+            OR EXTRACT(YEAR FROM TO_DATE({alias}.statement_period, 'Month, YYYY')) = :year
+        )
+        AND (
+            :month IS NULL
+            OR EXTRACT(MONTH FROM TO_DATE({alias}.statement_period, 'Month, YYYY')) = :month
+        )
+    """
 
 
 # Shared FastAPI Query declarations for the 5 date-filter params, reused
@@ -547,14 +701,19 @@ def finance_overview(
     with engine.connect() as conn:
         total_transactions = int(conn.execute(count_sql, params).scalar() or 0)
 
-    # ── Villas (trusted booking-level source) ────────────────────────
+    # ── Villas (rate_details, reservation-deduped gross revenue) ─────
+    # SOURCE OF TRUTH CHANGE: was overview_villa_bookings.overview_villa_revenue,
+    # now rate_details via _villa_gross_revenue_cte_sql() — see that
+    # function's docstring for why the dedup is required and what it
+    # excludes/assumes.
     villa_sql = text(f"""
+        {_villa_gross_revenue_cte_sql()}
         SELECT
-            COALESCE(SUM(ovb.overview_villa_revenue), 0) AS revenue,
-            COUNT(*)                                      AS bookings
-        FROM overview_villa_bookings ovb
+            COALESCE(SUM(vr.total_rental), 0) AS revenue,
+            COUNT(*)                          AS bookings
+        FROM villa_reservations vr
         WHERE 1=1
-        {_villa_bookings_date_filter_sql()}
+        {_villa_revenue_date_filter_sql(alias="vr")}
     """)
 
     with engine.connect() as conn:
@@ -698,6 +857,210 @@ def finance_villa_forgone_coverage(
 
 
 # ══════════════════════════════════════════════════════════════════
+# 1d. VILLA REVENUE RECONCILIATION — Gross (rate_details) vs.
+#     Net (statement_details, via villa_owner_map)
+#
+# NEW endpoint, additive only — does not change /overview or
+# /villa-revenue's response shape. Built to satisfy the "gross / net /
+# reconciliation" requirement without touching an existing contract.
+#
+# GROSS: reservation-deduped rate_details total_rental, same source
+# and same dedup as /villa-revenue (_villa_gross_revenue_cte_sql()).
+#
+# NET: statement_details rows where description ILIKE '%Villa Income%'
+# for the requested statement_period, summed as ABS(amount) (statement
+# values may be negative by accounting convention). statement_period
+# is matched by parsing statement_period as "March, 2025" style text
+# — see _statement_period_filter_sql().
+#
+# OWNER MAPPING (rate_details.villa_name has no direct FK to
+# statement_details — it's bridged through villa_owner_map):
+#   rate_details.villa_name -> villa_owner_map.villa_name
+#     -> villa_owner_map.member_number -> statement_details.member_number
+# A villa can therefore appear in the gross list with no matching net
+# figure for two distinct reasons, which this endpoint reports
+# separately rather than collapsing into a single "no data" state:
+#   hasOwnerMapping=false  — villa_owner_map has no row for this villa
+#                            at all (the bridge itself is broken/missing)
+#   hasStatementEntry=false — the mapping exists, but statement_details
+#                            has no matching 'Villa Income' row for this
+#                            member_number in this period (e.g. posted
+#                            late, or genuinely zero for the period)
+#
+# statementGrossRevenue = netRevenue / 0.85 (see module-level business
+# rule: statement amount ≈ 85% of gross villa income after deduction/
+# tax treatment). variance = grossRevenue - statementGrossRevenue,
+# null whenever statementGrossRevenue is null (nothing to compare against).
+#
+# year and month are BOTH OPTIONAL (unlike the first version of this
+# endpoint, which required both): year+month -> single month,
+# year only -> that year's total, neither -> all-time total. See
+# _statement_period_filter_sql().
+# ══════════════════════════════════════════════════════════════════
+@router.get("/villa-revenue-reconciliation")
+def finance_villa_revenue_reconciliation(
+    year:  Optional[int] = Query(None),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    villa: Optional[str] = Query(None),
+):
+    params = filter_params(year=year, month=month, date=None, start_date=None, end_date=None)
+    params["year"] = year
+    params["month"] = month
+
+    villa_filter_gross = ""
+    if villa:
+        villa_filter_gross = "AND vr.villa_name = :flt_villa"
+        params["flt_villa"] = villa
+
+    sql = text(f"""
+        {_villa_gross_revenue_cte_sql()},
+        gross AS (
+            SELECT
+                vr.villa_name,
+                COALESCE(SUM(vr.total_rental), 0) AS gross_revenue,
+                COUNT(*)                          AS reservation_count
+            FROM villa_reservations vr
+            WHERE 1=1
+            {_villa_revenue_date_filter_sql(alias="vr")}
+            {villa_filter_gross}
+            GROUP BY vr.villa_name
+        ),
+        statement_net AS (
+            SELECT
+                vom.villa_name,
+                COALESCE(SUM(ABS(sd.amount)), 0) AS net_revenue,
+                COUNT(*)                          AS statement_line_count
+            FROM statement_details sd
+            JOIN villa_owner_map vom ON vom.member_number = sd.member_number
+            WHERE sd.description ILIKE '%Villa Income%'
+            {_statement_period_filter_sql(alias="sd")}
+            GROUP BY vom.villa_name
+        ),
+        owner_map_counts AS (
+            SELECT villa_name, COUNT(*) AS mapped_rows
+            FROM villa_owner_map
+            GROUP BY villa_name
+        )
+        SELECT
+            g.villa_name,
+            g.gross_revenue,
+            g.reservation_count,
+            sn.net_revenue,
+            sn.statement_line_count,
+            COALESCE(omc.mapped_rows, 0) AS mapped_rows
+        FROM gross g
+        LEFT JOIN statement_net sn     ON sn.villa_name = g.villa_name
+        LEFT JOIN owner_map_counts omc ON omc.villa_name = g.villa_name
+        ORDER BY g.gross_revenue DESC NULLS LAST
+    """)
+
+    with engine.connect() as conn:
+        rows = conn.execute(sql, params).mappings().all()
+
+    out = []
+    for r in rows:
+        gross_revenue = float(r["gross_revenue"] or 0)
+        has_owner_mapping = int(r["mapped_rows"] or 0) > 0
+        has_statement_entry = r["net_revenue"] is not None
+        net_revenue = float(r["net_revenue"]) if has_statement_entry else None
+        statement_gross_revenue = (net_revenue / 0.85) if net_revenue is not None else None
+        variance = (gross_revenue - statement_gross_revenue) if statement_gross_revenue is not None else None
+
+        out.append({
+            "villaName":              r["villa_name"],
+            "grossRevenue":           gross_revenue,
+            "reservationCount":       int(r["reservation_count"] or 0),
+            "netRevenue":             net_revenue,
+            "statementGrossRevenue":  statement_gross_revenue,
+            "variance":               variance,
+            "hasOwnerMapping":        has_owner_mapping,
+            "hasStatementEntry":      has_statement_entry,
+        })
+
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════
+# 1e. VILLA STATEMENT TOTALS — portfolio-wide (no per-villa split)
+#
+# Mirrors, field-for-field, three validated queries: statement_details
+# joined to villa_owner_map on member_number, filtered to 'Villa
+# Income' rows, net = SUM(ABS(amount)), gross = net / 0.85 — with NO
+# grouping by villa_name (unlike /villa-revenue-reconciliation above).
+#
+# ⚠️ IMPORTANT — this intentionally does NOT dedupe by villa. If any
+# member_number in villa_owner_map is mapped to more than one villa,
+# a single statement_details row joins to multiple villa_owner_map
+# rows and gets counted once per villa it fans out to. That is exactly
+# how the validated queries this endpoint mirrors are written (a
+# plain JOIN, no per-villa grouping), so the totals here match those
+# reference figures precisely — but it also means this endpoint's
+# total is NOT guaranteed to equal the sum of per-villa netRevenue
+# values from /villa-revenue-reconciliation if that fan-out exists.
+# Flagging this rather than silently reconciling it, since "correct"
+# here is defined as "matches the validated queries," not as
+# "internally consistent with the per-villa endpoint."
+#
+# years: optional comma-separated list, e.g. "2025,2026" -> one row
+# per year, EXTRACT(YEAR FROM TO_DATE(statement_period, 'Month, YYYY')).
+# Omit entirely for a single all-time total row (year: null).
+# ══════════════════════════════════════════════════════════════════
+@router.get("/villa-statement-totals")
+def finance_villa_statement_totals(
+    years: Optional[str] = Query(
+        None,
+        description="Comma-separated years, e.g. '2025,2026'. Omit for one all-time total.",
+    ),
+):
+    if years:
+        try:
+            year_list = [int(y.strip()) for y in years.split(",") if y.strip()]
+        except ValueError:
+            year_list = []
+
+        sql = text("""
+            SELECT
+                EXTRACT(YEAR FROM TO_DATE(sd.statement_period, 'Month, YYYY'))::int AS year,
+                ROUND(SUM(ABS(sd.amount)), 2)        AS net_revenue,
+                ROUND(SUM(ABS(sd.amount)) / 0.85, 2) AS statement_gross_revenue
+            FROM villa_owner_map vom
+            JOIN statement_details sd ON sd.member_number = vom.member_number
+            WHERE sd.description ILIKE '%Villa Income%'
+              AND EXTRACT(YEAR FROM TO_DATE(sd.statement_period, 'Month, YYYY')) = ANY(:years)
+            GROUP BY 1
+            ORDER BY 1
+        """)
+        with engine.connect() as conn:
+            rows = conn.execute(sql, {"years": year_list}).mappings().all()
+
+        return [
+            {
+                "year":                  int(r["year"]),
+                "netRevenue":            float(r["net_revenue"] or 0),
+                "statementGrossRevenue": float(r["statement_gross_revenue"] or 0),
+            }
+            for r in rows
+        ]
+
+    sql = text("""
+        SELECT
+            ROUND(SUM(ABS(sd.amount)), 2)        AS net_revenue,
+            ROUND(SUM(ABS(sd.amount)) / 0.85, 2) AS statement_gross_revenue
+        FROM villa_owner_map vom
+        JOIN statement_details sd ON sd.member_number = vom.member_number
+        WHERE sd.description ILIKE '%Villa Income%'
+    """)
+    with engine.connect() as conn:
+        row = conn.execute(sql).mappings().fetchone()
+
+    return {
+        "year":                  None,
+        "netRevenue":            float(row["net_revenue"] or 0) if row else 0.0,
+        "statementGrossRevenue": float(row["statement_gross_revenue"] or 0) if row else 0.0,
+    }
+
+
+# ══════════════════════════════════════════════════════════════════
 # 2. REVENUE BY SOURCE
 # One row per source — group only by f.source, not by payment_type
 # payment_type comes from business_source (one value per source)
@@ -804,32 +1167,38 @@ def finance_member_vs_guest(
 # ══════════════════════════════════════════════════════════════════
 # 4. VILLA REVENUE (breakdown table, by villa name)
 #
-# Migrated off visit_room_villa_summary / folios onto the same trusted
-# source as the Villas Revenue overview card — overview_villa_bookings.
-# overview_villa_revenue — so this table's rows always sum to that
-# card's total, filtered or not. (Previously these read from different
-# sources and could disagree for a filtered period — see the prior
-# flag in finance_overview()'s history; this closes that gap.)
+# SOURCE OF TRUTH CHANGE: was overview_villa_bookings.overview_villa_revenue,
+# now rate_details via _villa_gross_revenue_cte_sql() — same
+# reservation-deduped source as /overview's villasRevenue card, so
+# this table's rows still always sum to that card's total (same
+# invariant the prior overview_villa_bookings migration established,
+# just on the new source). See _villa_gross_revenue_cte_sql()'s
+# docstring for why the dedup is required.
 #
-# _villa_bookings_date_filter_sql() already resolves to "no
-# restriction" when no date params are supplied, so a single query now
-# covers both the unfiltered and filtered cases — no more has_filter
-# branching, no more empty-table fallback to folios.
+# total_bookings = COUNT(*) over the deduped villa_reservations CTE —
+# already one row per reservation, so no DISTINCT needed here (unlike
+# the old overview_conf_code defensive DISTINCT).
 #
-# total_bookings uses COUNT(DISTINCT overview_conf_code) defensively,
-# in case a future schema change ever produces more than one row per
-# booking (e.g. a bedroom_count split like overview_villa_stats does)
-# — today it's expected to already be one row per booking.
+# roomNights / avgStay are now derived from check_out_date -
+# check_in_date per deduped reservation (rate_details carries both),
+# rather than a pre-computed overview_nights column.
 #
-# NOTE: this table has no payment-type (paid/free) breakdown, since
-# overview_villa_bookings doesn't carry that dimension. If you need a
-# payment-aware per-villa breakdown (e.g. "free villa stays only"),
-# use GET /finance/drilldown-breakdown?group_by=villa&payment=free
-# instead — it's sourced from folios and supports the full composable
-# filter set. This endpoint stays as-is for the always-visible Villa
-# Revenue table on the main Finance tab. (For Villa FORGONE REVENUE
-# specifically, see /finance/category-comp-breakdown or the dedicated
-# /finance/villa-forgone-coverage endpoint — both read rate_details.)
+# memberBookings / guestBookings now come from a LEFT JOIN to members
+# on rate_details.member_number (rate_details itself has no
+# member_or_guest column). A reservation whose member_number has no
+# match in `members` (e.g. a walk-in guest with no member record) is
+# counted as a guest booking, mirroring the member-vs-guest default
+# used elsewhere in this file (member_or_guest IS NULL -> Member is
+# the default ONLY when there's a members row at all; no members row
+# means there's no member to attribute it to).
+#
+# NOTE: this table has no payment-type (paid/free) breakdown — same
+# as before, rate_details' 'Free' rows are out of scope for gross
+# revenue by design. For a payment-aware per-villa breakdown, use
+# GET /finance/drilldown-breakdown?group_by=villa&payment=free
+# (folios-sourced, unaffected by this change). For Villa Net Revenue
+# and gross/net reconciliation, see the new
+# GET /finance/villa-revenue-reconciliation endpoint below.
 # ══════════════════════════════════════════════════════════════════
 @router.get("/villa-revenue")
 def finance_villa_revenue(
@@ -845,23 +1214,25 @@ def finance_villa_revenue(
     )
 
     sql = text(f"""
+        {_villa_gross_revenue_cte_sql()}
         SELECT
-            ovb.overview_villa_name                                  AS villa_name,
-            COALESCE(SUM(ovb.overview_villa_revenue), 0)             AS revenue,
-            COUNT(DISTINCT ovb.overview_conf_code)                   AS total_bookings,
-            COALESCE(SUM(ovb.overview_nights), 0)                    AS room_nights,
-            COALESCE(ROUND(AVG(ovb.overview_nights)::numeric, 1), 0) AS avg_stay,
+            vr.villa_name                                                AS villa_name,
+            COALESCE(SUM(vr.total_rental), 0)                            AS revenue,
+            COUNT(*)                                                     AS total_bookings,
+            COALESCE(SUM(vr.check_out_date - vr.check_in_date), 0)       AS room_nights,
+            COALESCE(ROUND(AVG(vr.check_out_date - vr.check_in_date)::numeric, 1), 0) AS avg_stay,
             COUNT(*) FILTER (
-                WHERE ovb.overview_member_or_guest = 'Member'
-                   OR ovb.overview_member_or_guest IS NULL
-            )                                                        AS member_bookings,
+                WHERE m.member_or_guest = 'Guest' OR m.member_number IS NULL
+            )                                                             AS guest_bookings,
             COUNT(*) FILTER (
-                WHERE ovb.overview_member_or_guest = 'Guest'
-            )                                                        AS guest_bookings
-        FROM overview_villa_bookings ovb
-        WHERE ovb.overview_villa_name IS NOT NULL
-        {_villa_bookings_date_filter_sql()}
-        GROUP BY ovb.overview_villa_name
+                WHERE m.member_number IS NOT NULL
+                  AND (m.member_or_guest IS NULL OR m.member_or_guest != 'Guest')
+            )                                                             AS member_bookings
+        FROM villa_reservations vr
+        LEFT JOIN members m ON m.member_number = vr.member_number
+        WHERE 1=1
+        {_villa_revenue_date_filter_sql(alias="vr")}
+        GROUP BY vr.villa_name
         ORDER BY revenue DESC NULLS LAST
     """)
 
