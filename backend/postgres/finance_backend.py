@@ -272,6 +272,14 @@ def _villa_forgone_revenue_sql() -> str:
     rate_details rows where payment_type = 'Free', excluding
     VILLA_FORGONE_EXCLUDED (Villa Lolita / Wonderland).
 
+    ⚠️ OPEN QUESTION: this does NOT filter on status = 'Posted', unlike
+    _villa_gross_revenue_cte_sql() (Paid rows), which does. Not changed
+    yet since it wasn't part of the reported discrepancy — but if
+    'Free' rows can also have a non-'Posted' status (e.g. pending/
+    voided), this may be over-counting Forgone Revenue the same way
+    Gross Revenue was found to need the filter for Paid rows. Worth
+    the same kind of validation check before adding it here.
+
     Also returns:
       missing_rate_count — rows where original_amount IS NULL (counted
         as 0 in the sum per COALESCE, but tracked separately so the UI
@@ -296,8 +304,9 @@ def _villa_forgone_revenue_sql() -> str:
             COUNT(*)                                            AS total_free_rows,
             COUNT(DISTINCT rd.member_number)                   AS unique_accounts
         FROM rate_details rd
-        WHERE rd.payment_type = 'Free'
-          AND NOT (rd.villa_name = ANY(:villa_exceptions))
+        WHERE rd.payment_type = 'Free' 
+        AND rd.status = 'Posted' 
+        AND NOT (rd.villa_name = ANY(:villa_exceptions))
         {villa_filter}
         {date_sql}
     """
@@ -409,10 +418,14 @@ def _villa_gross_revenue_cte_sql() -> str:
     double-counting or under-counting. This should be rare; monitor
     row counts if it isn't.
 
-    SCOPE: payment_type = 'Paid' only, per the business rule. Rows
-    with payment_type = 'Free' (and anything else) are excluded, same
-    as before — this endpoint no longer touches Forgone Revenue at
-    all, that stays on _villa_forgone_revenue_sql().
+    SCOPE: payment_type = 'Paid' AND status = 'Posted' only, per the
+    business rule (status='Posted' added after validating against a
+    manual SUM(original_amount) check — see chat history). Rows with
+    payment_type = 'Free' (and anything else) are excluded, same as
+    before — this endpoint no longer touches Forgone Revenue at all,
+    that stays on _villa_forgone_revenue_sql() (which does NOT filter
+    on status — only on payment_type = 'Free' — see that function's
+    own docstring for the open question of whether it should match).
 
     NOTE: does NOT filter on reservation_status (e.g. cancelled
     bookings). The business rule as given only specifies payment_type
@@ -448,6 +461,65 @@ def _villa_gross_revenue_cte_sql() -> str:
             ORDER BY res_key, rate_date
         )
     """
+
+
+def _villa_collected_revenue_row(params: dict, villa: Optional[str] = None) -> dict:
+    """
+    Villa 'collected' bucket for category-comp-breakdown — SOURCE OF
+    TRUTH IS rate_details (the same reservation-deduped Gross Revenue
+    CTE that backs /overview and /villa-revenue), NOT folios.
+
+    Replaces the previously-folios-sourced Villa 'collected' figure,
+    which was found to disagree badly with rate_details for the same
+    scope (~$2.8M via folios vs. ~$36M via a raw, undeduped
+    SUM(original_amount) sanity check on rate_details) — the same
+    class of undercounting problem that originally motivated moving
+    Villas Revenue off folios for /overview in the first place. Villa
+    'reversed' is NOT changed by this — it remains folios-sourced,
+    since only 'collected' was reported as disagreeing.
+
+    Uses the SAME date semantics as Gross Revenue elsewhere
+    (_villa_revenue_date_filter_sql — check_in_date bucketing, not
+    stay-overlap) so this figure always equals what /overview's
+    villasRevenue card and /villa-revenue's total show for the same
+    filters — they're now literally the same query, just wrapped
+    differently. If those ever need to diverge, don't just edit this
+    function in isolation, since they're meant to be identical.
+
+    Returns grossRevenue, reservationCount, uniqueAccounts (distinct
+    member_number over the deduped rows).
+
+    `params` must already contain the standard filter_params() bind
+    set. Adds :flt_villa on a COPY of params if `villa` is given —
+    never mutates the caller's dict (same convention as
+    _villa_forgone_revenue_row()).
+    """
+    q_params = dict(params)
+    villa_filter = ""
+    if villa:
+        villa_filter = "AND vr.villa_name = :flt_villa"
+        q_params["flt_villa"] = villa
+
+    sql = text(f"""
+        {_villa_gross_revenue_cte_sql()}
+        SELECT
+            COALESCE(SUM(vr.total_rental), 0) AS gross_revenue,
+            COUNT(*)                          AS reservation_count,
+            COUNT(DISTINCT vr.member_number)  AS unique_accounts
+        FROM villa_reservations vr
+        WHERE 1=1
+        {_villa_revenue_date_filter_sql(alias="vr")}
+        {villa_filter}
+    """)
+
+    with engine.connect() as conn:
+        row = conn.execute(sql, q_params).mappings().fetchone()
+
+    return {
+        "grossRevenue":     float(row["gross_revenue"] or 0) if row else 0.0,
+        "reservationCount": int(row["reservation_count"] or 0) if row else 0,
+        "uniqueAccounts":   int(row["unique_accounts"] or 0) if row else 0,
+    }
 
 
 def _statement_period_filter_sql(alias: str = "sd") -> str:
@@ -739,18 +811,29 @@ def finance_overview(
 # an `amount`, used by the frontend's Collected vs. Forgone Revenue
 # cards.
 #
-# Villa section: the 'forgone_revenue' bucket is NOT computed from
-# folios. It's a single synthetic row sourced from rate_details (see
-# _villa_forgone_revenue_row()) — SUM(original_amount) where
-# payment_type = 'Free', excluding Villa Lolita / Wonderland. Villa's
-# 'collected' and 'reversed' buckets are unchanged (still folios).
+# Villa section: BOTH 'forgone_revenue' and 'collected' are NOT
+# computed from folios anymore. Both are single synthetic rows sourced
+# from rate_details:
+#   forgone_revenue — see _villa_forgone_revenue_row() — SUM(original_amount)
+#                     where payment_type = 'Free', excluding Villa
+#                     Lolita / Wonderland.
+#   collected       — see _villa_collected_revenue_row() — the same
+#                     reservation-deduped Gross Revenue CTE used by
+#                     /overview and /villa-revenue (SUM(total_rental),
+#                     payment_type = 'Paid', status = 'Posted').
+#                     Replaced because the folios-sourced figure
+#                     disagreed badly with rate_details (~$2.8M vs.
+#                     ~$36M for the same scope) — see chat history.
+# Villa's 'reversed' bucket is the only one still folios-sourced,
+# unchanged.
 #
 # Amenities / Services: unchanged calculation, bucket value renamed
 # 'given_away' -> 'forgone_revenue'.
 #
-# An optional `villa` filter narrows the Villa forgone-revenue figure
-# (and, like every other Finance filter, doesn't affect Amenities /
-# Services, which have no villa dimension).
+# An optional `villa` filter narrows both the Villa forgone-revenue
+# AND Villa collected-revenue figures (and, like every other Finance
+# filter, doesn't affect Amenities / Services, which have no villa
+# dimension).
 # ══════════════════════════════════════════════════════════════════
 @router.get("/category-comp-breakdown")
 def category_comp_breakdown(
@@ -791,11 +874,11 @@ def category_comp_breakdown(
 
     out = []
     for r in rows:
-        # Villa's forgone_revenue bucket is no longer sourced from
-        # folios — drop it here, replaced below with the rate_details
-        # figure. Villa 'collected' / 'reversed' rows pass through
+        # Villa's forgone_revenue AND collected buckets are no longer
+        # sourced from folios — both dropped here, replaced below with
+        # rate_details figures. Villa 'reversed' rows pass through
         # unchanged, as does everything in Amenities/Services.
-        if r["section"] == "Villa" and r["bucket"] == "forgone_revenue":
+        if r["section"] == "Villa" and r["bucket"] in ("forgone_revenue", "collected"):
             continue
         out.append({
             "section": r["section"],
@@ -826,6 +909,22 @@ def category_comp_breakdown(
         # always-available version of these same numbers.
         "missingRateCount": villa_forgone["missingRateCount"],
         "calculationCoverage": villa_forgone["calculationCoverage"],
+    })
+
+    # Villa Collected Revenue — from rate_details (Gross Revenue CTE),
+    # not folios. NOT subject to the Villa Lolita / Wonderland
+    # exclusion (that exclusion is specific to Forgone Revenue's
+    # free-comp accounting; Gross/Collected Revenue has never excluded
+    # those villas, same as /overview and /villa-revenue).
+    villa_collected = _villa_collected_revenue_row(params, villa=villa)
+    out.append({
+        "section": "Villa",
+        "category": "Villa",
+        "PaymentType": "Paid",
+        "bucket": "collected",
+        "amount": villa_collected["grossRevenue"],
+        "transactions": villa_collected["reservationCount"],
+        "uniqueAccounts": villa_collected["uniqueAccounts"],
     })
 
     return out

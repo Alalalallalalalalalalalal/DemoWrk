@@ -174,6 +174,21 @@ function InfoNote({ title, children }) {
 
 function KpiStrip({ totals, section }) {
   const blendedRate = pct(totals.forgoneRevenue, totals.collected + totals.forgoneRevenue);
+  const collectedValue =
+    section === "Villa" ? (
+      <div style={{ display: "grid", gap: 3 }}>
+        <div>
+          <span style={{ fontFamily: "sans-serif", fontSize: 14, color: C.muted, marginRight: 6 }}>Gross:</span>
+          {money(totals.collected)}
+        </div>
+        <div>
+          <span style={{ fontFamily: "sans-serif", fontSize: 14, color: C.muted, marginRight: 6 }}>Net:</span>
+          {money(Number(totals.collected || 0) * 0.85)}
+        </div>
+      </div>
+    ) : (
+      money(totals.collected)
+    );
 
   const forgoneTip =
     section === "Villa"
@@ -183,9 +198,11 @@ function KpiStrip({ totals, section }) {
   const cards = [
     {
       label: "Collected",
-      value: money(totals.collected),
+      value: collectedValue,
       color: C.green,
-      tip: "Revenue posted to folios and actually billed - the club's earned income for this section within the active period and filters.",
+      tip: section === "Villa"
+        ? "Net is the displayed Villa revenue total after the estimated 15% tax. Gross is the posted total before tax."
+        : "Revenue posted to folios and actually billed - the club's earned income for this section within the active period and filters.",
     },
     {
       label: "Forgone Revenue",
@@ -193,18 +210,18 @@ function KpiStrip({ totals, section }) {
       color: C.accent3,
       tip: forgoneTip,
     },
-    {
-      label: "Other (Payments, Adj.)",
-      value: money(Math.abs(totals.other)),
-      color: C.muted,
-      tip: "Payments applied against outstanding member balances and non-revenue adjustment entries. These reduce what's owed but are not income - excluded from all revenue figures.",
-    },
-    {
-      label: "Reversed / Written Off",
-      value: money(Math.abs(totals.reversed) + Math.abs(totals.other)),
-      color: C.red,
-      tip: "Charge reversals and write-offs - transactions that were posted and then corrected or cancelled. Excluded from all revenue totals.",
-    },
+    // {
+    //   label: "Other (Payments, Adj.)",
+    //   value: money(Math.abs(totals.other)),
+    //   color: C.muted,
+    //   tip: "Payments applied against outstanding member balances and non-revenue adjustment entries. These reduce what's owed but are not income - excluded from all revenue figures.",
+    // },
+    // {
+    //   label: "Reversed / Written Off",
+    //   value: money(Math.abs(totals.reversed) + Math.abs(totals.other)),
+    //   color: C.red,
+    //   tip: "Charge reversals and write-offs - transactions that were posted and then corrected or cancelled. Excluded from all revenue totals.",
+    // },
     {
       label: "Forgone Rate",
       value: blendedRate,
@@ -253,7 +270,7 @@ function CoverageNote({ missingRateCount, calculationCoverage }) {
   );
 }
 
-function CategoryCard({ row, onRowClick }) {
+function CategoryCard({ row, onRowClick, section }) {
   const rate = pct(row.forgoneRevenue, row.collected + row.forgoneRevenue);
   return (
     <button
@@ -281,7 +298,7 @@ function CategoryCard({ row, onRowClick }) {
           <div style={{ fontSize: 17, fontWeight: 700, color: C.green, fontFamily: "sans-serif" }}>
             {row.collected === 0 && row.forgoneRevenue === 0
               ? money(row.other || row.reversed)
-              : money(row.collected)}
+              : money(section === "Villa" ? Number(row.collected || 0) * 0.85 : row.collected)}
           </div>
         </div>
         <div>
@@ -303,7 +320,7 @@ function CategoryCard({ row, onRowClick }) {
   );
 }
 
-function CategoryCards({ rows, onRowClick }) {
+function CategoryCards({ rows, onRowClick, section }) {
   if (rows.length === 0) {
     return (
       <div style={{ padding: 32, textAlign: "center", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 14 }}>
@@ -312,9 +329,9 @@ function CategoryCards({ rows, onRowClick }) {
     );
   }
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
       {rows.map((row) => (
-        <CategoryCard key={row.category} row={row} onRowClick={onRowClick} />
+        <CategoryCard key={row.category} row={row} onRowClick={onRowClick} section={section} />
       ))}
     </div>
   );
@@ -415,7 +432,7 @@ export default function CategoryCompBreakdown({ data, onRowClick }) {
       )}
 
       <KpiStrip totals={totals} section={section} />
-      <CategoryCards rows={categoryRows} onRowClick={onRowClick} />
+      <CategoryCards rows={categoryRows} onRowClick={onRowClick} section={section} />
     </div>
   );
 }
