@@ -200,7 +200,7 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
     return [
       {
         label:      "Villas Revenue",
-        sub:        "All folio lines classified as villa stays - click to drill into individual charges",
+        sub:        "Gross villa rental revenue before taxes and other deductions - click to drill into individual charges",
         revenue:    overview.villasRevenue,
         drillType:  "category",
         drillValue: "Villa",
