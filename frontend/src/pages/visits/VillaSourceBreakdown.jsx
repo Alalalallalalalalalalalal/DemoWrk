@@ -1,5 +1,5 @@
 /**
- * VillaSourceBreakdown.jsx  — with bedroom intelligence
+ * VillaSourceBreakdown.jsx
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -24,6 +24,7 @@ import {
   TrendingUp,
   Filter,
   LayoutGrid,
+  Info,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
@@ -444,23 +445,163 @@ function ViewToggle({ value, onChange }) {
   );
 }
 
+const METRIC_INFO = {
+  "Total Members":
+    "Distinct booked member numbers. Member numbers are collected from valid rate_details bookings, linked rooms, and Villa Income statement records, then classified through members.member_or_guest.",
+  "Total Members Booked":
+    "Distinct booked member numbers. Member numbers are collected from valid rate_details bookings, linked rooms, and Villa Income statement records, then classified through members.member_or_guest.",
+  "Total Guests":
+    "Guest or party information comes from reservation_guests, grouped by confirmation code. A booking with no guest records defaults to one person.",
+  "Total Guests Booked":
+    "Distinct booked person numbers classified as Guest through members.member_or_guest.",
+  "Total Bookings":
+    "One booking equals one unique confirmation code from rate_details. Only the latest valid row is kept; Unposted, cancelled, canceled, and no-show reservations are excluded.",
+  "Paid Bookings":
+    "Unique valid confirmation codes from rate_details whose payment_type is not classified as free or complimentary.",
+  "Free / Comp":
+    "Unique valid confirmation codes from rate_details whose payment_type indicates free, comp, complimentary, gratis, or no charge.",
+  "Free / Comp Bookings":
+    "Unique valid confirmation codes from rate_details whose payment_type indicates free, comp, complimentary, gratis, or no charge.",
+  "Paid Revenue":
+    "Paid value comes from rate_details.total_rental on the latest valid row for each unique confirmation code. Free and complimentary bookings are excluded.",
+  "Comp Value":
+    "Complimentary value comes from rate_details.total_rental for bookings classified as free or complimentary. It is tracked separately from paid revenue.",
+  "Total Room Nights":
+    "Room nights count distinct room_number and rate_date combinations within each valid confirmation code. Stay length is used as a fallback when room-date detail is unavailable.",
+  "Villa Bookings":
+    "Valid unique confirmation codes from rate_details for the selected villa. Different confirmation codes remain separate even when dates or villa names match.",
+  "Villa Paid":
+    "Paid valid confirmation codes for the selected villa. The amount shown comes from rate_details.total_rental.",
+  "Villa Free / Comp":
+    "Free or complimentary valid confirmation codes for the selected villa. The amount shown comes from rate_details.total_rental.",
+  "Villa Nights":
+    "Room-night occupancy for the selected villa, based on distinct room and rate-date combinations per confirmation code, with stay length used as a fallback.",
+  "Most Booked":
+    "Villa with the highest count of valid unique confirmation codes in the displayed period and source filter.",
+  "Least Booked":
+    "Villa with the lowest non-zero count of valid unique confirmation codes in the displayed period and source filter.",
+  "Most Paid":
+    "Villa with the highest count of valid paid confirmation codes in the displayed period and source filter.",
+  "Most Free / Comp":
+    "Villa with the highest count of valid free or complimentary confirmation codes in the displayed period and source filter.",
+  "Most Booked Bedroom":
+    "Bedroom size with the highest count of valid unique confirmation codes.",
+  "Most Comp'd Bedroom":
+    "Bedroom size with the highest count of valid free or complimentary confirmation codes.",
+};
+
+function getMetricInfo(label, suppliedInfo) {
+  if (suppliedInfo) return suppliedInfo;
+  if (METRIC_INFO[label]) return METRIC_INFO[label];
+
+  const normalized = String(label || "").toLowerCase();
+  if (normalized.includes("booking")) return METRIC_INFO["Total Bookings"];
+  if (normalized.includes("revenue")) return METRIC_INFO["Paid Revenue"];
+  if (normalized.includes("comp") || normalized.includes("free"))
+    return METRIC_INFO["Comp Value"];
+  if (normalized.includes("night")) return METRIC_INFO["Total Room Nights"];
+  if (normalized.includes("member")) return METRIC_INFO["Total Members"];
+  if (normalized.includes("guest") || normalized.includes("party"))
+    return METRIC_INFO["Total Guests"];
+  return "Calculated from the dashboard data for the displayed date range and active filters.";
+}
+
+function InfoTip({ label, text }) {
+  const [open, setOpen] = useState(false);
+  const content = getMetricInfo(label, text);
+
+  return (
+    <span
+      style={{
+        position: "relative",
+        display: "inline-flex",
+        marginLeft: "auto",
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        aria-label={`How ${label} is calculated`}
+        aria-expanded={open}
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((current) => !current);
+        }}
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: 22,
+          height: 22,
+          padding: 0,
+          border: `1px solid ${C.border}`,
+          borderRadius: "50%",
+          background: C.bg,
+          color: C.muted,
+          cursor: "help",
+        }}
+      >
+        <Info size={13} />
+      </button>
+
+      {open && (
+        <span
+          role="tooltip"
+          style={{
+            position: "absolute",
+            right: 0,
+            top: "calc(100% + 7px)",
+            zIndex: 100,
+            width: 290,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: "var(--dashboard-abyssal)",
+            color: "#fff",
+            fontSize: 11,
+            fontWeight: 500,
+            lineHeight: 1.5,
+            boxShadow: "0 10px 26px rgba(0,0,0,0.18)",
+            whiteSpace: "normal",
+            pointerEvents: "none",
+          }}
+        >
+          {content}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function KpiTile({
   icon: Icon,
   label,
   value,
   sub,
   meta,
+  info,
   active = false,
   highlight = false,
   onClick,
 }) {
   const clickable = Boolean(onClick);
   const selected = active || highlight;
+  const activate = () => clickable && onClick();
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={!clickable}
+    <div
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onClick={activate}
+      onKeyDown={(event) => {
+        if (clickable && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          activate();
+        }
+      }}
       style={{
         width: "100%",
         textAlign: "left",
@@ -469,6 +610,7 @@ function KpiTile({
         padding: "16px 18px",
         background: selected ? C.panelAlt : C.panel,
         cursor: clickable ? "pointer" : "default",
+        boxSizing: "border-box",
       }}
     >
       <div
@@ -481,6 +623,7 @@ function KpiTile({
       >
         {Icon && <Icon size={13} color={selected ? C.accent : C.accent2} />}
         <span className="dashboard-eyebrow">{label}</span>
+        <InfoTip label={label} text={info} />
       </div>
       <div
         style={{
@@ -518,7 +661,7 @@ function KpiTile({
           Open breakdown
         </div>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -688,6 +831,7 @@ function SignalMetric({
   value,
   sub,
   split,
+  info,
   tiedCount = 0,
   onClick,
   onViewAll,
@@ -702,6 +846,18 @@ function SignalMetric({
         padding: "13px 14px",
       }}
     >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          marginBottom: 4,
+        }}
+      >
+        <div className="dashboard-eyebrow">{label}</div>
+        <InfoTip label={label} text={info} />
+      </div>
+
       <button
         type="button"
         onClick={onClick}
@@ -715,7 +871,6 @@ function SignalMetric({
           cursor: hasVilla ? "pointer" : "default",
         }}
       >
-        <div className="dashboard-eyebrow">{label}</div>
         <div
           style={{
             color: C.text,
