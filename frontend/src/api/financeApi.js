@@ -24,6 +24,19 @@
 // drilldown() also still accepts the original 2-arg call style —
 // drilldown(type, value, params) — for any caller that hasn't moved to
 // the structured { filters } shape yet.
+//
+// NO LIMIT on drilldown() — the backend removed its row cap entirely
+// (previously default 200 / max 500). Every matching folio record is
+// now returned; there is no pagination on this endpoint.
+//
+// PAGINATION on drilldownBreakdown() — the backend replaced its old
+// hard limit (default 50 / max 200) with real Prev/Next paging: pass
+// `page` (1-based, default 1) and `pageSize` (default 25). The
+// response shape CHANGED as part of this — it's no longer a bare
+// array, it's now:
+//   { items: [...], page, pageSize, totalItems, totalPages }
+// Callers must read `.items` instead of using the response directly
+// as a list.
 // ─────────────────────────────────────────────────────────────────
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -79,16 +92,21 @@ export const financeApi = {
   //        ...periodToParams(period),
   //      })
   //
-  // limit used to be a positional 3rd arg (default 200) — for the
-  // structured call style it can be passed inside the first argument
-  // instead (e.g. { filters, limit: 500, ...periodParams }).
+  // NO `limit` anymore — the backend dropped the param entirely, so it's
+  // no longer sent (previously a positional 3rd arg / `limit` key,
+  // default 200). If a caller still passes `limit`, it's silently
+  // ignored here rather than sent to a backend that no longer reads it.
   drilldown: (typeOrOptions, value, params = {}) => {
     let query;
     if (typeof typeOrOptions === "string") {
-      query = { type: typeOrOptions, value, limit: 200, ...params };
+      query = { type: typeOrOptions, value, ...params };
     } else {
-      const { filters = {}, limit = 200, ...rest } = typeOrOptions || {};
-      query = { ...filters, limit, ...rest };
+      const {
+        filters = {},
+        limit: _ignoredLimit,
+        ...rest
+      } = typeOrOptions || {};
+      query = { ...filters, ...rest };
     }
     return fetchData(withQuery("/finance/drilldown", query));
   },
@@ -97,12 +115,24 @@ export const financeApi = {
   // filter — e.g. drilldownBreakdown({ groupBy: "villa", filters: {
   // payment: "free" }, ...periodToParams(period) }) returns
   // free-of-charge revenue PER VILLA, not each villa's all-time total.
-  drilldownBreakdown: ({ groupBy, filters = {}, limit, ...periodParams }) =>
+  //
+  // Paginated — pass `page` (1-based, default 1) and `pageSize`
+  // (default 25) to move through results. Returns the envelope
+  // { items, page, pageSize, totalItems, totalPages } — NOT a bare
+  // array anymore; callers must read `.items`.
+  drilldownBreakdown: ({
+    groupBy,
+    filters = {},
+    page = 1,
+    pageSize = 25,
+    ...periodParams
+  }) =>
     fetchData(
       withQuery("/finance/drilldown-breakdown", {
         group_by: groupBy,
+        page,
+        page_size: pageSize,
         ...filters,
-        ...(limit ? { limit } : {}),
         ...periodParams,
       }),
     ),
