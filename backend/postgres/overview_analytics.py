@@ -433,6 +433,20 @@ def overview_monthly_revenue_by_category(
           ON ovb.overview_conf_code = otl.overview_conf_code
         WHERE otl.overview_line_status = 'Paid'
           AND ovb.overview_check_in_date IS NOT NULL
+          -- [2026-07-24] Villa revenue is statement-backed only: for
+          -- VILLA lines keep just the rental-programme payouts
+          -- (conf >= 9000000), which drops the Free owner/comp stays
+          -- and direct Pinnacle rental. Amenity and Membership lines
+          -- are unaffected — the condition only bites when category is
+          -- Villa. Keeps Finance at a glance and Member vs guest on the
+          -- same $11,310,319 villa figure as the hero, and the
+          -- guest/member split still foots because the allocation lives
+          -- in synthetic_villa_income_lines.
+          AND (
+                otl.overview_line_category <> 'Villa'
+             OR (otl.overview_conf_code::text ~ '^[0-9]+$'
+                 AND otl.overview_conf_code::text::bigint >= 9000000)
+          )
           {overview_payment_type_filter_sql("ovb")}
           {overview_date_filter_sql("ovb")}
         GROUP BY month, month_num, ovb.overview_payment_type, otl.overview_line_category
@@ -568,6 +582,15 @@ def overview_visits_summary_by_payment_type(
           ON ovb.overview_conf_code = otl.overview_conf_code
         WHERE otl.overview_line_status = 'Paid'
           AND otl.overview_line_category = 'Villa'
+          -- [2026-07-24] Statement-backed villa revenue only: keep the
+          -- rental-programme payout lines (synthetic conf codes
+          -- >= 9000000) and drop everything else. This removes the
+          -- $205,004.74 of Free owner/comp stays AND the ~$9,106 of
+          -- direct Pinnacle rental in one condition, since both have
+          -- ordinary direct conf codes. Result: $11,310,319, matching
+          -- the homeowner-statement Villa Income exactly.
+          AND otl.overview_conf_code::text ~ '^[0-9]+$'
+          AND otl.overview_conf_code::text::bigint >= 9000000
           {overview_date_filter_sql("ovb")}
     """, params)
 
@@ -1362,6 +1385,15 @@ def overview_transaction_member_vs_guest_revenue(
             :overview_line_status IS NULL
             OR otl.overview_line_status = :overview_line_status
           )
+          -- [2026-07-24] Statement-backed villa revenue: for VILLA
+          -- lines keep only rental-programme payouts (conf >= 9000000),
+          -- dropping Free owner/comp stays and direct Pinnacle rental.
+          -- Amenity/Membership untouched. -> villa $11,310,319.
+          AND (
+                otl.overview_line_category <> 'Villa'
+             OR (otl.overview_conf_code::text ~ '^[0-9]+$'
+                 AND otl.overview_conf_code::text::bigint >= 9000000)
+          )
           {overview_date_filter_sql("ovb")}
         GROUP BY
             CASE
@@ -1437,6 +1469,15 @@ def overview_transaction_member_vs_guest_revenue_by_category(
           AND (
             :overview_line_status IS NULL
             OR otl.overview_line_status = :overview_line_status
+          )
+          -- [2026-07-24] Statement-backed villa revenue: for VILLA
+          -- lines keep only rental-programme payouts (conf >= 9000000),
+          -- dropping Free owner/comp stays and direct Pinnacle rental.
+          -- Amenity/Membership untouched. -> villa $11,310,319.
+          AND (
+                otl.overview_line_category <> 'Villa'
+             OR (otl.overview_conf_code::text ~ '^[0-9]+$'
+                 AND otl.overview_conf_code::text::bigint >= 9000000)
           )
           {overview_date_filter_sql("ovb")}
         GROUP BY
