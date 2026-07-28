@@ -47,12 +47,20 @@ def villa_fee_summary(year: int = Query(...), db: Session = Depends(get_db)):
                 WHERE dl.fee_type = 'Capital Expenditure Fees'), 0)::numeric, 2)
                                                         AS capex_total,
             ROUND(COALESCE(SUM(dl.billed_amount) FILTER (
+                WHERE dl.fee_type IN ('Annual Fees - Family Membership',
+                                      'Annual Fees - Family Membership Deferred')), 0)::numeric, 2)
+                                                        AS family_total,
+            ROUND(COALESCE(SUM(dl.billed_amount) FILTER (
                 WHERE dl.fee_type IN ('Maintenance Fees',
-                                      'Capital Expenditure Fees')), 0)::numeric, 2)
+                                      'Capital Expenditure Fees',
+                                      'Annual Fees - Family Membership',
+                                      'Annual Fees - Family Membership Deferred')), 0)::numeric, 2)
                                                         AS grand_total,
             COUNT(*) FILTER (
                 WHERE dl.fee_type IN ('Maintenance Fees',
-                                      'Capital Expenditure Fees'))::int
+                                      'Capital Expenditure Fees',
+                                      'Annual Fees - Family Membership',
+                                      'Annual Fees - Family Membership Deferred'))::int
                                                         AS fee_lines,
             COUNT(DISTINCT dl.member_number)::int       AS owners_billed,
             COUNT(DISTINCT om.villa_name)::int          AS villas_mapped,
@@ -83,15 +91,23 @@ def villa_fees_by_villa(year: int = Query(...), db: Session = Depends(get_db)):
                 WHERE dl.fee_type = 'Capital Expenditure Fees'), 0)::numeric, 2)
                                                         AS capex_annual,
             ROUND(COALESCE(SUM(dl.billed_amount) FILTER (
+                WHERE dl.fee_type IN ('Annual Fees - Family Membership',
+                                      'Annual Fees - Family Membership Deferred')), 0)::numeric, 2)
+                                                        AS family_annual,
+            ROUND(COALESCE(SUM(dl.billed_amount) FILTER (
                 WHERE dl.fee_type IN ('Maintenance Fees',
-                                      'Capital Expenditure Fees')), 0)::numeric, 2)
+                                      'Capital Expenditure Fees',
+                                      'Annual Fees - Family Membership',
+                                      'Annual Fees - Family Membership Deferred')), 0)::numeric, 2)
                                                         AS total_annual,
             COUNT(*)::int                               AS fee_lines
         FROM villa_dues_lines dl
         LEFT JOIN villa_owner_map om ON om.member_number = dl.member_number
         LEFT JOIN members m          ON m.member_number  = dl.member_number
         WHERE dl.year = :year
-          AND dl.fee_type IN ('Maintenance Fees', 'Capital Expenditure Fees')
+          AND dl.fee_type IN ('Maintenance Fees', 'Capital Expenditure Fees',
+                              'Annual Fees - Family Membership',
+                              'Annual Fees - Family Membership Deferred')
         GROUP BY COALESCE(om.villa_name, 'Unmapped')
         ORDER BY total_annual DESC
     """, {"year": year})
