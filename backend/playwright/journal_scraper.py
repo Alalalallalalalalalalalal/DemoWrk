@@ -52,6 +52,10 @@ MAP_FILE          = os.path.join(OUTPUT_FOLDER, "member_id_map.csv")
 JOURNAL_FOLDER    = os.path.join(OUTPUT_FOLDER, "journal")
 SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
 DONE_LOG          = os.path.join(OUTPUT_FOLDER, "journal_done.txt")
+# [2026-07-18] Accounts that finished with an unresolved tab — they
+# are deliberately NOT written to DONE_LOG, so the next run retries
+# them. This file is the audit trail of what is still outstanding.
+INCOMPLETE_LOG    = os.path.join(OUTPUT_FOLDER, "journal_incomplete.txt")
 LIST_MEMBERS_URL  = f"{BASE_URL}/Membership/middlePage.jsp?listView&tabId=437&tabGrpModuleID=1"
 
 DEFAULT_LIMIT   = None
@@ -103,6 +107,20 @@ def load_done_set():
 def mark_done(member_id):
     with open(DONE_LOG, "a", encoding="utf-8") as f:
         f.write(f"{member_id}\n")
+
+def log_incomplete(member_number, member_id, status):
+    """
+    Record an account that finished with an unresolved tab. Written
+    instead of mark_done() so the account stays eligible for the
+    next run — see the module note in patch_journal_scraper_2.py.
+    """
+    try:
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        detail = ",".join(f"{k}={v}" for k, v in sorted(status.items()))
+        with open(INCOMPLETE_LOG, "a", encoding="utf-8") as f:
+            f.write(f"{stamp}\t{member_number}\t{member_id}\t{detail}\n")
+    except Exception:
+        pass
 
 # ─────────────────────────────────────────────
 # UTILITIES
@@ -1319,7 +1337,18 @@ def drill_statement_details(page, folder_name, label, summary_rows, prefix=""):
         while time.time() < deadline:
             frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
             try:
+                # [2026-07-18] The dropdown alone can't be the "we're
+                # back on the summary page" marker — dropdown-less
+                # pages (e.g. 35A) would stop drilling after the first
+                # period. Accept either the dropdown OR the summary
+                # table's header text.
                 if frame and frame.query_selector('select[name="arAccountTypeId"]'):
+                    back_ok = True
+                    break
+                if frame and frame.evaluate(
+                    "() => document.body && "
+                    "document.body.innerText.includes('Statement Period')"
+                ):
                     back_ok = True
                     break
             except Exception:
@@ -1367,21 +1396,24 @@ def scrape_statements(page, folder_name, prefix=""):
                 pass
 
             dropdown = frame.query_selector('select[name="arAccountTypeId"]')
-            if not dropdown:
-                print(f"    {prefix}Statements: receivable-type dropdown not found for {label}")
-                continue
+            if dropdown:
+                current = (dropdown.evaluate("el => el.value") or "").strip()
+                if current != value:
+                    dropdown.select_option(value=value)
+                    page.wait_for_timeout(1500)
 
-            current = (dropdown.evaluate("el => el.value") or "").strip()
-            if current != value:
-                dropdown.select_option(value=value)
-                page.wait_for_timeout(1500)
-
-                frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
-                if not frame:
-                    print(f"    {prefix}Statements: landing frame lost after switching to {label}")
-                    continue
-            # else: page already on Homeowner (its default) — table is
-            # ready as-is, no reload needed
+                    frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+                    if not frame:
+                        print(f"    {prefix}Statements: landing frame lost after switching to {label}")
+                        continue
+                # else: already on Homeowner (its default) — table is
+                # ready as-is, no reload needed
+            else:
+                # [2026-07-18] Dropdown is OPTIONAL: some accounts'
+                # statements pages render without it (e.g. 35A) and the
+                # page defaults to Homeowner anyway — proceed straight
+                # to the table instead of failing the whole tab.
+                print(f"    {prefix}Statements: no receivable-type dropdown — page defaults to {label}, proceeding")
 
             tables = frame.query_selector_all("table")
             if not tables:
@@ -1454,7 +1486,22 @@ def scrape_statements(page, folder_name, prefix=""):
 # ─────────────────────────────────────────────
 # PER-MEMBER SCRAPE
 # ─────────────────────────────────────────────
-def scrape_member(page, member_number, member_id, prefix=""):
+def scrape_member(page, member_number, member_id, prefix="", status=None):
+    """
+    status: optional dict the caller supplies to receive per-tab
+    outcomes — "ok" (data saved or confirmed empty), "skipped"
+    (legitimately not applicable, e.g. guest accounts), or "failed"
+    (tab did not load / retries exhausted). Any tab left "failed"
+    means the caller must NOT mark this account done, so it gets
+    retried on the next run. Passed in rather than returned so the
+    existing return statements below stay untouched.
+    """
+    if status is None:
+        status = {}
+    status.setdefault("rooms", "failed")
+    status.setdefault("services", "failed")
+    status.setdefault("statements", "failed")
+
     folder_name = get_folder_name(member_number, member_id)
     saved = {}
 
@@ -1525,6 +1572,7 @@ def scrape_member(page, member_number, member_id, prefix=""):
         else:
             print(f"    {prefix}Rooms: no data — processed successfully")
 
+        status["rooms"] = "ok"
         tab_done = True
         break
 
@@ -1544,6 +1592,7 @@ def scrape_member(page, member_number, member_id, prefix=""):
     # targeted re-run without losing the Rooms data already captured.
     if is_guest_folder(folder_name):
         print(f"    {prefix}Services: skipped (guest account)")
+        status["services"] = "skipped"   # guests have no services — resolved, not a failure
         services_confirmed_empty = False
     else:
         services_done = False
@@ -1599,11 +1648,12 @@ def scrape_member(page, member_number, member_id, prefix=""):
                 services_confirmed_empty = True
                 print(f"    {prefix}Services: no data — processed successfully")
 
+            status["services"] = "ok"
             services_done = True
             break
 
         if not services_done:
-            print(f"    {prefix}Services: not completed this run")
+            print(f"    {prefix}Services: not completed this run — account will be retried next run")
 
     # ── Billing > Statements ────────────────────────────────────────
     # Runs after Services, before moving to the next member. Same
@@ -1612,9 +1662,15 @@ def scrape_member(page, member_number, member_id, prefix=""):
     # detail drilling — see the STATEMENTS TAB section comments.
     if is_guest_folder(folder_name):
         print(f"    {prefix}Statements: skipped (guest account)")
-    elif services_confirmed_empty:
-        print(f"    {prefix}Statements: skipped (Services confirmed empty — same account has no statements)")
+        status["statements"] = "skipped"   # guests have no statements
     else:
+        # [2026-07-18] The "Services confirmed empty => no statements"
+        # shortcut was REMOVED: member 35 (Vista Del Mar's owner
+        # account) has an empty Services tab but real Homeowner
+        # statements, disproving the 2026-07-12 assumption. Statements
+        # are now always attempted for every non-guest account.
+        # (services_confirmed_empty is still computed above but no
+        # longer gates anything.)
         statements_done = False
         for attempt in range(1, TAB_MAX_RETRIES + 1):
             note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
@@ -1665,13 +1721,94 @@ def scrape_member(page, member_number, member_id, prefix=""):
                 else:
                     print(f"    {prefix}Statement details CSV could not be saved")
 
+            status["statements"] = "ok"
             statements_done = True
             break
 
         if not statements_done:
-            print(f"    {prefix}Statements: not completed this run")
+            print(f"    {prefix}Statements: not completed this run — account will be retried next run")
 
     return True, saved
+
+# ─────────────────────────────────────────────
+# STATEMENTS-ONLY MEMBER SCRAPE  [2026-07-18]
+# ─────────────────────────────────────────────
+def scrape_member_statements_only(page, member_number, member_id,
+                                  prefix="", status=None):
+    """
+    Targeted mode: navigate to the member and pull ONLY
+    Billing > Statements (+ per-period details). Skips Rooms popups and
+    Services entirely, so a statements backfill over a list of owner
+    accounts takes minutes instead of hours. Guest accounts are still
+    skipped (correct behavior — e.g. 57 is a guest; 57A is the member).
+    """
+    if status is None:
+        status = {}
+    # Rooms/Services are intentionally not attempted in this mode.
+    status.setdefault("statements", "failed")
+
+    folder_name = get_folder_name(member_number, member_id)
+    saved = {}
+
+    dismiss_popup(page)
+    if not navigate_to_member(page, member_id, prefix):
+        print(f"  {prefix}Navigation failed for {member_number}")
+        return False, saved
+
+    if is_guest_folder(folder_name):
+        print(f"    {prefix}Statements: skipped (guest account)")
+        status["statements"] = "skipped"
+        return True, saved
+
+    for attempt in range(1, TAB_MAX_RETRIES + 1):
+        note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
+        print(f"    {prefix}Statements{note}")
+
+        shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+        if not shell:
+            print(f"    {prefix}Shell lost — re-navigating to member")
+            if not navigate_to_member(page, member_id, prefix):
+                return False, saved
+            shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not shell:
+                return False, saved
+
+        open_member_dropdown(shell, page)
+        click_section(shell, page, "Billing")
+        if not click_subtab(shell, page, "memberStatements",
+                            TAB_HREF_FALLBACKS["statements"], prefix):
+            take_screenshot(page, f"no_tab_{folder_name}_statements")
+            if attempt < TAB_MAX_RETRIES:
+                page.wait_for_timeout(1000 * attempt)
+            continue
+
+        statements_success, statement_rows, statement_detail_rows = \
+            scrape_statements(page, folder_name, prefix)
+        if not statements_success:
+            print(f"    {prefix}Statements scraping failed")
+            if attempt < TAB_MAX_RETRIES:
+                page.wait_for_timeout(1000 * attempt)
+                continue
+            return False, saved
+
+        if statement_rows:
+            fp = save_tab_csv(folder_name, "statements", statement_rows)
+            if fp:
+                saved["statements"] = fp
+                print(f"    {prefix}Statements: {len(statement_rows)} row(s) → {os.path.basename(fp)}")
+        else:
+            print(f"    {prefix}Statements: no data — processed successfully")
+
+        if statement_detail_rows:
+            fp = save_tab_csv(folder_name, "statement_details", statement_detail_rows)
+            if fp:
+                saved["statement_details"] = fp
+                print(f"    {prefix}Statement details: {len(statement_detail_rows)} line(s) → {os.path.basename(fp)}")
+
+        status["statements"] = "ok"
+        return True, saved
+
+    return False, saved
 
 # ─────────────────────────────────────────────
 # WORKER
@@ -1680,10 +1817,10 @@ def _worker_init():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 def scrape_chunk(args):
-    members_chunk, worker_id = args
+    members_chunk, worker_id, force, statements_only = args
     time.sleep(worker_id * 3)
     prefix   = f"[W{worker_id}] "
-    results  = {"success": [], "failed": [], "skipped": []}
+    results  = {"success": [], "failed": [], "skipped": [], "incomplete": []}
     done_set = load_done_set()
 
     with sync_playwright() as p:
@@ -1718,20 +1855,51 @@ def scrape_chunk(args):
 
                 ensure_session(page, worker_id)
 
-                if member_id in done_set:
+                if member_id in done_set and not force:
                     print(f"  {prefix}Already done — skipping")
                     results["skipped"].append(folder_name)
                     continue
 
-                success, saved = scrape_member(page, member_number, member_id, prefix)
+                scrape_fn = (scrape_member_statements_only
+                             if statements_only else scrape_member)
+                status = {}
+                success, saved = scrape_fn(page, member_number, member_id,
+                                           prefix, status)
                 if not success:
                     if ensure_session(page, worker_id):
                         print(f"  {prefix}Retrying {member_number} after re-login...")
-                        success, saved = scrape_member(page, member_number, member_id, prefix)
+                        status = {}   # fresh slate for the retry
+                        success, saved = scrape_fn(page, member_number, member_id,
+                                                   prefix, status)
 
                 if success:
-                    mark_done(member_id)
-                    done_set.add(member_id)
+                    # [2026-07-18] An account is only marked done when
+                    # EVERY tab resolved — "ok" (data saved or
+                    # confirmed empty) or "skipped" (not applicable,
+                    # e.g. guest). A tab left "failed" keeps the
+                    # account off the done log so the next run retries
+                    # it, instead of silently freezing a partial
+                    # result forever (the bug that lost statements for
+                    # ~80 villa-owner accounts in July 2026).
+                    unresolved = sorted(
+                        k for k, v in status.items()
+                        if v not in ("ok", "skipped")
+                    )
+
+                    # statements-only runs never mark done: a member
+                    # first touched in this mode still needs a full
+                    # Rooms/Services pass in a future normal run.
+                    if statements_only:
+                        pass
+                    elif unresolved:
+                        log_incomplete(member_number, member_id, status)
+                        results["incomplete"].append(folder_name)
+                        print(f"  {prefix}! {member_number}: incomplete "
+                              f"({', '.join(unresolved)}) — not marked done, "
+                              f"will retry next run")
+                    else:
+                        mark_done(member_id)
+                        done_set.add(member_id)
 
                     if saved:
                         print(f"  {prefix}✓ {member_number}: {len(saved)} file(s) saved")
@@ -1762,6 +1930,14 @@ def main():
                         help="Single member by number e.g. 1C")
     parser.add_argument("--id",      type=str, default=None,
                         help="Single member by portal ID e.g. 32845")
+    parser.add_argument("--members", type=str, default=None,
+                        help="Comma-separated member numbers e.g. 67,67A,23B")
+    parser.add_argument("--force",   action="store_true",
+                        help="Ignore journal_done.txt for the selected members "
+                             "(auto-enabled for --member/--id/--members)")
+    parser.add_argument("--statements-only", action="store_true",
+                        help="Skip Rooms and Services; scrape only "
+                             "Billing > Statements (+ details)")
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
                         help=f"Parallel workers (default: {DEFAULT_WORKERS})")
     parser.add_argument("--reset",   action="store_true",
@@ -1783,7 +1959,19 @@ def main():
     if done_count:
         print(f"Already done: {done_count} (use --reset to rescrape)")
 
-    if args.member:
+    force = args.force or bool(args.member or args.id or args.members)
+
+    if args.members:
+        wanted = {m.strip() for m in args.members.split(",") if m.strip()}
+        members = [(n, i) for n, i in all_members if n in wanted]
+        found = {n for n, _ in members}
+        missing = wanted - found
+        if missing:
+            print(f"WARNING: not found in member map: {sorted(missing)}")
+        if not members:
+            print("None of the listed members were found in the map.")
+            return
+    elif args.member:
         members = [(n, i) for n, i in all_members if n == args.member]
         if not members:
             print(f"Member '{args.member}' not found.")
@@ -1806,12 +1994,12 @@ def main():
 
     if len(members) == 1 or args.workers == 1:
         print("Mode               : single worker\n")
-        all_results = [scrape_chunk((members, 1))]
+        all_results = [scrape_chunk((members, 1, force, args.statements_only))]
     else:
         num_workers = min(args.workers, len(members))
         chunk_size  = math.ceil(len(members) / num_workers)
         chunks = [
-            (members[i: i + chunk_size], wid)
+            (members[i: i + chunk_size], wid, force, args.statements_only)
             for wid, i in enumerate(range(0, len(members), chunk_size), 1)
         ]
         print(f"Workers            : {num_workers}")
@@ -1829,6 +2017,8 @@ def main():
             pool.close()
             pool.join()
 
+    incomplete       = sum(len(r.get("incomplete", [])) for r in all_results)
+    incomplete_names = [n for r in all_results for n in r.get("incomplete", [])]
     success      = sum(len(r["success"]) for r in all_results)
     failed       = sum(len(r["failed"])  for r in all_results)
     skipped      = sum(len(r["skipped"]) for r in all_results)
@@ -1838,6 +2028,10 @@ def main():
     print("Summary")
     print("=" * 60)
     print(f"  Success : {success}")
+    if incomplete:
+        print(f"  Incomplete (will retry next run) : {incomplete}")
+        print(f"    {incomplete_names}")
+        print(f"    Details logged to: {INCOMPLETE_LOG}")
     print(f"  Failed  : {failed}")
     print(f"  Skipped : {skipped}")
     if failed_names:

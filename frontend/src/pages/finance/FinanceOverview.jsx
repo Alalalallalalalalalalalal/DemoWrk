@@ -150,7 +150,7 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Total Revenue",
       value: money(data.totalRevenue),
-      tooltip: `${(data.totalTransactions ?? 0).toLocaleString()} folio charges - villa stays, amenities, and all other services`,
+      tooltip: `All villa stays, amenities, and all other services`,
       icon:  TrendingUp,
       accent: C.accent,
       // Special-cased in FinanceTab's handleOverviewCardClick - opens a
@@ -162,7 +162,7 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Villas Revenue",
       value: money(data.villasRevenue),
-      tooltip: "Folio lines classified as villa stays - covers both paid and comped rooms that generated a charge",
+      tooltip: "Gross villa rental revenue before taxes and other deductions, calculated from paid reservations.",
       icon:  Home,
       accent: "#2D8A5F",
       // transaction_category = 'Villa' - same /drilldown "category"

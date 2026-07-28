@@ -41,6 +41,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import {
   X,
   ChevronRight,
+  ChevronLeft,
   Info,
   Mail,
   Phone,
@@ -73,6 +74,11 @@ const money = (v) =>
 const fmt = (v) => (v == null ? "-" : Number(v).toLocaleString());
 
 const MONTHS = ["All","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// Rows per page for the "browse by…" breakdown table. The backend
+// replaced its old hard cap (50 default / 200 max) with real
+// Prev/Next paging — this is just the page size we request.
+const BREAKDOWN_PAGE_SIZE = 25;
 
 
 // ── Filter-dimension metadata (shared by chips + pivot bar) ────────
@@ -688,6 +694,42 @@ function BreakdownList({ items, onDrill }) {
   );
 }
 
+// Prev/Next paging for the breakdown table - replaces the backend's
+// old hard row cap (was 50 default / 200 max, now real pagination).
+function BreakdownPagination({ page, totalPages, totalItems, onChange }) {
+  const atFirst = page <= 1;
+  const atLast  = page >= totalPages;
+  const btnStyle = (disabled) => ({
+    display: "flex", alignItems: "center", gap: 4,
+    padding: "6px 10px", border: `1px solid ${C.border}`, borderRadius: 8,
+    background: C.bg, cursor: disabled ? "default" : "pointer",
+    opacity: disabled ? 0.4 : 1, fontSize: 12, color: C.text, fontFamily: "sans-serif",
+  });
+  return (
+    <div
+      style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.border}`,
+      }}
+    >
+      <span style={{ fontSize: 11, color: C.muted, fontFamily: "sans-serif" }}>
+        {fmt(totalItems)} total
+      </span>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button onClick={() => onChange(page - 1)} disabled={atFirst} style={btnStyle(atFirst)}>
+          <ChevronLeft size={14} /> Prev
+        </button>
+        <span style={{ fontSize: 12, color: C.soft, fontFamily: "sans-serif" }}>
+          Page {page} of {totalPages}
+        </span>
+        <button onClick={() => onChange(page + 1)} disabled={atLast} style={btnStyle(atLast)}>
+          Next <ChevronRight size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 
 // ══════════════════════════════════════════════════════════════════
 // DRAWER  –  exported component
@@ -765,19 +807,29 @@ export default function RevenueBreakdownDrawer({
     }
   }
 
-  async function loadBreakdown(groupBy, filters) {
+  // The backend now returns a paginated envelope
+  // { items, page, pageSize, totalItems, totalPages } instead of a
+  // bare array - see financeApi.js. `page` defaults to 1 (first load
+  // / any pivot); breadcrumb navigation and Prev/Next both pass the
+  // page they want explicitly.
+  async function loadBreakdown(groupBy, filters, page = 1) {
     setLoading(true);
     setError(null);
     try {
       const data = await financeApi.drilldownBreakdown({
         groupBy,
         filters,
+        page,
+        pageSize: BREAKDOWN_PAGE_SIZE,
         ...periodToParams(period),
       });
       setStepData({
         kind: "breakdown",
         groupBy,
-        rows: data.map((r) => ({
+        page: data.page,
+        totalPages: data.totalPages,
+        totalItems: data.totalItems,
+        rows: data.items.map((r) => ({
           label: r.label,
           revenue: r.revenue,
           count: r.transactions,
@@ -842,9 +894,10 @@ export default function RevenueBreakdownDrawer({
       filters: currentFilters,
       mode: "breakdown",
       groupBy,
+      page: 1,
     };
     setTrail((prev) => [...prev, newStep]);
-    loadBreakdown(groupBy, currentFilters);
+    loadBreakdown(groupBy, currentFilters, 1);
   }
 
   function navigateTrail(idx) {
@@ -853,10 +906,26 @@ export default function RevenueBreakdownDrawer({
     if (step.mode === "staticMid") {
       setStepData({ kind: "staticMid", rows: step.items, groupBy: null });
     } else if (step.mode === "breakdown") {
-      loadBreakdown(step.groupBy, step.filters);
+      loadBreakdown(step.groupBy, step.filters, step.page || 1);
     } else {
       loadRecords(step.filters);
     }
+  }
+
+  // Prev/Next on the breakdown table - re-fetches the same groupBy +
+  // filters at a different page, and keeps the trail step's `page` in
+  // sync so jumping back to this step via the breadcrumb returns to
+  // the page the user was actually on, not back to page 1.
+  function changeBreakdownPage(newPage) {
+    const totalPages = stepData.totalPages || 1;
+    if (newPage < 1 || newPage > totalPages) return;
+    loadBreakdown(stepData.groupBy, currentFilters, newPage);
+    setTrail((prev) => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      if (last.mode !== "breakdown") return prev;
+      return [...prev.slice(0, -1), { ...last, page: newPage }];
+    });
   }
 
   // ── Remove a single active filter dimension, keeping everything
@@ -1004,6 +1073,14 @@ export default function RevenueBreakdownDrawer({
                   : "Select a row to see its underlying folio records."}
               </p>
               <BreakdownList items={stepData.rows} onDrill={drillIntoBreakdownItem} />
+              {stepData.totalPages > 1 && (
+                <BreakdownPagination
+                  page={stepData.page}
+                  totalPages={stepData.totalPages}
+                  totalItems={stepData.totalItems}
+                  onChange={changeBreakdownPage}
+                />
+              )}
             </>
           )}
 

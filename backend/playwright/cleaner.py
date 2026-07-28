@@ -1165,6 +1165,14 @@ def load_rooms(conn, member_number, filepath, dry_run=False):
             "status":           clean_status(row.get("status")),
         })
 
+    # [2026-07-18] rooms.member_number has an FK to members. A normal
+    # run loads 'profile' before 'rooms' (see LOADERS), so the member
+    # row exists by now — but --rooms-only has no such ordering, and an
+    # unknown member would fail the whole folder on an FK violation.
+    # Skip those rows with a warning instead, same guard the folio
+    # loaders use.
+    rows = filter_rows_to_existing_members(conn, rows, "rooms")
+
     if rows:
         upsert_multi(conn, "rooms", rows,
                     ["member_number", "confirmation_code"], dry_run)
@@ -1870,6 +1878,8 @@ def main():
                         help="Only load reports/business_source.csv and update folios.payment_type")
     parser.add_argument("--rate-details-only", action="store_true",
                         help="Only load rate_details_free.csv and rate_details_paid.csv into rate_details")
+    parser.add_argument("--rooms-only", action="store_true",
+                        help="Only load *_rooms.csv from journal folders")
     parser.add_argument("--services-and-statements-only", action="store_true",
                         help="Only load *_services.csv and *_statements.csv from journal folders")
     parser.add_argument("--statement-details-only", action="store_true",
@@ -1887,6 +1897,7 @@ def main():
     print(f"Folios only:  {args.folios_only}")
     print(f"Business source only: {args.business_source_only}")
     print(f"Rate details only: {args.rate_details_only}")
+    print(f"Rooms only: {args.rooms_only}")
     print(f"Services and statements only: {args.services_and_statements_only}")
     print(f"Statement details only: {args.statement_details_only}")
     print()
@@ -1922,19 +1933,132 @@ def main():
         return
 
     if args.rate_details_only:
-        log.info("Skipping member/profile/folio transaction load because --rate-details-only was used.")
-        try:
-            load_rate_details(conn, dry_run=args.dry_run)
-            if not args.dry_run:
-                conn.commit()
-        except Exception as e:
-            conn.rollback()
-            log.error(f"Failed loading rate_details: {e}")
+        log.info("Skipping everything except rate_details because --rate-details-only was used.")
+
+        # Standalone scrape_rate_revenue.py outputs (Free/Paid files).
+        # Skipped when --member is given, since those files are global.
+        if not args.member:
+            try:
+                load_rate_details(conn, dry_run=args.dry_run)
+                if not args.dry_run:
+                    conn.commit()
+            except Exception as e:
+                conn.rollback()
+                log.error(f"Failed loading standalone rate_details files: {e}")
+
+        # [2026-07-18] Journal per-member rate details — these were
+        # MISSING from this flag before: load_rate_details() only reads
+        # the two standalone files, so every
+        # journal/{member}/{member}_rate_details.csv scraped from the
+        # reservation popups was silently ignored. Same folder-walk
+        # pattern as --statement-details-only above.
+        if args.member:
+            folders = [os.path.join(JOURNAL_FOLDER, args.member)]
+            if not os.path.isdir(folders[0]):
+                log.error(f"Folder not found: {folders[0]}")
+                conn.close()
+                return
+        else:
+            folders = sorted([
+                f.path for f in os.scandir(JOURNAL_FOLDER)
+                if f.is_dir()
+            ])
+
+        if args.sample_rate < 1.0:
+            folders = [
+                f for f in folders
+                if keep_sample(os.path.basename(f), args.sample_rate)
+            ]
+
+        print(f"Members to check: {len(folders)}\n")
+
+        loaded, skipped, failed = [], [], []
+        for folder in folders:
+            folder_name = os.path.basename(folder)
+            rates_fp = os.path.join(folder, f"{folder_name}_rate_details.csv")
+
+            if not os.path.exists(rates_fp):
+                skipped.append(folder_name)
+                continue
+
+            try:
+                load_member_rate_details(conn, folder_name, rates_fp, args.dry_run)
+                if not args.dry_run:
+                    conn.commit()
+                loaded.append(folder_name)
+            except Exception as e:
+                conn.rollback()
+                log.error(f"Failed rate_details for {folder_name}: {e}")
+                failed.append(folder_name)
+
         conn.close()
         print()
         print("=" * 60)
-        print("ETL Complete")
+        print("ETL Complete (rate details only)")
         print("=" * 60)
+        print(f"  Loaded:  {len(loaded)}")
+        print(f"  Skipped (no _rate_details.csv): {len(skipped)}")
+        print(f"  Failed:  {len(failed)}")
+        if failed:
+            print(f"  Failed members: {failed}")
+        return
+
+    if args.rooms_only:
+        # [2026-07-18] Journal _rooms.csv files are otherwise only
+        # loaded by a full run — every targeted flag skips them, which
+        # is how the rooms table went stale. Same folder-walk pattern
+        # as --statement-details-only below.
+        log.info("Skipping everything except rooms because --rooms-only was used.")
+
+        if args.member:
+            folders = [os.path.join(JOURNAL_FOLDER, args.member)]
+            if not os.path.isdir(folders[0]):
+                log.error(f"Folder not found: {folders[0]}")
+                conn.close()
+                return
+        else:
+            folders = sorted([
+                f.path for f in os.scandir(JOURNAL_FOLDER)
+                if f.is_dir()
+            ])
+
+        if args.sample_rate < 1.0:
+            folders = [
+                f for f in folders
+                if keep_sample(os.path.basename(f), args.sample_rate)
+            ]
+
+        print(f"Members to check: {len(folders)}\n")
+
+        loaded, skipped, failed = [], [], []
+        for folder in folders:
+            folder_name = os.path.basename(folder)
+            rooms_fp = os.path.join(folder, f"{folder_name}_rooms.csv")
+
+            if not os.path.exists(rooms_fp):
+                skipped.append(folder_name)
+                continue
+
+            try:
+                load_rooms(conn, folder_name, rooms_fp, args.dry_run)
+                if not args.dry_run:
+                    conn.commit()
+                loaded.append(folder_name)
+            except Exception as e:
+                conn.rollback()
+                log.error(f"Failed rooms for {folder_name}: {e}")
+                failed.append(folder_name)
+
+        conn.close()
+        print()
+        print("=" * 60)
+        print("ETL Complete (rooms only)")
+        print("=" * 60)
+        print(f"  Loaded:  {len(loaded)}")
+        print(f"  Skipped (no _rooms.csv): {len(skipped)}")
+        print(f"  Failed:  {len(failed)}")
+        if failed:
+            print(f"  Failed members: {failed}")
         return
 
     if args.services_and_statements_only:

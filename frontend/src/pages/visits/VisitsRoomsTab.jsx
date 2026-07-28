@@ -63,13 +63,56 @@ const LABEL_STYLE = {
 // ─── Chart info tooltips ────────────────────────────────────────────────────
 
 const CHART_INFO = {
-  bookingsByVilla: {
+  totalMembersBooked: {
     summary:
-      "Shows total confirmed bookings per villa across all time (or the selected year/month filter).",
+      "Counts unique member numbers associated with villa activity during the selected period.",
     functionality:
-      "Hover a bar for exact booking count. Use the Year/Month filters above to narrow the view. Click a villa in the table below to drill into its monthly detail.",
+      "Member numbers are collected from valid Rate Details bookings, Rooms records, and Villa Income Statement Details, then classified through the Members table. Repeat activity by the same member is counted once.",
+    x: null,
+    y: null,
+  },
+  totalGuestsBooked: {
+    summary:
+      "Counts unique guest account numbers associated with villa activity during the selected period.",
+    functionality:
+      "Guest classification comes from the Members table. A guest account appearing on multiple bookings is counted once. This is not the total number of people who stayed.",
+    x: null,
+    y: null,
+  },
+  averageLengthOfStay: {
+    summary: "Shows the average number of nights per valid villa booking.",
+    functionality:
+      "Stay length is calculated from the earliest check-in date to the latest check-out date for each unique confirmation code, then averaged across all included bookings.",
+    x: null,
+    y: null,
+  },
+  averagePartySize: {
+    summary: "Shows the average number of people attached to each booking.",
+    functionality:
+      "Party size comes from Reservation Guests records linked by confirmation code. Bookings without guest records default to one person.",
+    x: null,
+    y: null,
+  },
+  totalRoomNights: {
+    summary: "Adds occupied room-date combinations across valid bookings.",
+    functionality:
+      "Each distinct room and rate date counts as one room night. Where detailed room-date records are unavailable, the booking stay length is used as a fallback.",
+    x: null,
+    y: null,
+  },
+  villaRentalRevenue: {
+    summary: "Shows villa income for the selected period.",
+    functionality:
+      "The amount is summed from Owner Payout Total in the Statement Villa Income Summary table. It is separate from booking Total Rental values in Rate Details.",
+    x: null,
+    y: null,
+  },
+  bookingsByVilla: {
+    summary: "Shows valid unique bookings by villa and bedroom configuration.",
+    functionality:
+      "Each confirmation code is counted once using its latest Rate Details record. Unposted, cancelled, and no-show reservations are excluded. Hover a bar for the exact booking count.",
     x: "Villa name",
-    y: "Number of confirmed bookings",
+    y: "Number of valid bookings",
   },
   villaMonthlyBookings: {
     summary:
@@ -81,11 +124,11 @@ const CHART_INFO = {
   },
   villaMonthlyRevenue: {
     summary:
-      "Shows rental revenue earned by the selected villa for each calendar month.",
+      "Shows paid booking value for the selected villa by calendar month.",
     functionality:
-      "Hover a bar for the exact monthly revenue figure. Revenue counts only folio lines matching villa, room, rental, or accommodation descriptions.",
+      "The value is based on Total Rental from valid Rate Details bookings not classified as free or complimentary. Hover a bar for the exact monthly amount.",
     x: "Month (Jan–Dec)",
-    y: "Rental revenue in USD",
+    y: "Paid booking value in USD",
   },
   bookingsByBedroom: {
     summary:
@@ -96,10 +139,9 @@ const CHART_INFO = {
     y: "Number of confirmed bookings",
   },
   avgStayByBedroom: {
-    summary:
-      "Shows the average length of stay for each bedroom count, helping identify whether party size correlates with longer visits.",
+    summary: "Shows the average length of stay for each bedroom configuration.",
     functionality:
-      "Hover a bar for the average nights figure. Drawn from the same folio dataset as the bookings chart — cancelled and no-show reservations are excluded.",
+      "Stay length is calculated from check-in to check-out for each unique confirmation code in Rate Details. Unposted, cancelled, and no-show reservations are excluded.",
     x: "Number of bedrooms",
     y: "Average stay in nights",
   },
@@ -112,19 +154,18 @@ const CHART_INFO = {
     y: "Number of confirmed bookings",
   },
   revenueByMonth: {
-    summary:
-      "Shows total villa rental revenue by month across all villas, revealing which months drive the most income.",
+    summary: "Shows villa income by month across all villas.",
     functionality:
-      "Hover a bar for the exact monthly revenue. Revenue is summed from folio lines matching villa, room, rental, or accommodation keywords — service charges and fees are excluded.",
+      "The amount is summed from Owner Payout Total in the Statement Villa Income Summary table. Hover a bar for the exact monthly total.",
     x: "Month (Jan–Dec)",
-    y: "Rental revenue in USD",
+    y: "Villa income in USD",
   },
 
   villaTable: {
     summary:
-      "Ranks all villas by total confirmed bookings and surfaces key performance metrics side by side.",
+      "Ranks villas using valid unique bookings and compares bedrooms, bookings, room nights, average stay, and paid booking value.",
     functionality:
-      "Click any row to open a full booking timeline for that villa in a side panel. The active row is highlighted. Filtered by the Year/Month selectors at the top.",
+      "Bookings are deduplicated by confirmation code from Rate Details. Room Nights count occupied room-date combinations, while Revenue includes paid Total Rental only. Click a row to open its booking timeline.",
     x: null,
     y: null,
   },
@@ -449,36 +490,39 @@ const num = (v, d = 1) => (v == null ? "—" : Number(v).toFixed(d));
 
 // ─── UI primitives ────────────────────────────────────────────────────────────
 
-function Stat({ icon: Icon, label, value, sub, onClick }) {
+function Stat({ icon: Icon, label, value, sub, onClick, infoId }) {
   const clickable = Boolean(onClick);
   return (
     <div style={{ padding: "0 18px" }}>
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={!clickable}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          background: "none",
-          border: "none",
-          padding: 0,
-          cursor: clickable ? "pointer" : "default",
-          color: "inherit",
-        }}
-      >
-        {Icon && <Icon size={15} color={C.accent2} />}
-        <span
-          className="dashboard-eyebrow"
+      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+        <button
+          type="button"
+          onClick={onClick}
+          disabled={!clickable}
           style={{
-            textDecoration: clickable ? "underline" : "none",
-            textUnderlineOffset: 3,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            background: "none",
+            border: "none",
+            padding: 0,
+            cursor: clickable ? "pointer" : "default",
+            color: "inherit",
           }}
         >
-          {label}
-        </span>
-      </button>
+          {Icon && <Icon size={15} color={C.accent2} />}
+          <span
+            className="dashboard-eyebrow"
+            style={{
+              textDecoration: clickable ? "underline" : "none",
+              textUnderlineOffset: 3,
+            }}
+          >
+            {label}
+          </span>
+        </button>
+        {infoId && <ChartInfo id={infoId} />}
+      </div>
       <div
         style={{
           fontFamily: "'Cormorant Garamond', serif",
@@ -702,9 +746,9 @@ const TOP_VIEWS = [
   },
   {
     key: "sources",
-    label: "Sources",
+    label: "Booking Sources",
     icon: Tag,
-    desc: "Paid vs. free / comp breakdown by business source",
+    desc: "Business-source performance, paid vs. free/comp, trends, and drill-downs",
   },
 ];
 
@@ -1238,7 +1282,7 @@ export default function VisitsRoomsTab({
     Villa: v.villa_name ?? "",
     Bedrooms: villaBedroomLabel(v),
     Bookings: v.bookings ?? "",
-    Nights: v.total_nights ?? "",
+    "Room Nights": v.total_nights ?? "",
     "Avg Stay": v.avg_stay ?? "",
     Revenue: v.revenue ?? "",
   }));
@@ -1352,14 +1396,14 @@ export default function VisitsRoomsTab({
         }}
       >
         <div>
-          <div className="dashboard-eyebrow">Visits & Rooms</div>
+          <div className="dashboard-eyebrow">Villa Performance & Demand</div>
           <h2 className="dashboard-card-title" style={{ marginBottom: 0 }}>
-            Villa booking performance
+            Villa Analytics
           </h2>
           <p style={{ color: C.muted, fontSize: 12, margin: "4px 0 0" }}>
             {topView === "overall"
-              ? "Overall booking volume, revenue, and villa performance."
-              : "Paid vs. free / comp breakdown by business source — see what's actually driving revenue."}
+              ? "KPIs, villa rankings, monthly bookings, revenue trends, bedroom analytics, and detailed performance."
+              : "Business-source cards, paid vs. free/comp performance, source trends, drill-downs, and marketing signals."}
           </p>
         </div>
 
@@ -1405,39 +1449,45 @@ export default function VisitsRoomsTab({
               icon={Users}
               label="Total Members Booked"
               value={fmt(summaryData?.total_members_booked)}
-              sub="Unique members"
+              sub="Unique member accounts"
+              infoId="totalMembersBooked"
               onClick={() => openPeopleModal("members")}
             />
             <Stat
               icon={Users}
               label="Total Guests Booked"
               value={fmt(summaryData?.total_guests_booked)}
-              sub="From folios"
+              sub="Unique guest accounts"
+              infoId="totalGuestsBooked"
               onClick={() => openPeopleModal("guests")}
             />
             <Stat
               icon={CalendarClock}
               label="Average Length of Stay"
               value={`${num(summaryData?.avg_length_of_stay)} nights`}
-              sub="Overall"
+              sub="Nights per booking"
+              infoId="averageLengthOfStay"
             />
             <Stat
               icon={Users}
               label="Average Party Size"
               value={num(summaryData?.avg_party_size)}
-              sub="Guests per booking"
+              sub="People per booking"
+              infoId="averagePartySize"
             />
             <Stat
               icon={BedDouble}
               label="Total Room Nights"
               value={fmt(summaryData?.total_room_nights)}
-              sub="Booked nights"
+              sub="Occupied room-date nights"
+              infoId="totalRoomNights"
             />
             <Stat
               icon={DollarSign}
               label="Villa Rental Revenue"
               value={money(summaryData?.villa_rental_revenue)}
-              sub="Folio rental spend"
+              sub="Villa income total"
+              infoId="villaRentalRevenue"
             />
           </section>
 
@@ -1682,7 +1732,7 @@ export default function VisitsRoomsTab({
                         "Villa",
                         "Bedrooms",
                         "Bookings",
-                        "Nights",
+                        "Room Nights",
                         "Avg Stay",
                         "Revenue",
                       ].map((h) => (
