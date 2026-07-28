@@ -40,7 +40,9 @@ import {
   MoreHorizontal,
   Settings,
   PartyPopper,
+  Home,
 } from "lucide-react";
+import VillaFeesTab from "./VillaFeesTab";
 import { analyticsApi } from "../api/analytics";
 import { overviewApi } from "../api/overviewApi";
 import { FinancePeriodFilter, periodToParams, DEFAULT_PERIOD } from "./finance/FinanceShared";
@@ -73,6 +75,7 @@ const TABS = [
   { id: "reports", label: "Reports", Icon: BookOpen },
   { id: "market", label: "Marketing Targeting", Icon: PartyPopper },
   { id: "ml", label: "ML Insights", Icon: Sparkles },
+  { id: "villa_fees", label: "Annual Fees", Icon: Home },
 ];
 
 const SUB = {
@@ -83,6 +86,7 @@ const SUB = {
   reports: "View and filter raw report data",
   market: "Analysis and Insights on market Targeting",
   ml: "Segmentation, amenity insights and campaign recommendations — all monetary figures in $USD",
+  villa_fees: "Maintenance, Capital Expenditure and membership dues billed per villa",
 };
 
 /* ─── Recharts shared props ──────────────────────────────────── */
@@ -584,6 +588,10 @@ export default function Dashboard() {
 
         {/* ════ FINANCE ════ */}
         {activeTab === "finance" && <FinanceTab />}
+
+
+        {/* ════ VILLA FEES (TEST) ════ */}
+        {activeTab === "villa_fees" && <VillaFeesTab />}
 
         {/* ════ REPORTS ════ */}
         {activeTab === "reports" && (
