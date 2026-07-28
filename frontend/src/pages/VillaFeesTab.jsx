@@ -353,6 +353,7 @@ const HEADERS = [
     ["owner_names", "Owner(s)"],
     ["maintenance_annual", "Maintenance (annual)"],
     ["capex_annual", "Capital Expenditure (annual)"],
+    ["family_annual", "Family Membership (annual)"],
     ["total_annual", "Total annual billed"],
 ];
 
@@ -481,7 +482,7 @@ export default function VillaFeesTab() {
                             sections={[
                                 {
                                     label: "What this page shows",
-                                    body: "The annual fees billed to villa owners on their member statements: the Monthly Maintenance Fee and the Capital Expenditure Contribution, totaled per villa for the selected year. Each villa row expands to show the owner, contact details, and every charge name with its annual amount.",
+                                    body: "The annual fees billed to villa owners on their member statements: the Monthly Maintenance Fee, the Capital Expenditure Contribution, and Family Membership Dues (including mid-year adjustments), totaled per villa for the selected year. Each villa row expands to show the owner, contact details, and every charge name with its annual amount. GCT tax is tracked separately and not included in fee totals.",
                                 },
                                 {
                                     label: "How Capital Expenditure is totaled",
@@ -492,8 +493,12 @@ export default function VillaFeesTab() {
                                     body: "Each member is matched to their villa using the villa named on their member record, with their bookings and stays as backup. Bedroom counts reflect the villa's full size. A small number of members without a recorded villa appear under \"Unmapped\" so the totals always add up.",
                                 },
                                 {
+                                    label: "What counts as a Maintenance Fee",
+                                    body: "Only the standard recurring charge (\"Monthly Maintenance Fee\" with its billing period) counts as Maintenance Fees. One-off maintenance work — contractor invoices, storm-damage repairs, additional work billed to an owner — is not a fee and is excluded from this page entirely.",
+                                },
+                                {
                                     label: "Dues history at the bottom",
-                                    body: "The Dues history card shows fees billed per year across all fee types, including Family Membership dues and GCT. Full statement coverage begins December 2024, so 2025 is the first complete year — earlier years reflect limited records. Maintenance totals can include special assessments in addition to the standard fee.",
+                                    body: "The Dues history card shows fees billed per year across all fee types, including Family Membership dues and GCT. Full statement coverage begins December 2024, so 2025 is the first complete year — earlier years reflect limited records.",
                                 },
                                 {
                                     label: "Exporting",
@@ -573,10 +578,17 @@ export default function VillaFeesTab() {
                     color={C.text}
                 />
                 <KpiCard
+                    icon={Users}
+                    label="Family Membership billed"
+                    value={loading ? "…" : money(summary?.family_total)}
+                    sub="Base dues + deferred adjustment"
+                    color={C.text}
+                />
+                <KpiCard
                     icon={Home}
                     label="Combined annual billed"
                     value={loading ? "…" : money(summary?.grand_total)}
-                    sub={`${summary?.fee_lines ?? "—"} statement lines`}
+                    sub="Maintenance + Capital Exp. + Family Membership"
                     color={C.rust}
                 />
                 <KpiCard
@@ -640,9 +652,16 @@ export default function VillaFeesTab() {
                     </div>
                 </div>
 
-                <div style={{ overflowX: "auto" }}>
+                <div style={{ overflowX: "auto", maxHeight: "68vh", overflowY: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                        <thead>
+                        <thead
+                            style={{
+                                position: "sticky",
+                                top: 0,
+                                zIndex: 5,
+                                background: "var(--dashboard-card)",
+                            }}
+                        >
                             <tr>
                                 <th style={{ width: 34 }} />
                                 {HEADERS.map(([key, label]) => (
@@ -774,6 +793,7 @@ function FragmentRow({ row, isOpen, detail, onToggle }) {
                 </td>
                 <td style={cellNum}>{money(row.maintenance_annual)}</td>
                 <td style={cellNum}>{money(row.capex_annual)}</td>
+                <td style={cellNum}>{money(row.family_annual)}</td>
                 <td style={{ ...cellNum, color: C.rust, fontWeight: 800 }}>
                     {money(row.total_annual)}
                 </td>
@@ -781,7 +801,7 @@ function FragmentRow({ row, isOpen, detail, onToggle }) {
             {isOpen && (
                 <tr>
                     <td
-                        colSpan={7}
+                        colSpan={8}
                         style={{
                             padding: "0 14px 14px 46px",
                             background: C.panelAlt,
