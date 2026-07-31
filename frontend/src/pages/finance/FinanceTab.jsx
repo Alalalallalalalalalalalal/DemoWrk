@@ -18,8 +18,8 @@ import CategoryCompBreakdown from "./CategoryCompBreakdown";
 import { FinancePeriodFilter, periodToParams, DEFAULT_PERIOD } from "./FinanceShared";
 
 const C = {
-  text: "var(--dashboard-abyssal)",
-  muted: "var(--dashboard-muted)",
+  text:   "var(--dashboard-abyssal)",
+  muted:  "var(--dashboard-muted)",
   border: "var(--dashboard-border)",
   accent: "var(--dashboard-deep-blue)",
 };
@@ -90,7 +90,7 @@ function Skeleton({ height = 120 }) {
 // ══════════════════════════════════════════════════════════════════
 export default function FinanceTab() {
   // ── period filter (year / month) - drives every fetch below ─────
-  const [period, setPeriod] = useState(DEFAULT_PERIOD);
+const [period, setPeriod] = useState(DEFAULT_PERIOD);
 
   // Placeholder year range - there's no "available years" endpoint yet,
   // so this just offers the current year back 6 years. Swap this out for
@@ -102,10 +102,10 @@ export default function FinanceTab() {
   }, []);
 
   // ── data states ────────────────────────────────────────────────
-  const [overview, setOverview] = useState(null);
-  const [sourceBdown, setSourceBdown] = useState([]);
-  const [memberGuest, setMemberGuest] = useState([]);
-  const [villaRevenue, setVillaRevenue] = useState([]);
+  const [overview,       setOverview]       = useState(null);
+  const [sourceBdown,    setSourceBdown]    = useState([]);
+  const [memberGuest,    setMemberGuest]    = useState([]);
+  const [villaRevenue,   setVillaRevenue]   = useState([]);
   const [amenityRevenue, setAmenityRevenue] = useState([]);
   const [categoryBreakdown, setCategoryBreakdown] = useState([]);
   const [villaNet, setVillaNet] = useState(null);
@@ -127,16 +127,16 @@ export default function FinanceTab() {
   // there the user can pivot ("Browse by…") into further dimensions
   // without losing what's already active.
   const [drawer, setDrawer] = useState({
-    open: false,
-    drillType: null,
+    open:       false,
+    drillType:  null,
     drillValue: null,
-    filters: null,
-    midItems: null,
+    filters:    null,
+    midItems:   null,
   });
 
   const setLoad = (key, val) =>
     setLoadingMap((prev) => ({ ...prev, [key]: val }));
-  const setErr = (key, msg) =>
+  const setErr  = (key, msg) =>
     setErrorMap((prev) => ({ ...prev, [key]: msg }));
 
   // ── fetch all sections in parallel, re-run whenever period changes ──
@@ -210,24 +210,24 @@ export default function FinanceTab() {
     if (!overview) return [];
     return [
       {
-        label: "Villas Revenue",
-        sub: "Gross villa rental revenue before taxes and other deductions - click to drill into individual charges",
-        revenue: overview.villasRevenue,
-        drillType: "category",
+        label:      "Villas Revenue",
+        sub:        "Gross villa rental revenue before taxes and other deductions - click to drill into individual charges",
+        revenue:    overview.villasRevenue,
+        drillType:  "category",
         drillValue: "Villa",
       },
       {
-        label: "Amenities Revenue",
-        sub: "Spa, golf, F&B, tennis, boutique, and other amenity charges - click to see folio lines",
-        revenue: overview.amenitiesRevenue,
-        drillType: "section",
+        label:      "Amenities Revenue",
+        sub:        "Spa, golf, F&B, tennis, boutique, and other amenity charges - click to see folio lines",
+        revenue:    overview.amenitiesRevenue,
+        drillType:  "section",
         drillValue: "Amenities",
       },
       {
-        label: "Services Revenue",
-        sub: "Commissary, adjustments, and other service lines - click to inspect underlying records",
-        revenue: overview.servicesRevenue,
-        drillType: "section",
+        label:      "Services Revenue",
+        sub:        "Commissary, adjustments, and other service lines - click to inspect underlying records",
+        revenue:    overview.servicesRevenue,
+        drillType:  "section",
         drillValue: "Services",
       },
     ];
@@ -256,8 +256,15 @@ export default function FinanceTab() {
   }
 
   // Handle villa table row click - go straight to folio records
-  function handleVillaRowClick({ drillType, drillValue }) {
-    openDrawer({ drillType, drillValue });
+  // Villa Revenue table rows always drill into rate_details
+  // reservations now (see /finance/villa-reservations), NOT the
+  // general folios drilldown every other card/table uses.
+  // VillaRevenueTable sends drillType: "villa" (a generic legacy
+  // value) - remapped to "villaReservations" here so
+  // RevenueBreakdownDrawer's init effect takes the rate_details
+  // branch instead of falling through to loadRecords()/folios.
+  function handleVillaRowClick({ drillValue }) {
+    openDrawer({ drillType: "villaReservations", drillValue });
   }
 
   return (
@@ -280,7 +287,7 @@ export default function FinanceTab() {
 
       {/* ── 1.5 Category Comp Breakdown ──────────────────────────────── */}
       <SectionLabel>Collected .vs. Forgone Revenue</SectionLabel>
-
+      
       {loadingMap.category ? (
         <Skeleton height={360} />
       ) : errorMap.category ? (

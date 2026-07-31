@@ -648,6 +648,217 @@ function FolioTable({ rows }) {
 }
 
 
+// ── Reservation-level drill-in for ONE villa — rate_details-sourced,
+// NOT a folio line-item list. Parallel to FolioTable but different
+// grain/fields: one row per reservation (check-in/out, total_rental,
+// guest, room), not one row per billing charge. Used only when
+// stepData.kind === "reservations" (see the villaReservations
+// drillType branch below) — never mixed with FolioTable's rows, since
+// the shapes don't match.
+function ReservationTable({ rows }) {
+  const [search,      setSearch]      = useState("");
+  const [yearFilter,  setYearFilter]  = useState("All");
+  const [expandedRow, setExpandedRow] = useState(null);
+
+  const years = useMemo(() => {
+    const ys = Array.from(
+      new Set(rows.map((r) => r.checkInDate?.slice(0, 4)).filter(Boolean))
+    ).sort().reverse();
+    return ["All", ...ys];
+  }, [rows]);
+
+  const filtered = useMemo(() => {
+    return rows.filter((r) => {
+      if (yearFilter !== "All" && !r.checkInDate?.startsWith(yearFilter)) return false;
+      if (search) {
+        const q = search.toLowerCase();
+        return [r.guestName, r.memberNumber, r.confCode, r.reservationId, r.roomNumber, r.source]
+          .some((v) => v && String(v).toLowerCase().includes(q));
+      }
+      return true;
+    });
+  }, [rows, yearFilter, search]);
+
+  const thStyle = {
+    padding: "9px 12px", background: C.panelAlt, color: C.soft,
+    fontWeight: 700, fontSize: 10, textTransform: "uppercase",
+    letterSpacing: "0.07em", borderBottom: `1px solid ${C.border}`,
+    whiteSpace: "nowrap", position: "sticky", top: 0, zIndex: 2,
+    textAlign: "left", fontFamily: "sans-serif",
+  };
+
+  const tdStyle = {
+    padding: "9px 12px", borderBottom: `1px solid var(--dashboard-row-border)`,
+    color: C.text, fontSize: 12, verticalAlign: "top", fontFamily: "sans-serif",
+  };
+
+  const selectStyle = {
+    padding: "6px 9px", border: `1px solid ${C.border}`, borderRadius: 7,
+    fontSize: 12, background: C.bg, color: C.text, outline: "none",
+    fontFamily: "sans-serif", cursor: "pointer",
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.text, fontFamily: "sans-serif" }}>
+          Reservations
+        </span>
+        <InfoTip
+          title="Villa Reservations"
+          description="Individual paid, posted reservations for this villa, sourced from rate_details (the same table and dedup logic behind the Villa Revenue total) - not folio billing lines. Each row is one reservation, not one charge."
+          tips={[
+            "Click a row to reveal the member's email, phone, and home location on file",
+            "Search by guest name, member number, confirmation code, room, or source to find a specific reservation",
+            "Year filter narrows to a specific check-in year",
+          ]}
+        />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search guest, member, conf code, room…"
+          style={{
+            flex: "1 1 200px", minWidth: 180,
+            padding: "7px 11px", border: `1px solid ${C.border}`, borderRadius: 8,
+            fontSize: 12, background: C.bg, color: C.text, outline: "none",
+            fontFamily: "sans-serif",
+          }}
+        />
+        <select value={yearFilter} onChange={(e) => setYearFilter(e.target.value)} style={selectStyle}>
+          {years.map((y) => (
+            <option key={y} value={y}>{y === "All" ? "All Years" : y}</option>
+          ))}
+        </select>
+        {(yearFilter !== "All" || search) && (
+          <button
+            onClick={() => { setSearch(""); setYearFilter("All"); }}
+            style={{ ...selectStyle, color: C.muted }}
+          >
+            Clear
+          </button>
+        )}
+        <span style={{ fontSize: 11, color: C.muted, fontFamily: "sans-serif", marginLeft: "auto" }}>
+          {filtered.length} reservations
+        </span>
+      </div>
+
+      <div style={{ overflowX: "auto", borderRadius: 10, border: `1px solid ${C.border}` }}>
+        <div style={{ maxHeight: 420, overflowY: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 760 }}>
+            <thead>
+              <tr>
+                <th style={thStyle}>Check-in → Check-out</th>
+                <th style={thStyle}>Nights</th>
+                <th style={thStyle}>Guest / Member</th>
+                <th style={thStyle}>Conf Code</th>
+                <th style={thStyle}>Source</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Total Rental</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ ...tdStyle, textAlign: "center", color: C.muted, padding: 32 }}>
+                    No reservations found
+                  </td>
+                </tr>
+              ) : (
+                filtered.map((r, i) => (
+                  <>
+                    <tr
+                      key={r.reservationId ?? i}
+                      onClick={() => setExpandedRow(expandedRow === i ? null : i)}
+                      style={{
+                        cursor: "pointer",
+                        background: i % 2 === 0 ? "transparent" : C.panel,
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = C.panelAlt)}
+                      onMouseLeave={(e) =>
+                        (e.currentTarget.style.background =
+                          expandedRow === i ? C.panelAlt : i % 2 === 0 ? "transparent" : C.panel)
+                      }
+                    >
+                      <td style={{ ...tdStyle, whiteSpace: "nowrap", color: C.muted }}>
+                        {r.checkInDate ?? "-"} → {r.checkOutDate ?? "-"}
+                      </td>
+                      <td style={tdStyle}>{r.nights ?? "-"}</td>
+                      <td style={tdStyle}>
+                        <div style={{ fontWeight: 600 }}>{r.guestName ?? "-"}</div>
+                        <div style={{ fontSize: 11, color: C.muted }}>
+                          {r.memberNumber ? `#${r.memberNumber}` : "Guest"}
+                        </div>
+                      </td>
+                      <td style={{ ...tdStyle, color: C.accent }}>{r.confCode ?? "-"}</td>
+                      <td style={{ ...tdStyle, color: C.soft }}>{r.source ?? "-"}</td>
+                      <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: C.accent }}>
+                        {money(r.totalRental)}
+                      </td>
+                    </tr>
+
+                    {expandedRow === i && (
+                      <tr key={`${r.reservationId ?? i}-contact`}>
+                        <td
+                          colSpan={6}
+                          style={{
+                            padding: "8px 14px 14px 14px",
+                            background: C.panelAlt,
+                            borderBottom: `1px solid ${C.border}`,
+                          }}
+                        >
+                          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 12 }}>
+                            {r.roomNumber && (
+                              <span style={{ color: C.soft }}>Room {r.roomNumber}</span>
+                            )}
+                            {r.reservationStatus && (
+                              <span style={{ color: C.soft }}>{r.reservationStatus}</span>
+                            )}
+                            {r.memberEmail && (
+                              <span style={{ display: "flex", alignItems: "center", gap: 5, color: C.soft }}>
+                                <Mail size={12} color={C.muted} />
+                                <a
+                                  href={`mailto:${r.memberEmail}`}
+                                  style={{ color: C.accent, textDecoration: "underline" }}
+                                >
+                                  {r.memberEmail}
+                                </a>
+                              </span>
+                            )}
+                            {r.memberPhone && (
+                              <span style={{ display: "flex", alignItems: "center", gap: 5, color: C.soft }}>
+                                <Phone size={12} color={C.muted} />
+                                {r.memberPhone}
+                              </span>
+                            )}
+                            {(r.memberCity || r.memberCountry) && (
+                              <span style={{ display: "flex", alignItems: "center", gap: 5, color: C.soft }}>
+                                <MapPin size={12} color={C.muted} />
+                                {[r.memberCity, r.memberCountry].filter(Boolean).join(", ")}
+                              </span>
+                            )}
+                            {!r.memberEmail && !r.memberPhone && !r.memberCity && !r.memberCountry && (
+                              <span style={{ color: C.muted, fontStyle: "italic" }}>
+                                No contact details on file for this member
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 // ── Mid-level breakdown list - used both for FinanceTab-supplied
 // static mid items (e.g. Total Revenue's Villas/Amenities/Services
 // split) and for dynamically-fetched "browse by…" breakdowns ──────
@@ -807,6 +1018,26 @@ export default function RevenueBreakdownDrawer({
     }
   }
 
+  // rate_details-sourced, NOT folios - see finance_backend.py's
+  // /villa-reservations. Used only for the villaReservations drillType
+  // (a direct click on a Villa Revenue table row), never for the
+  // general filter-driven drill path loadRecords() handles.
+  async function loadVillaReservations(villaName) {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await financeApi.villaReservations({
+        villa: villaName,
+        ...periodToParams(period),
+      });
+      setStepData({ kind: "reservations", rows: data, groupBy: null });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   // The backend now returns a paginated envelope
   // { items, page, pageSize, totalItems, totalPages } instead of a
   // bare array - see financeApi.js. `page` defaults to 1 (first load
@@ -848,10 +1079,26 @@ export default function RevenueBreakdownDrawer({
   useEffect(() => {
     if (!open) return;
 
-    const rootFilters = { ...legacyDrillToPatch(drillType, drillValue), ...(initialFilters || {}) };
     const rootLabel = drillValue ?? "Breakdown";
-
     setError(null);
+
+    // villaReservations is a distinct drillType from the generic
+    // "villa" filter dimension (used elsewhere for folios-based
+    // pivoting/filtering). It's set only when a Villa Revenue table
+    // row is clicked directly - see FinanceTab.jsx's
+    // handleVillaRowClick. No filters object, no legacyDrillToPatch:
+    // this is always a single villa, rate_details-sourced, no pivot
+    // dimensions apply (source/customer/amenity don't exist on
+    // rate_details).
+    if (drillType === "villaReservations") {
+      const rootStep = { label: rootLabel, filters: { villa: drillValue }, mode: "reservations" };
+      setTrail([rootStep]);
+      loadVillaReservations(drillValue);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      return;
+    }
+
+    const rootFilters = { ...legacyDrillToPatch(drillType, drillValue), ...(initialFilters || {}) };
 
     if (midItems && midItems.length > 0) {
       const rootStep = { label: rootLabel, filters: rootFilters, mode: "staticMid", items: midItems };
@@ -907,6 +1154,8 @@ export default function RevenueBreakdownDrawer({
       setStepData({ kind: "staticMid", rows: step.items, groupBy: null });
     } else if (step.mode === "breakdown") {
       loadBreakdown(step.groupBy, step.filters, step.page || 1);
+    } else if (step.mode === "reservations") {
+      loadVillaReservations(step.filters.villa);
     } else {
       loadRecords(step.filters);
     }
@@ -941,6 +1190,7 @@ export default function RevenueBreakdownDrawer({
   if (!open) return null;
 
   const showFolios = stepData.kind === "records";
+  const showReservations = stepData.kind === "reservations";
   const exportRowsData = stepData.rows;
 
   return (
@@ -1005,9 +1255,9 @@ export default function RevenueBreakdownDrawer({
 
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               {/* Record count - no total sum to avoid confusing negatives */}
-              {showFolios && (
+              {(showFolios || showReservations) && (
                 <span style={{ fontSize: 12, color: C.muted, fontFamily: "sans-serif" }}>
-                  {exportRowsData.length} records
+                  {exportRowsData.length} {showReservations ? "reservations" : "records"}
                 </span>
               )}
               <ExportMenu
@@ -1089,6 +1339,13 @@ export default function RevenueBreakdownDrawer({
               <PivotBar filters={currentFilters} onPivot={pivotBreakdown} />
               <FolioTable rows={stepData.rows} />
             </>
+          )}
+
+          {/* rate_details-sourced, not folios - no PivotBar here: none
+              of source/customer/amenity exist as rate_details columns,
+              so there's nothing meaningful to pivot by from this view. */}
+          {!loading && !error && showReservations && (
+            <ReservationTable rows={stepData.rows} />
           )}
         </div>
       </aside>

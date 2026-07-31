@@ -75,6 +75,14 @@ export const financeApi = {
   villaRevenue: (params = {}) =>
     fetchData(withQuery("/finance/villa-revenue", params)),
 
+  // ── Reservation-level drill-in for ONE villa (rate_details-sourced,
+  // not folios) — powers the drawer when a villa row is clicked
+  // directly from the Villa Revenue table. `villa` is required.
+  villaReservations: ({ villa, ...periodParams }) =>
+    fetchData(
+      withQuery("/finance/villa-reservations", { villa, ...periodParams }),
+    ),
+
   amenityRevenue: (params = {}) =>
     fetchData(withQuery("/finance/amenity-revenue", params)),
 
@@ -82,7 +90,9 @@ export const financeApi = {
     fetchData(withQuery("/finance/category-comp-breakdown", params)),
 
   villaStatementTotals: (params = {}) =>
-    fetchData(`/finance/villa-statement-totals${params.years ? `?years=${params.years}` : ""}`),
+    fetchData(
+      `/finance/villa-statement-totals${params.years ? `?years=${params.years}` : ""}`,
+    ),
 
   // ── Flat folio-record drilldown ──────────────────────────────────
   // Two call styles supported:

@@ -162,7 +162,7 @@ export default function FinanceOverview({ data, onCardClick }) {
     {
       label: "Villas Revenue",
       value: money(data.villasRevenue),
-      tooltip: "Gross villa rental revenue before taxes and other deductions, calculated from paid reservations.",
+      tooltip: "Net villa rental revenue after the statement-based tax/owner deduction treatment reflected in the spend breakdown.",
       icon:  Home,
       accent: "#2D8A5F",
       // transaction_category = 'Villa' - same /drilldown "category"

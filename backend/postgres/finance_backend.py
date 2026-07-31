@@ -600,6 +600,26 @@ def _statement_period_filter_sql(alias: str = "sd") -> str:
     """
 
 
+def _villa_statement_net_revenue(params: dict) -> float:
+    """
+    Net villa revenue from statement_details, matching the spend-breakdown
+    definition used for the Villa collected card.
+    """
+    q_params = dict(params)
+    sql = text(f"""
+        SELECT
+            COALESCE(ROUND(SUM(sd.amount) * -1, 2), 0) AS net_revenue
+        FROM statement_details sd
+        WHERE sd.description ILIKE '%Villa Income%'
+        {_statement_period_filter_sql(alias="sd")}
+    """)
+
+    with engine.connect() as conn:
+        row = conn.execute(sql, q_params).mappings().fetchone()
+
+    return float(row["net_revenue"] or 0) if row else 0.0
+
+
 # Shared FastAPI Query declarations for the 5 date-filter params, reused
 # (by re-declaration, since FastAPI needs them per-route-signature) on
 # every endpoint below. Centralized here only as a comment-level contract:
@@ -821,25 +841,13 @@ def finance_overview(
     with engine.connect() as conn:
         total_transactions = int(conn.execute(count_sql, params).scalar() or 0)
 
-    # ── Villas (rate_details, reservation-deduped gross revenue) ─────
-    # SOURCE OF TRUTH CHANGE: was overview_villa_bookings.overview_villa_revenue,
-    # now rate_details via _villa_gross_revenue_cte_sql() — see that
-    # function's docstring for why the dedup is required and what it
-    # excludes/assumes.
-    villa_sql = text(f"""
-        {_villa_gross_revenue_cte_sql()}
-        SELECT
-            COALESCE(SUM(vr.total_rental), 0) AS revenue,
-            COUNT(*)                          AS bookings
-        FROM villa_reservations vr
-        WHERE 1=1
-        {_villa_revenue_date_filter_sql(alias="vr")}
-    """)
-
-    with engine.connect() as conn:
-        villa_row = conn.execute(villa_sql, params).fetchone()
-
-    villas_revenue = float(villa_row[0] or 0) if villa_row else 0.0
+    # ── Villas (statement-based net revenue, matching the spend breakdown) ─────
+    # The Villa card in the spend breakdown is already sourced from
+    # statement_details and reflects the net figure after the tax/owner
+    # deduction treatment. Use that same definition here so the Revenue
+    # Overview card matches the spend breakdown rather than showing the
+    # pre-tax gross booking total.
+    villas_revenue = _villa_statement_net_revenue(params)
 
     total_revenue = villas_revenue + amenities_revenue + services_revenue
 
@@ -1393,6 +1401,117 @@ def finance_villa_revenue(
             "avgStay":        float(r["avg_stay"] or 0),
             "memberBookings": int(r["member_bookings"] or 0),
             "guestBookings":  int(r["guest_bookings"] or 0),
+        }
+        for r in rows
+    ]
+
+
+# ══════════════════════════════════════════════════════════════════
+# 4b. VILLA RESERVATIONS — record-level drill-in for a single villa
+#
+# NEW endpoint. Was missing: clicking a villa row in /villa-revenue's
+# table opened the drawer's record list via /drilldown, which is
+# folios-sourced — a completely different table from the one that
+# produced the number being drilled into. This endpoint gives that
+# drill-in a source that actually agrees with /villa-revenue: same
+# dedup, same filters, same check-in-month date bucketing, just at
+# reservation grain instead of aggregated.
+#
+# Does NOT reuse _villa_gross_revenue_cte_sql() as-is — that CTE only
+# selects the columns the aggregate calculations need (villa_name,
+# member_number, total_rental, check_in_date, check_out_date). This
+# endpoint needs the fuller reservation record (guest_name, room_number,
+# source, rate_name, reservation_status, conf_code/reservation_id), so
+# it has its own dedup query rather than widening the shared CTE's
+# column set for every other caller.
+#
+# `villa` is REQUIRED — this endpoint always scopes to exactly one
+# villa (it's a drill-in, not a listing).
+# ══════════════════════════════════════════════════════════════════
+@router.get("/villa-reservations")
+def finance_villa_reservations(
+    villa:      str            = Query(..., description="Villa name — required, always scoped to one villa"),
+    year:       Optional[int]  = Query(None),
+    month:      Optional[int]  = Query(None),
+    date:       Optional[date] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date:   Optional[date] = Query(None),
+):
+    params = filter_params(
+        year=year, month=month, date=date,
+        start_date=start_date, end_date=end_date,
+    )
+    params["flt_villa"] = villa
+
+    sql = text(f"""
+        WITH rd_keyed AS (
+            SELECT
+                rd.reservation_id, rd.conf_code, rd.villa_name, rd.member_number,
+                rd.guest_name, rd.room_number, rd.source, rd.rate_name,
+                rd.reservation_status, rd.total_rental, rd.check_in_date,
+                rd.check_out_date, rd.rate_date,
+                COALESCE(NULLIF(TRIM(rd.reservation_id), ''), NULLIF(TRIM(rd.conf_code), '')) AS res_key
+            FROM rate_details rd
+            WHERE rd.payment_type = 'Paid'
+              AND rd.status = 'Posted'
+              AND rd.villa_name = :flt_villa
+        ),
+        villa_reservations AS (
+            SELECT DISTINCT ON (res_key)
+                res_key, reservation_id, conf_code, villa_name, member_number,
+                guest_name, room_number, source, rate_name, reservation_status,
+                total_rental, check_in_date, check_out_date
+            FROM rd_keyed
+            WHERE res_key IS NOT NULL
+            ORDER BY res_key, rate_date
+        )
+        SELECT
+            vr.res_key, vr.reservation_id, vr.conf_code, vr.villa_name,
+            vr.member_number, vr.guest_name, vr.room_number, vr.source,
+            vr.rate_name, vr.reservation_status, vr.total_rental,
+            vr.check_in_date, vr.check_out_date,
+            (vr.check_out_date - vr.check_in_date) AS nights,
+            m.email          AS member_email,
+            mp.phone_number  AS member_phone,
+            ma.city          AS member_city,
+            ma.country       AS member_country
+        FROM villa_reservations vr
+        LEFT JOIN members m ON m.member_number = vr.member_number
+        LEFT JOIN LATERAL (
+            SELECT phone_number
+            FROM member_phones
+            WHERE member_number = vr.member_number
+            ORDER BY id
+            LIMIT 1
+        ) mp ON true
+        LEFT JOIN member_addresses ma ON ma.member_number = vr.member_number
+        WHERE 1=1
+        {_villa_revenue_date_filter_sql(alias="vr")}
+        ORDER BY vr.check_in_date DESC NULLS LAST
+    """)
+
+    with engine.connect() as conn:
+        rows = _rows_to_dicts(conn.execute(sql, params))
+
+    return [
+        {
+            "reservationId":     r["reservation_id"] or r["conf_code"],
+            "confCode":          r["conf_code"],
+            "villaName":         r["villa_name"],
+            "guestName":         r["guest_name"],
+            "memberNumber":      r["member_number"],
+            "roomNumber":        r["room_number"],
+            "source":            r["source"],
+            "rateName":          r["rate_name"],
+            "reservationStatus": r["reservation_status"],
+            "totalRental":       float(r["total_rental"] or 0),
+            "checkInDate":       str(r["check_in_date"])  if r["check_in_date"]  else None,
+            "checkOutDate":      str(r["check_out_date"]) if r["check_out_date"] else None,
+            "nights":            int(r["nights"]) if r["nights"] is not None else None,
+            "memberEmail":       r["member_email"],
+            "memberPhone":       r["member_phone"],
+            "memberCity":        r["member_city"],
+            "memberCountry":     r["member_country"],
         }
         for r in rows
     ]
