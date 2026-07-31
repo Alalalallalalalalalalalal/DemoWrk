@@ -1168,10 +1168,9 @@ def finance_villa_statement_totals(
         sql = text("""
             SELECT
                 EXTRACT(YEAR FROM TO_DATE(sd.statement_period, 'Month, YYYY'))::int AS year,
-                ROUND(SUM(ABS(sd.amount)), 2)        AS net_revenue,
-                ROUND(SUM(ABS(sd.amount)) / 0.85, 2) AS statement_gross_revenue
-            FROM villa_owner_map vom
-            JOIN statement_details sd ON sd.member_number = vom.member_number
+                ROUND(SUM(sd.amount) * -1, 2)        AS net_revenue,
+                ROUND(SUM(sd.amount) * -1 / 0.85, 2) AS statement_gross_revenue
+            FROM statement_details sd
             WHERE sd.description ILIKE '%Villa Income%'
               AND EXTRACT(YEAR FROM TO_DATE(sd.statement_period, 'Month, YYYY')) = ANY(:years)
             GROUP BY 1
@@ -1191,10 +1190,9 @@ def finance_villa_statement_totals(
 
     sql = text("""
         SELECT
-            ROUND(SUM(ABS(sd.amount)), 2)        AS net_revenue,
-            ROUND(SUM(ABS(sd.amount)) / 0.85, 2) AS statement_gross_revenue
-        FROM villa_owner_map vom
-        JOIN statement_details sd ON sd.member_number = vom.member_number
+            ROUND(SUM(sd.amount) * -1, 2)        AS net_revenue,
+            ROUND(SUM(sd.amount) * -1 / 0.85, 2) AS statement_gross_revenue
+        FROM statement_details sd
         WHERE sd.description ILIKE '%Villa Income%'
     """)
     with engine.connect() as conn:

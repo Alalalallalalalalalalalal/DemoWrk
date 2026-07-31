@@ -66,33 +66,23 @@ def summary_date_filter_sql(alias: str = "vi") -> str:
     """
 
 
-def villa_income_cte(alias: str = "svis") -> str:
+def villa_income_cte(alias: str = "sd") -> str:
     """
-    Normalize statement_villa_income_summary.
-
-    The source contains only income_month and owner_payout_total. income_month
-    may be stored as a date/timestamp or as YYYY-MM text, so it is normalized
-    to the first day of its month for filtering and grouping.
+    Monthly Villa Income derived directly from statement_details — identical
+    definition to the Overview page. Payouts are stored negative, so the sign
+    is flipped; reversal lines are INCLUDED so reversed payouts net out.
     """
-    month_text = f"NULLIF(TRIM(to_jsonb({alias}) ->> 'income_month'), '')"
     return f"""
         villa_income_rows AS (
             SELECT
-                CASE
-                    WHEN {month_text} ~ '^\\d{{4}}-\\d{{2}}$'
-                        THEN ({month_text} || '-01')::date
-                    WHEN {month_text} ~ '^\\d{{4}}-\\d{{2}}-\\d{{2}}'
-                        THEN LEFT({month_text}, 10)::date
-                    ELSE NULL
-                END AS income_month_date,
-                COALESCE(
-                    NULLIF(to_jsonb({alias}) ->> 'owner_payout_total', '')::numeric,
-                    0
-                ) AS villa_income
-            FROM statement_villa_income_summary {alias}
+                DATE_TRUNC('month', {alias}.transaction_date)::date AS income_month_date,
+                SUM(COALESCE({alias}.amount, 0)) * -1               AS villa_income
+            FROM statement_details {alias}
+            WHERE {alias}.description ILIKE '%Villa Income%'
+              AND {alias}.transaction_date IS NOT NULL
+            GROUP BY 1
         )
     """
-
 
 def statement_reconciliation_cte(alias: str = "sd") -> str:
     """Gross statement-side check; never used as the official Villa Income total."""

@@ -18,8 +18,8 @@ import CategoryCompBreakdown from "./CategoryCompBreakdown";
 import { FinancePeriodFilter, periodToParams, DEFAULT_PERIOD } from "./FinanceShared";
 
 const C = {
-  text:   "var(--dashboard-abyssal)",
-  muted:  "var(--dashboard-muted)",
+  text: "var(--dashboard-abyssal)",
+  muted: "var(--dashboard-muted)",
   border: "var(--dashboard-border)",
   accent: "var(--dashboard-deep-blue)",
 };
@@ -90,7 +90,7 @@ function Skeleton({ height = 120 }) {
 // ══════════════════════════════════════════════════════════════════
 export default function FinanceTab() {
   // ── period filter (year / month) - drives every fetch below ─────
-const [period, setPeriod] = useState(DEFAULT_PERIOD);
+  const [period, setPeriod] = useState(DEFAULT_PERIOD);
 
   // Placeholder year range - there's no "available years" endpoint yet,
   // so this just offers the current year back 6 years. Swap this out for
@@ -102,12 +102,14 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
   }, []);
 
   // ── data states ────────────────────────────────────────────────
-  const [overview,       setOverview]       = useState(null);
-  const [sourceBdown,    setSourceBdown]    = useState([]);
-  const [memberGuest,    setMemberGuest]    = useState([]);
-  const [villaRevenue,   setVillaRevenue]   = useState([]);
+  const [overview, setOverview] = useState(null);
+  const [sourceBdown, setSourceBdown] = useState([]);
+  const [memberGuest, setMemberGuest] = useState([]);
+  const [villaRevenue, setVillaRevenue] = useState([]);
   const [amenityRevenue, setAmenityRevenue] = useState([]);
   const [categoryBreakdown, setCategoryBreakdown] = useState([]);
+  const [villaNet, setVillaNet] = useState(null);
+  const [villaTotals, setVillaTotals] = useState(null);
 
   // ── loading / error per section ────────────────────────────────
   const [loadingMap, setLoadingMap] = useState({
@@ -125,16 +127,16 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
   // there the user can pivot ("Browse by…") into further dimensions
   // without losing what's already active.
   const [drawer, setDrawer] = useState({
-    open:       false,
-    drillType:  null,
+    open: false,
+    drillType: null,
     drillValue: null,
-    filters:    null,
-    midItems:   null,
+    filters: null,
+    midItems: null,
   });
 
   const setLoad = (key, val) =>
     setLoadingMap((prev) => ({ ...prev, [key]: val }));
-  const setErr  = (key, msg) =>
+  const setErr = (key, msg) =>
     setErrorMap((prev) => ({ ...prev, [key]: msg }));
 
   // ── fetch all sections in parallel, re-run whenever period changes ──
@@ -180,6 +182,15 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
       .then(setAmenityRevenue)
       .catch((e) => setErr("amenity", e.message))
       .finally(() => setLoad("amenity", false));
+
+    // Villa net revenue (for CategoryCompBreakdown card)
+    // period.year can be the string "All" — only send ?years= for a real 4-digit year
+    const yearParam = /^\d{4}$/.test(String(period.year))
+      ? { years: String(period.year) }
+      : {};
+    financeApi.villaStatementTotals(yearParam)
+      .then((r) => setVillaTotals(Array.isArray(r) ? (r[0] ?? null) : r))
+      .catch((e) => console.error("villaStatementTotals failed:", e));
   }, [period]);
 
   // ── drawer helpers ─────────────────────────────────────────────
@@ -199,24 +210,24 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
     if (!overview) return [];
     return [
       {
-        label:      "Villas Revenue",
-        sub:        "Gross villa rental revenue before taxes and other deductions - click to drill into individual charges",
-        revenue:    overview.villasRevenue,
-        drillType:  "category",
+        label: "Villas Revenue",
+        sub: "Gross villa rental revenue before taxes and other deductions - click to drill into individual charges",
+        revenue: overview.villasRevenue,
+        drillType: "category",
         drillValue: "Villa",
       },
       {
-        label:      "Amenities Revenue",
-        sub:        "Spa, golf, F&B, tennis, boutique, and other amenity charges - click to see folio lines",
-        revenue:    overview.amenitiesRevenue,
-        drillType:  "section",
+        label: "Amenities Revenue",
+        sub: "Spa, golf, F&B, tennis, boutique, and other amenity charges - click to see folio lines",
+        revenue: overview.amenitiesRevenue,
+        drillType: "section",
         drillValue: "Amenities",
       },
       {
-        label:      "Services Revenue",
-        sub:        "Commissary, adjustments, and other service lines - click to inspect underlying records",
-        revenue:    overview.servicesRevenue,
-        drillType:  "section",
+        label: "Services Revenue",
+        sub: "Commissary, adjustments, and other service lines - click to inspect underlying records",
+        revenue: overview.servicesRevenue,
+        drillType: "section",
         drillValue: "Services",
       },
     ];
@@ -269,7 +280,7 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
 
       {/* ── 1.5 Category Comp Breakdown ──────────────────────────────── */}
       <SectionLabel>Collected .vs. Forgone Revenue</SectionLabel>
-      
+
       {loadingMap.category ? (
         <Skeleton height={360} />
       ) : errorMap.category ? (
@@ -277,6 +288,8 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
       ) : (
         <CategoryCompBreakdown
           data={categoryBreakdown}
+          villaNetRevenue={villaTotals?.netRevenue}
+          villaGrossRevenue={villaTotals?.statementGrossRevenue}
           onRowClick={({ drillType, drillValue, filters }) =>
             openDrawer({ drillType, drillValue, filters })
           }

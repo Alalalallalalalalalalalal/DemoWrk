@@ -81,6 +81,9 @@ export const financeApi = {
   categoryCompBreakdown: (params = {}) =>
     fetchData(withQuery("/finance/category-comp-breakdown", params)),
 
+  villaStatementTotals: (params = {}) =>
+    fetchData(`/finance/villa-statement-totals${params.years ? `?years=${params.years}` : ""}`),
+
   // ── Flat folio-record drilldown ──────────────────────────────────
   // Two call styles supported:
   //

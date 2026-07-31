@@ -172,18 +172,18 @@ function InfoNote({ title, children }) {
   );
 }
 
-function KpiStrip({ totals, section }) {
+function KpiStrip({ totals, section, villaNetRevenue, villaGrossRevenue }) {
   const blendedRate = pct(totals.forgoneRevenue, totals.collected + totals.forgoneRevenue);
   const collectedValue =
     section === "Villa" ? (
       <div style={{ display: "grid", gap: 3 }}>
         <div>
           <span style={{ fontFamily: "sans-serif", fontSize: 14, color: C.muted, marginRight: 6 }}>Gross:</span>
-          {money(totals.collected)}
+          {money(villaGrossRevenue)}
         </div>
         <div>
           <span style={{ fontFamily: "sans-serif", fontSize: 14, color: C.muted, marginRight: 6 }}>Net:</span>
-          {money(Number(totals.collected || 0) * 0.85)}
+          {money(villaNetRevenue)}
         </div>
       </div>
     ) : (
@@ -270,7 +270,7 @@ function CoverageNote({ missingRateCount, calculationCoverage }) {
   );
 }
 
-function CategoryCard({ row, onRowClick, section }) {
+function CategoryCard({ row, onRowClick, section, villaNetRevenue }) {
   const rate = pct(row.forgoneRevenue, row.collected + row.forgoneRevenue);
   return (
     <button
@@ -298,7 +298,7 @@ function CategoryCard({ row, onRowClick, section }) {
           <div style={{ fontSize: 17, fontWeight: 700, color: C.green, fontFamily: "sans-serif" }}>
             {row.collected === 0 && row.forgoneRevenue === 0
               ? money(row.other || row.reversed)
-              : money(section === "Villa" ? Number(row.collected || 0) * 0.85 : row.collected)}
+              : money(section === "Villa" ? villaNetRevenue : row.collected)}
           </div>
         </div>
         <div>
@@ -320,7 +320,7 @@ function CategoryCard({ row, onRowClick, section }) {
   );
 }
 
-function CategoryCards({ rows, onRowClick, section }) {
+function CategoryCards({ rows, onRowClick, section, villaNetRevenue }) {
   if (rows.length === 0) {
     return (
       <div style={{ padding: 32, textAlign: "center", color: C.muted, border: `1px solid ${C.border}`, borderRadius: 14 }}>
@@ -331,13 +331,13 @@ function CategoryCards({ rows, onRowClick, section }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
       {rows.map((row) => (
-        <CategoryCard key={row.category} row={row} onRowClick={onRowClick} section={section} />
+        <CategoryCard key={row.category} row={row} onRowClick={onRowClick} section={section} villaNetRevenue={villaNetRevenue} />
       ))}
     </div>
   );
 }
 
-export default function CategoryCompBreakdown({ data, onRowClick }) {
+export default function CategoryCompBreakdown({ data, onRowClick, villaNetRevenue, villaGrossRevenue }) {
   const [section, setSection] = useState("Villa");
   const [villaStayFilter, setVillaStayFilter] = useState("overall");
 
@@ -369,7 +369,7 @@ export default function CategoryCompBreakdown({ data, onRowClick }) {
         if (r.calculationCoverage != null) coverage = r.calculationCoverage;
       }
       else if (r.bucket === "reversed") e.reversed += Math.abs(amt);
-      else if (r.bucket === "other") e.other += Math.abs(amt); 
+      else if (r.bucket === "other") e.other += Math.abs(amt);
       e.transactions += Number(r.transactions || 0);
       e.uniqueAccounts += Number(r.uniqueAccounts || 0);
     });
@@ -431,8 +431,8 @@ export default function CategoryCompBreakdown({ data, onRowClick }) {
         <CoverageNote missingRateCount={missingRateCount} calculationCoverage={calculationCoverage} />
       )}
 
-      <KpiStrip totals={totals} section={section} />
-      <CategoryCards rows={categoryRows} onRowClick={onRowClick} section={section} />
+      <KpiStrip totals={totals} section={section} villaNetRevenue={villaNetRevenue} villaGrossRevenue={villaGrossRevenue} />
+      <CategoryCards rows={categoryRows} onRowClick={onRowClick} section={section} villaNetRevenue={villaNetRevenue} />
     </div>
   );
 }
