@@ -177,16 +177,22 @@ def booking_base_cte(alias: str = "rd") -> str:
                     ''
                   ) <> 'unposted'
 
-              -- Do not include cancelled bookings.
-              AND COALESCE(
+             -- Do not include cancelled bookings.
+                AND COALESCE(
                     LOWER(TRIM({alias}.reservation_status)),
                     ''
-                  ) NOT IN (
+                    ) NOT IN (
                     'cancelled',
                     'canceled',
                     'no-show',
                     'no show'
-              )
+                )
+
+                -- Ignore ZZ Comp Villa
+                AND COALESCE(
+                    LOWER(TRIM({alias}.villa_name)),
+                    ''
+                    ) <> 'zz comp'
 
               {date_filter_sql(alias)}
         ),
