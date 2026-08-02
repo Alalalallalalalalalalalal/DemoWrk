@@ -92,7 +92,7 @@ AMENITY_CATS = (
 # longer excluded from Forgone Revenue — explicit decision, not an
 # oversight (see chat history). Left defined, not deleted, in case
 # something outside this file still references it.
-VILLA_FORGONE_EXCLUDED = ("Villa Lolita", "Wonderland")
+VILLA_FORGONE_EXCLUDED = ("Villa Lolita", "Wonderland", "ZZ Comp")
 
 
 def _rows_to_dicts(result):
@@ -497,7 +497,7 @@ def _villa_gross_revenue_cte_sql() -> str:
                 rd.rate_date,
                 COALESCE(NULLIF(TRIM(rd.reservation_id), ''), NULLIF(TRIM(rd.conf_code), '')) AS res_key
             FROM rate_details rd
-            WHERE rd.payment_type = 'Paid'
+            WHERE rd.payment_type = 'Paid' AND rd.villa_name <> 'ZZ Comp'
               AND rd.villa_name IS NOT NULL
               AND rd.status = 'Posted'
         ),
@@ -1230,20 +1230,30 @@ def finance_source_breakdown(
         year=year, month=month, date=date,
         start_date=start_date, end_date=end_date,
     )
-    date_sql = date_filter_sql()
+    date_sql = _villa_revenue_date_filter_sql(alias="r")
 
     sql = text(f"""
-        SELECT
-            COALESCE(f.source, 'Unknown')  AS source_name,
-            MAX(bs.payment_type)           AS payment_type,
-            SUM(f.amount)                  AS revenue,
-            COUNT(*)                       AS transactions
-        FROM folios f
-        LEFT JOIN business_source bs ON bs.source_name = f.source
-        WHERE f.amount IS NOT NULL
-        {date_sql}
-        GROUP BY f.source
-        ORDER BY revenue DESC NULLS LAST
+            SELECT
+                COALESCE(r.source, 'Unknown') AS source_name,
+                MAX(r.payment_type)           AS payment_type,
+                SUM(r.total_rental)           AS revenue,
+                COUNT(*)                      AS transactions
+            FROM (
+                SELECT
+                    reservation_id,
+                    MAX(source)        AS source,
+                    MAX(payment_type)  AS payment_type,
+                    MAX(total_rental)  AS total_rental,
+                    MAX(check_in_date) AS check_in_date
+                FROM rate_details
+                WHERE status = 'Posted'
+                AND villa_name <> 'ZZ Comp'
+                GROUP BY reservation_id
+            ) r
+            WHERE 1=1
+            {date_sql}
+            GROUP BY r.source
+            ORDER BY revenue DESC NULLS LAST
     """)
 
     with engine.connect() as conn:
@@ -1407,7 +1417,8 @@ def finance_villa_revenue(
 
 
 # ══════════════════════════════════════════════════════════════════
-# 4b. VILLA RESERVATIONS — record-level drill-in for a single villa
+# 4b. VILLA RESERVATIONS — record-level drill-in, one villa OR the
+#     whole portfolio
 #
 # NEW endpoint. Was missing: clicking a villa row in /villa-revenue's
 # table opened the drawer's record list via /drilldown, which is
@@ -1425,12 +1436,18 @@ def finance_villa_revenue(
 # it has its own dedup query rather than widening the shared CTE's
 # column set for every other caller.
 #
-# `villa` is REQUIRED — this endpoint always scopes to exactly one
-# villa (it's a drill-in, not a listing).
+# `villa` is now OPTIONAL — every Villa-scoped click on the dashboard
+# (the top-level Villas Revenue card, the Total -> Villas Revenue mid-
+# item, category-comp-breakdown's Villa card, a specific villa row
+# from /villa-revenue OR from a "Browse by Villa" breakdown) now routes
+# here for consistency. Omitted = every villa, portfolio-wide; set =
+# scoped to that one villa. See RevenueBreakdownDrawer.jsx's
+# isVillaScopedFilters()/loadRecords() for how the frontend decides
+# which case it's in.
 # ══════════════════════════════════════════════════════════════════
 @router.get("/villa-reservations")
 def finance_villa_reservations(
-    villa:      str            = Query(..., description="Villa name — required, always scoped to one villa"),
+    villa:      Optional[str] = Query(None, description="Villa name — omit for every villa (portfolio-wide)"),
     year:       Optional[int]  = Query(None),
     month:      Optional[int]  = Query(None),
     date:       Optional[date] = Query(None),
@@ -1441,7 +1458,11 @@ def finance_villa_reservations(
         year=year, month=month, date=date,
         start_date=start_date, end_date=end_date,
     )
-    params["flt_villa"] = villa
+
+    villa_filter = ""
+    if villa:
+        villa_filter = "AND rd.villa_name = :flt_villa"
+        params["flt_villa"] = villa
 
     sql = text(f"""
         WITH rd_keyed AS (
@@ -1452,9 +1473,10 @@ def finance_villa_reservations(
                 rd.check_out_date, rd.rate_date,
                 COALESCE(NULLIF(TRIM(rd.reservation_id), ''), NULLIF(TRIM(rd.conf_code), '')) AS res_key
             FROM rate_details rd
-            WHERE rd.payment_type = 'Paid'
+            WHERE rd.payment_type = 'Paid' AND rd.villa_name <> 'ZZ Comp'
               AND rd.status = 'Posted'
-              AND rd.villa_name = :flt_villa
+              AND rd.villa_name IS NOT NULL
+            {villa_filter}
         ),
         villa_reservations AS (
             SELECT DISTINCT ON (res_key)
@@ -1713,7 +1735,7 @@ def finance_drilldown(
             LIMIT 1
         ) mp ON true
         LEFT JOIN member_addresses ma ON ma.member_number = f.member_number
-        WHERE f.amount IS NOT NULL
+        WHERE f.amount IS NOT NULL AND f.villa_name <> 'ZZ Comp'
     """
 
     params: dict = filter_params(
@@ -1905,7 +1927,7 @@ def finance_drilldown_breakdown(
                     COUNT(*)                                                                 AS transactions,
                     COUNT(DISTINCT rd.member_number)                                        AS unique_accounts
                 FROM rate_details rd
-                WHERE rd.status = 'Posted'
+                WHERE rd.status = 'Posted' AND rd.villa_name <> 'ZZ Comp'
                   AND rd.payment_type = 'Free'
                   AND rd.original_amount >= rd.total_amount
                   AND rd.villa_name IS NOT NULL

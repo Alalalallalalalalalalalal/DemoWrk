@@ -390,8 +390,11 @@ function FilterChips({ filters, onRemove }) {
 
 // ── "Browse by…" pivot bar - re-slice the current filtered set by a
 // dimension that isn't already pinned ───────────────────────────
-function PivotBar({ filters, onPivot }) {
-  const available = PIVOT_DIMENSIONS.filter((d) => filters?.[d.key] == null);
+function PivotBar({ filters, onPivot, dimensionKeys = null }) {
+  const candidates = dimensionKeys
+    ? PIVOT_DIMENSIONS.filter((d) => dimensionKeys.includes(d.key))
+    : PIVOT_DIMENSIONS;
+  const available = candidates.filter((d) => filters?.[d.key] == null);
   if (available.length === 0) return null;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
@@ -672,7 +675,7 @@ function ReservationTable({ rows }) {
       if (yearFilter !== "All" && !r.checkInDate?.startsWith(yearFilter)) return false;
       if (search) {
         const q = search.toLowerCase();
-        return [r.guestName, r.memberNumber, r.confCode, r.reservationId, r.roomNumber, r.source]
+        return [r.guestName, r.memberNumber, r.confCode, r.reservationId, r.roomNumber, r.source, r.villaName]
           .some((v) => v && String(v).toLowerCase().includes(q));
       }
       return true;
@@ -706,7 +709,7 @@ function ReservationTable({ rows }) {
         </span>
         <InfoTip
           title="Villa Reservations"
-          description="Individual paid, posted reservations for this villa, sourced from rate_details (the same table and dedup logic behind the Villa Revenue total) - not folio billing lines. Each row is one reservation, not one charge."
+          description="Individual paid, posted reservations - one villa or the whole portfolio depending on how you got here - sourced from rate_details (the same table and dedup logic behind the Villa Revenue total), not folio billing lines. Each row is one reservation, not one charge."
           tips={[
             "Click a row to reveal the member's email, phone, and home location on file",
             "Search by guest name, member number, confirmation code, room, or source to find a specific reservation",
@@ -747,12 +750,13 @@ function ReservationTable({ rows }) {
 
       <div style={{ overflowX: "auto", borderRadius: 10, border: `1px solid ${C.border}` }}>
         <div style={{ maxHeight: 420, overflowY: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 760 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 860 }}>
             <thead>
               <tr>
                 <th style={thStyle}>Check-in → Check-out</th>
                 <th style={thStyle}>Nights</th>
                 <th style={thStyle}>Guest / Member</th>
+                <th style={thStyle}>Villa</th>
                 <th style={thStyle}>Conf Code</th>
                 <th style={thStyle}>Source</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Total Rental</th>
@@ -761,7 +765,7 @@ function ReservationTable({ rows }) {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ ...tdStyle, textAlign: "center", color: C.muted, padding: 32 }}>
+                  <td colSpan={7} style={{ ...tdStyle, textAlign: "center", color: C.muted, padding: 32 }}>
                     No reservations found
                   </td>
                 </tr>
@@ -791,6 +795,7 @@ function ReservationTable({ rows }) {
                           {r.memberNumber ? `#${r.memberNumber}` : "Guest"}
                         </div>
                       </td>
+                      <td style={{ ...tdStyle, color: C.soft }}>{r.villaName ?? "-"}</td>
                       <td style={{ ...tdStyle, color: C.accent }}>{r.confCode ?? "-"}</td>
                       <td style={{ ...tdStyle, color: C.soft }}>{r.source ?? "-"}</td>
                       <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: C.accent }}>
@@ -801,7 +806,7 @@ function ReservationTable({ rows }) {
                     {expandedRow === i && (
                       <tr key={`${r.reservationId ?? i}-contact`}>
                         <td
-                          colSpan={6}
+                          colSpan={7}
                           style={{
                             padding: "8px 14px 14px 14px",
                             background: C.panelAlt,
@@ -1005,7 +1010,32 @@ export default function RevenueBreakdownDrawer({
   }, [drawerWidth]);
 
   // ── Data loaders ───────────────────────────────────────────────
+  // Villa-scoped filters (category='Villa' or section='Villa') route
+  // to rate_details instead of folios - matches the same is_villa_scoped
+  // rule the backend already uses for /drilldown-breakdown. This is
+  // the ONE place that decision is made, so every caller that funnels
+  // through loadRecords (initial open, the "Total -> Villas Revenue"
+  // mid-item, a per-villa row picked from "Browse by Villa", breadcrumb
+  // navigation, filter-chip removal) gets it automatically - no need
+  // to special-case each entry point separately.
+  //
+  // payment='free' is explicitly excluded: /villa-reservations only
+  // returns Paid+Posted reservations, it has no concept of Forgone
+  // Revenue. A villa-scoped click that's ALSO filtered to free/comped
+  // stays on the folios path rather than silently showing paid
+  // reservations under a "forgone" label (or an empty list).
+  function isVillaScopedFilters(filters) {
+    if (!filters || filters.payment === "free") return false;
+    return filters.category === "Villa" || filters.section === "Villa";
+  }
+
   async function loadRecords(filters) {
+    if (isVillaScopedFilters(filters)) {
+      // filters.villa, if set (e.g. a specific row picked from "Browse
+      // by Villa" while already Villa-scoped), narrows to one villa;
+      // otherwise this is the whole portfolio.
+      return loadVillaReservations(filters.villa);
+    }
     setLoading(true);
     setError(null);
     try {
@@ -1019,15 +1049,18 @@ export default function RevenueBreakdownDrawer({
   }
 
   // rate_details-sourced, NOT folios - see finance_backend.py's
-  // /villa-reservations. Used only for the villaReservations drillType
-  // (a direct click on a Villa Revenue table row), never for the
-  // general filter-driven drill path loadRecords() handles.
+  // /villa-reservations. `villaName` is optional: omitted means every
+  // villa (portfolio-wide), e.g. clicking the top-level "Villas
+  // Revenue" card. Called directly for the explicit villaReservations
+  // drillType (a Villa Revenue table row click), and indirectly via
+  // loadRecords()'s isVillaScopedFilters() check for every other
+  // Villa-scoped entry point on the dashboard.
   async function loadVillaReservations(villaName) {
     setLoading(true);
     setError(null);
     try {
       const data = await financeApi.villaReservations({
-        villa: villaName,
+        villa: villaName || undefined,
         ...periodToParams(period),
       });
       setStepData({ kind: "reservations", rows: data, groupBy: null });
@@ -1341,11 +1374,18 @@ export default function RevenueBreakdownDrawer({
             </>
           )}
 
-          {/* rate_details-sourced, not folios - no PivotBar here: none
-              of source/customer/amenity exist as rate_details columns,
-              so there's nothing meaningful to pivot by from this view. */}
+          {/* rate_details-sourced, not folios. Only "villa" is offered
+              here - source/customer/amenity aren't rate_details columns.
+              PivotBar hides itself automatically once filters.villa is
+              already set (i.e. this is already a single villa's
+              reservations, e.g. reached via the villaReservations
+              drillType) - "browse by villa" only makes sense from the
+              portfolio-wide (all villas) view. */}
           {!loading && !error && showReservations && (
-            <ReservationTable rows={stepData.rows} />
+            <>
+              <PivotBar filters={currentFilters} onPivot={pivotBreakdown} dimensionKeys={["villa"]} />
+              <ReservationTable rows={stepData.rows} />
+            </>
           )}
         </div>
       </aside>
