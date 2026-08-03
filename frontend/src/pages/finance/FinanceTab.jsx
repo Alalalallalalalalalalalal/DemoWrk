@@ -108,6 +108,8 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
   const [villaRevenue,   setVillaRevenue]   = useState([]);
   const [amenityRevenue, setAmenityRevenue] = useState([]);
   const [categoryBreakdown, setCategoryBreakdown] = useState([]);
+  const [villaNet, setVillaNet] = useState(null);
+  const [villaTotals, setVillaTotals] = useState(null);
 
   // ── loading / error per section ────────────────────────────────
   const [loadingMap, setLoadingMap] = useState({
@@ -180,6 +182,15 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
       .then(setAmenityRevenue)
       .catch((e) => setErr("amenity", e.message))
       .finally(() => setLoad("amenity", false));
+
+    // Villa net revenue (for CategoryCompBreakdown card)
+    // period.year can be the string "All" — only send ?years= for a real 4-digit year
+    const yearParam = /^\d{4}$/.test(String(period.year))
+      ? { years: String(period.year) }
+      : {};
+    financeApi.villaStatementTotals(yearParam)
+      .then((r) => setVillaTotals(Array.isArray(r) ? (r[0] ?? null) : r))
+      .catch((e) => console.error("villaStatementTotals failed:", e));
   }, [period]);
 
   // ── drawer helpers ─────────────────────────────────────────────
@@ -245,8 +256,15 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
   }
 
   // Handle villa table row click - go straight to folio records
-  function handleVillaRowClick({ drillType, drillValue }) {
-    openDrawer({ drillType, drillValue });
+  // Villa Revenue table rows always drill into rate_details
+  // reservations now (see /finance/villa-reservations), NOT the
+  // general folios drilldown every other card/table uses.
+  // VillaRevenueTable sends drillType: "villa" (a generic legacy
+  // value) - remapped to "villaReservations" here so
+  // RevenueBreakdownDrawer's init effect takes the rate_details
+  // branch instead of falling through to loadRecords()/folios.
+  function handleVillaRowClick({ drillValue }) {
+    openDrawer({ drillType: "villaReservations", drillValue });
   }
 
   return (
@@ -277,6 +295,8 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
       ) : (
         <CategoryCompBreakdown
           data={categoryBreakdown}
+          villaNetRevenue={villaTotals?.netRevenue}
+          villaGrossRevenue={villaTotals?.statementGrossRevenue}
           onRowClick={({ drillType, drillValue, filters }) =>
             openDrawer({ drillType, drillValue, filters })
           }
