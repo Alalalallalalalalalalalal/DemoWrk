@@ -1,451 +1,165 @@
-import { useEffect, useMemo, useState } from "react";
+// frontend/src/pages/visits/VisitsRoomsTab.jsx
+//
+// Merged replacement for VisitsRoomsTab.jsx + VillaSourceBreakdown.jsx.
+//
+// Endpoints used (unchanged):
+//   /analytics/visits-rooms-dashboard      summary + villa_stats + bookings_by_bedroom
+//   /analytics/villa-source-breakdown      villa x source x paid/free  (aggregated here)
+//   /analytics/villa-source-bedroom-breakdown
+//   /analytics/villa-source-bookings       villa drill-down records
+//   /analytics/bedroom-bookings            bedroom drill-down records
+//   /analytics/villa-monthly               trend inside the villa panel
+//   /analytics/booked-people               member vs guest split
+//
+
+// REVENUE SOURCE — read before changing:
+//   The Overall total uses summary.villa_rental_revenue, which is Villa Income
+//   from statement_details.
+//   Paid and Comp tabs continue to use villa-source-breakdown.
+//   rate_details.total_rental still drives per-booking values in the panels.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart,
   Bar,
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   Tooltip,
   ResponsiveContainer,
   CartesianGrid,
+  Cell,
 } from "recharts";
 import {
-  BedDouble,
   Users,
+  CalendarDays,
   CalendarClock,
-  DollarSign,
+  Moon,
+  Search,
+  ArrowUp,
+  ArrowDown,
   ArrowUpRight,
+  ArrowDownRight,
+  TrendingUp,
+  TrendingDown,
   X,
   Info,
   Download,
   ChevronDown,
-  LayoutDashboard,
-  Tag,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { analyticsApi } from "../../api/analytics";
-import VillaSourceBreakdown from "./VillaSourceBreakdown";
 
-const C = {
-  bg: "var(--dashboard-card)",
-  panel: "var(--dashboard-panel)",
-  panelAlt: "var(--dashboard-panel-alt)",
-  border: "var(--dashboard-border)",
-  text: "var(--dashboard-abyssal)",
-  muted: "var(--dashboard-muted)",
-  soft: "var(--dashboard-text-soft)",
-  accent: "var(--dashboard-deep-blue)",
-  accent2: "var(--dashboard-truffle)",
-  accent3: "var(--dashboard-flame)",
+const T = {
+  ink: "#1A2733", // headline text, panel headers
+  deep: "#003A59", // primary blue: chart bars, revenue figures
+  flame: "#FFB063", // single accent: comp, selection, highlights
+  mist: "#F4F9FD", // page-level tint, chips, table hover
+  card: "#FFFFFF",
+  line: "#E1EAF2",
+  lineSoft: "#EDF3F8",
+  muted: "#5D7284", // label text
+  slate: "#93A7B6", // tertiary text
+  link: "#3D7898", // card sub-labels
 };
 
-const AX = "var(--dashboard-muted)";
-const GRID = "var(--dashboard-border)";
-const TIP = {
-  background: "var(--dashboard-abyssal)",
-  border: "none",
-  borderRadius: 8,
-  color: "#fff",
+// Sequential ramp, light → deep, with flame reserved for the largest layout.
+const BED_COLOR = {
+  1: "#D6E4EE",
+  2: "#B0CADB",
+  3: "#85AEC7",
+  4: "#5590B0",
+  5: "#2A6C8F",
+  6: "#003A59",
+  7: "#1A2733",
+  8: "#FFB063",
+};
+const bedColor = (b) => BED_COLOR[b] || "#B0CADB";
+
+const FONT_DISPLAY = "'Cormorant Garamond', 'Iowan Old Style', Georgia, serif";
+const FONT_NUM = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const TIP_STYLE = {
+  border: `1px solid ${T.line}`,
+  borderRadius: 10,
+  background: "#fff",
   fontSize: 12,
+  boxShadow: "0 8px 24px rgba(26,39,51,0.12)",
 };
 
-const LABEL_STYLE = {
-  fill: "var(--dashboard-muted)",
-  fontSize: 11,
-  fontWeight: 600,
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
+/* ══════════════════════════════════════════════════════════════════════════
+   Formatters + helpers
+   ═════════════════════════════════════════════════════════════════════════ */
+
+const n0 = (v) => (v == null ? "—" : Math.round(Number(v)).toLocaleString());
+const n1 = (v) => (v == null ? "—" : Number(v).toFixed(1));
+const money = (v) =>
+  v == null ? "—" : `$${Math.round(Number(v)).toLocaleString()}`;
+const moneyShort = (v) => {
+  const x = Number(v || 0);
+  if (Math.abs(x) >= 1_000_000) return `$${(x / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(x) >= 1000) return `$${(x / 1000).toFixed(1)}K`;
+  return `$${Math.round(x)}`;
+};
+const pct = (part, whole) =>
+  !Number(whole || 0)
+    ? "0%"
+    : `${Math.round((Number(part || 0) / Number(whole)) * 100)}%`;
+
+const isoToNum = (iso) => Number(String(iso).replace(/-/g, ""));
+const fmtISO = (iso) => {
+  if (!iso) return "";
+  const [y, m, d] = String(iso).split("-");
+  return `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`;
 };
 
-// ─── Chart info tooltips ────────────────────────────────────────────────────
-
-const CHART_INFO = {
-  totalMembersBooked: {
-    summary:
-      "Counts unique member numbers associated with villa activity during the selected period.",
-    functionality:
-      "Member numbers are collected from valid Rate Details bookings, Rooms records, and Villa Income Statement Details, then classified through the Members table. Repeat activity by the same member is counted once.",
-    x: null,
-    y: null,
-  },
-  totalGuestsBooked: {
-    summary:
-      "Counts unique guest account numbers associated with villa activity during the selected period.",
-    functionality:
-      "Guest classification comes from the Members table. A guest account appearing on multiple bookings is counted once. This is not the total number of people who stayed.",
-    x: null,
-    y: null,
-  },
-  averageLengthOfStay: {
-    summary: "Shows the average number of nights per valid villa booking.",
-    functionality:
-      "Stay length is calculated from the earliest check-in date to the latest check-out date for each unique confirmation code, then averaged across all included bookings.",
-    x: null,
-    y: null,
-  },
-  averagePartySize: {
-    summary: "Shows the average number of people attached to each booking.",
-    functionality:
-      "Party size comes from Reservation Guests records linked by confirmation code. Bookings without guest records default to one person.",
-    x: null,
-    y: null,
-  },
-  totalRoomNights: {
-    summary: "Adds occupied room-date combinations across valid bookings.",
-    functionality:
-      "Each distinct room and rate date counts as one room night. Where detailed room-date records are unavailable, the booking stay length is used as a fallback.",
-    x: null,
-    y: null,
-  },
-  villaRentalRevenue: {
-    summary: "Shows villa income for the selected period.",
-    functionality:
-      "The amount is summed from Owner Payout Total in the Statement Villa Income Summary table. It is separate from booking Total Rental values in Rate Details.",
-    x: null,
-    y: null,
-  },
-  bookingsByVilla: {
-    summary: "Shows valid unique bookings by villa and bedroom configuration.",
-    functionality:
-      "Each confirmation code is counted once using its latest Rate Details record. Unposted, cancelled, and no-show reservations are excluded. Hover a bar for the exact booking count.",
-    x: "Villa name",
-    y: "Number of valid bookings",
-  },
-  villaMonthlyBookings: {
-    summary:
-      "Breaks down how bookings for the selected villa are distributed across calendar months.",
-    functionality:
-      "Hover a point for the exact monthly booking count. Change the selected villa by clicking a different row in the performance table.",
-    x: "Month (Jan–Dec)",
-    y: "Number of bookings",
-  },
-  villaMonthlyRevenue: {
-    summary:
-      "Shows paid booking value for the selected villa by calendar month.",
-    functionality:
-      "The value is based on Total Rental from valid Rate Details bookings not classified as free or complimentary. Hover a bar for the exact monthly amount.",
-    x: "Month (Jan–Dec)",
-    y: "Paid booking value in USD",
-  },
-  bookingsByBedroom: {
-    summary:
-      "Compares booking volume across different bedroom configurations to reveal which villa sizes are most in demand.",
-    functionality:
-      "Hover a bar for exact booking count per bedroom tier. Use alongside the avg-stay chart to understand whether larger villas attract longer stays.",
-    x: "Number of bedrooms",
-    y: "Number of confirmed bookings",
-  },
-  avgStayByBedroom: {
-    summary: "Shows the average length of stay for each bedroom configuration.",
-    functionality:
-      "Stay length is calculated from check-in to check-out for each unique confirmation code in Rate Details. Unposted, cancelled, and no-show reservations are excluded.",
-    x: "Number of bedrooms",
-    y: "Average stay in nights",
-  },
-  bookingsByMonth: {
-    summary:
-      "Tracks booking volume month-by-month across all villas to surface seasonal demand patterns.",
-    functionality:
-      "Hover a point for the exact monthly count. This chart uses check-in date as the reference, so a booking confirmed in March for a June stay appears in June.",
-    x: "Month (Jan–Dec)",
-    y: "Number of confirmed bookings",
-  },
-  revenueByMonth: {
-    summary: "Shows villa income by month across all villas.",
-    functionality:
-      "The amount is summed from Owner Payout Total in the Statement Villa Income Summary table. Hover a bar for the exact monthly total.",
-    x: "Month (Jan–Dec)",
-    y: "Villa income in USD",
-  },
-
-  villaTable: {
-    summary:
-      "Ranks villas using valid unique bookings and compares bedrooms, bookings, room nights, average stay, and paid booking value.",
-    functionality:
-      "Bookings are deduplicated by confirmation code from Rate Details. Room Nights count occupied room-date combinations, while Revenue includes paid Total Rental only. Click a row to open its booking timeline.",
-    x: null,
-    y: null,
-  },
-};
-
-function ChartInfo({ id }) {
-  const [open, setOpen] = useState(false);
-  const info = CHART_INFO[id];
-  if (!info) return null;
-
-  return (
-    <div style={{ position: "relative", display: "inline-flex" }}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        aria-label="Chart information"
-        style={{
-          background: "none",
-          border: "none",
-          padding: 4,
-          cursor: "pointer",
-          color: open ? C.accent2 : C.muted,
-          display: "flex",
-          alignItems: "center",
-          borderRadius: 6,
-          transition: "color 0.15s",
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.color = C.accent2)}
-        onMouseLeave={(e) =>
-          (e.currentTarget.style.color = open ? C.accent2 : C.muted)
-        }
-      >
-        <Info size={15} />
-      </button>
-
-      {open && (
-        <>
-          <div
-            onClick={() => setOpen(false)}
-            style={{ position: "fixed", inset: 0, zIndex: 49 }}
-          />
-          <div
-            style={{
-              position: "absolute",
-              top: "calc(100% + 6px)",
-              right: 0,
-              zIndex: 50,
-              width: 280,
-              background: C.bg,
-              border: `1px solid ${C.border}`,
-              borderRadius: 14,
-              boxShadow: "0 8px 32px rgba(0,0,0,0.14)",
-              padding: "14px 16px",
-              fontSize: 12,
-              color: C.soft,
-              lineHeight: 1.55,
-            }}
-          >
-            <button
-              onClick={() => setOpen(false)}
-              style={{
-                position: "absolute",
-                top: 8,
-                right: 8,
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                color: C.muted,
-                padding: 2,
-                display: "flex",
-              }}
-            >
-              <X size={13} />
-            </button>
-
-            <p
-              style={{
-                margin: "0 0 10px",
-                color: C.text,
-                fontSize: 12,
-                paddingRight: 16,
-              }}
-            >
-              {info.summary}
-            </p>
-
-            {(info.x || info.y) && (
-              <div
-                style={{
-                  borderTop: `1px solid ${C.border}`,
-                  paddingTop: 10,
-                  marginBottom: 10,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 5,
-                }}
-              >
-                {info.x && (
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        color: C.accent2,
-                        minWidth: 14,
-                        fontSize: 11,
-                      }}
-                    >
-                      X
-                    </span>
-                    <span>{info.x}</span>
-                  </div>
-                )}
-                {info.y && (
-                  <div style={{ display: "flex", gap: 6 }}>
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        color: C.accent,
-                        minWidth: 14,
-                        fontSize: 11,
-                      }}
-                    >
-                      Y
-                    </span>
-                    <span>{info.y}</span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div
-              style={{
-                borderTop: `1px solid ${C.border}`,
-                paddingTop: 10,
-                color: C.muted,
-                fontSize: 11,
-              }}
-            >
-              {info.functionality}
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ─── Export helpers ─────────────────────────────────────────────────────────
-
-function downloadFile(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-function exportRows(rows, filenameBase, format) {
-  if (!rows.length) return;
-
-  if (format === "csv") {
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const csv = XLSX.utils.sheet_to_csv(worksheet);
-    downloadFile(
-      new Blob([csv], { type: "text/csv;charset=utf-8;" }),
-      `${filenameBase}.csv`,
-    );
-  }
-
-  if (format === "excel") {
-    const worksheet = XLSX.utils.json_to_sheet(rows);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Export");
-    XLSX.writeFile(workbook, `${filenameBase}.xlsx`);
-  }
-
-  if (format === "pdf") {
-    const doc = new jsPDF({ orientation: "landscape" });
-    const columns = Object.keys(rows[0] ?? {});
-    doc.text(filenameBase.replaceAll("_", " "), 14, 14);
-    autoTable(doc, {
-      startY: 20,
-      head: [columns],
-      body: rows.map((row) => columns.map((col) => row[col] ?? "")),
-      styles: { fontSize: 7 },
-      headStyles: { fillColor: [30, 48, 70] },
-    });
-    doc.save(`${filenameBase}.pdf`);
-  }
-}
-
-const safeFilePart = (value) =>
-  String(value || "all")
+const safeFilePart = (v) =>
+  String(v || "all")
     .trim()
     .replace(/[^a-z0-9]+/gi, "_")
     .replace(/^_+|_+$/g, "")
     .toLowerCase();
 
-const exportButtonStyle = (disabled) => ({
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  padding: "7px 12px",
-  borderRadius: 10,
-  border: `1px solid ${C.accent2}`,
-  background: C.panelAlt,
-  color: C.accent,
-  fontSize: 12,
-  fontWeight: 700,
-  cursor: disabled ? "not-allowed" : "pointer",
-  opacity: disabled ? 0.55 : 1,
-});
+/* Period: {mode:'all'} | {mode:'year',year} | {mode:'month',year,month} | {mode:'range',from,to} */
 
-function ExportMenu({ rows, filenameBase, disabled }) {
-  const [open, setOpen] = useState(false);
+const periodText = (p) => {
+  if (!p || p.mode === "all") return "All time";
+  if (p.mode === "year") return String(p.year);
+  if (p.mode === "month") return `${MONTHS[p.month]} ${p.year}`;
+  return `${fmtISO(p.from)} – ${fmtISO(p.to)}`;
+};
 
-  const doExport = (format) => {
-    exportRows(rows, filenameBase, format);
-    setOpen(false);
-  };
+const periodToParams = (p) => {
+  if (!p || p.mode === "all") return {};
+  if (p.mode === "year") return { year: p.year };
+  if (p.mode === "month") return { year: p.year, month: p.month + 1 };
+  return { start_date: p.from, end_date: p.to };
+};
 
-  return (
-    <div style={{ position: "relative", display: "inline-flex" }}>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
-        style={exportButtonStyle(disabled)}
-      >
-        <Download size={13} />
-        Export
-        <ChevronDown size={12} />
-      </button>
-
-      {open && !disabled && (
-        <div
-          style={{
-            position: "absolute",
-            right: 0,
-            top: "calc(100% + 6px)",
-            zIndex: 20,
-            minWidth: 130,
-            background: C.bg,
-            border: `1px solid ${C.border}`,
-            borderRadius: 10,
-            boxShadow: "0 10px 26px rgba(0,0,0,0.14)",
-            overflow: "hidden",
-          }}
-        >
-          {[
-            ["csv", "CSV"],
-            ["excel", "Excel"],
-            ["pdf", "PDF"],
-          ].map(([format, label]) => (
-            <button
-              key={format}
-              type="button"
-              onClick={() => doExport(format)}
-              style={{
-                display: "block",
-                width: "100%",
-                padding: "9px 12px",
-                border: "none",
-                background: "transparent",
-                color: C.text,
-                textAlign: "left",
-                cursor: "pointer",
-                fontSize: 12,
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Table utilities ─────────────────────────────────────────────────────────
+const periodFilePart = (p) => {
+  if (!p || p.mode === "all") return "all_dates";
+  if (p.mode === "year") return String(p.year);
+  if (p.mode === "month") return `${p.year}_${MONTHS[p.month]}`;
+  return `${p.from}_to_${p.to}`;
+};
 
 const searchRows = (rows, q) => {
   const term = q.trim().toLowerCase();
@@ -459,7 +173,7 @@ const searchRows = (rows, q) => {
   );
 };
 
-const sortRows = (rows, key, dir = "asc") => {
+const sortRows = (rows, key, dir = "desc") => {
   const mult = dir === "asc" ? 1 : -1;
   return [...rows].sort((a, b) => {
     const av = a?.[key];
@@ -469,7 +183,8 @@ const sortRows = (rows, key, dir = "asc") => {
     if (bv == null) return -1;
     const an = Number(av);
     const bn = Number(bv);
-    if (!Number.isNaN(an) && !Number.isNaN(bn)) return (an - bn) * mult;
+    if (!Number.isNaN(an) && !Number.isNaN(bn) && av !== "" && bv !== "")
+      return (an - bn) * mult;
     return (
       String(av).localeCompare(String(bv), undefined, {
         numeric: true,
@@ -479,316 +194,74 @@ const sortRows = (rows, key, dir = "asc") => {
   });
 };
 
-// ─── Formatters ───────────────────────────────────────────────────────────────
+/* Exports ────────────────────────────────────────────────────────────── */
 
-const fmt = (v) => (v == null ? "—" : Number(v).toLocaleString());
-const money = (v) =>
-  v == null
-    ? "—"
-    : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-const num = (v, d = 1) => (v == null ? "—" : Number(v).toFixed(d));
-
-// ─── UI primitives ────────────────────────────────────────────────────────────
-
-function Stat({ icon: Icon, label, value, sub, onClick, infoId }) {
-  const clickable = Boolean(onClick);
-  return (
-    <div style={{ padding: "0 18px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-        <button
-          type="button"
-          onClick={onClick}
-          disabled={!clickable}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            background: "none",
-            border: "none",
-            padding: 0,
-            cursor: clickable ? "pointer" : "default",
-            color: "inherit",
-          }}
-        >
-          {Icon && <Icon size={15} color={C.accent2} />}
-          <span
-            className="dashboard-eyebrow"
-            style={{
-              textDecoration: clickable ? "underline" : "none",
-              textUnderlineOffset: 3,
-            }}
-          >
-            {label}
-          </span>
-        </button>
-        {infoId && <ChartInfo id={infoId} />}
-      </div>
-      <div
-        style={{
-          fontFamily: "'Cormorant Garamond', serif",
-          fontSize: 28,
-          color: C.text,
-          marginTop: 5,
-        }}
-      >
-        {value}
-      </div>
-      <div style={{ fontSize: 11, color: C.muted }}>{sub}</div>
-    </div>
-  );
+function downloadFile(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
-function Card({ title, sub, children, action }) {
-  return (
-    <div className="dashboard-card">
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          alignItems: "flex-start",
-          marginBottom: 14,
-        }}
-      >
-        <div>
-          <div className="dashboard-eyebrow">{sub}</div>
-          <h2 className="dashboard-card-title">{title}</h2>
-        </div>
-        {action}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-const optionLabel = (option, label) => {
-  if (option === "All") return `All ${label}s`;
-  if (option === "asc") return "Ascending";
-  if (option === "desc") return "Descending";
-  return String(option)
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-};
-
-function Select({ label, value, onChange, options }) {
-  return (
-    <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <span className="dashboard-eyebrow">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        style={{
-          padding: "8px 10px",
-          borderRadius: 10,
-          border: `1px solid ${C.border}`,
-          background: C.bg,
-          color: C.text,
-          fontSize: 12,
-        }}
-      >
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {optionLabel(o, label)}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-function DateFilterBar({ value, onChange, years, months }) {
-  const update = (patch) => onChange({ ...value, ...patch });
-
-  const inputStyle = {
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: `1px solid ${C.border}`,
-    background: C.bg,
-    color: C.text,
-    fontSize: 12,
-  };
-
-  const changeMode = (mode) => {
-    onChange({
-      mode,
-      year: value.year ?? "All",
-      month: value.month ?? "All",
-      date: value.date ?? "",
-      startDate: value.startDate ?? "",
-      endDate: value.endDate ?? "",
+function exportRows(rows, filenameBase, format) {
+  if (!rows.length) return;
+  if (format === "csv") {
+    const ws = XLSX.utils.json_to_sheet(rows);
+    downloadFile(
+      new Blob([XLSX.utils.sheet_to_csv(ws)], {
+        type: "text/csv;charset=utf-8;",
+      }),
+      `${filenameBase}.csv`,
+    );
+  } else if (format === "excel") {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Export");
+    XLSX.writeFile(wb, `${filenameBase}.xlsx`);
+  } else if (format === "pdf") {
+    const doc = new jsPDF({ orientation: "landscape" });
+    const columns = Object.keys(rows[0] ?? {});
+    doc.text(filenameBase.replaceAll("_", " "), 14, 14);
+    autoTable(doc, {
+      startY: 20,
+      head: [columns],
+      body: rows.map((r) => columns.map((c) => r[c] ?? "")),
+      styles: { fontSize: 7 },
+      headStyles: { fillColor: [0, 58, 89] },
     });
-  };
-
-  return (
-    <div
-      style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}
-    >
-      <Select
-        label="Mode"
-        value={value.mode}
-        onChange={changeMode}
-        options={["ym", "day", "range"]}
-      />
-
-      {value.mode === "ym" && (
-        <>
-          <Select
-            label="Year"
-            value={value.year}
-            onChange={(year) => update({ year })}
-            options={years}
-          />
-          <Select
-            label="Month"
-            value={value.month}
-            onChange={(month) => update({ month })}
-            options={months}
-          />
-        </>
-      )}
-
-      {value.mode === "day" && (
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span className="dashboard-eyebrow">Date</span>
-          <input
-            type="date"
-            value={value.date}
-            onChange={(e) => update({ date: e.target.value })}
-            style={inputStyle}
-          />
-        </label>
-      )}
-
-      {value.mode === "range" && (
-        <>
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span className="dashboard-eyebrow">Start</span>
-            <input
-              type="date"
-              value={value.startDate}
-              onChange={(e) => update({ startDate: e.target.value })}
-              style={inputStyle}
-            />
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span className="dashboard-eyebrow">End</span>
-            <input
-              type="date"
-              value={value.endDate}
-              onChange={(e) => update({ endDate: e.target.value })}
-              style={inputStyle}
-            />
-          </label>
-        </>
-      )}
-    </div>
-  );
-}
-function TableControls({
-  search,
-  onSearchChange,
-  sortKey,
-  onSortKeyChange,
-  sortDir,
-  onSortDirChange,
-  sortOptions,
-  placeholder = "Search table...",
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: 10,
-        alignItems: "center",
-        flexWrap: "wrap",
-        marginBottom: 12,
-      }}
-    >
-      <input
-        value={search}
-        onChange={(e) => onSearchChange(e.target.value)}
-        placeholder={placeholder}
-        style={{
-          flex: "1 1 220px",
-          minWidth: 0,
-          padding: "8px 10px",
-          borderRadius: 10,
-          border: `1px solid ${C.border}`,
-          background: C.bg,
-          color: C.text,
-          fontSize: 12,
-          outline: "none",
-        }}
-      />
-      <Select
-        label="Sort"
-        value={sortKey}
-        onChange={onSortKeyChange}
-        options={sortOptions}
-      />
-      <Select
-        label="Order"
-        value={sortDir}
-        onChange={onSortDirChange}
-        options={["asc", "desc"]}
-      />
-    </div>
-  );
+    doc.save(`${filenameBase}.pdf`);
+  }
 }
 
-// ─── Top-level view toggle ────────────────────────────────────────────────────
+/* ══════════════════════════════════════════════════════════════════════════
+   UI atoms
+   ═════════════════════════════════════════════════════════════════════════ */
 
-const TOP_VIEWS = [
-  {
-    key: "overall",
-    label: "Overall",
-    icon: LayoutDashboard,
-    desc: "Full villa booking performance",
-  },
-  {
-    key: "sources",
-    label: "Booking Sources",
-    icon: Tag,
-    desc: "Business-source performance, paid vs. free/comp, trends, and drill-downs",
-  },
-];
-
-function TopViewToggle({ value, onChange }) {
+function Segmented({ value, onChange, options, size = "md" }) {
   return (
     <div
-      style={{
-        display: "inline-flex",
-        gap: 4,
-        background: C.panel,
-        border: `1px solid ${C.border}`,
-        borderRadius: 16,
-        padding: 4,
-      }}
+      className="inline-flex max-w-full flex-wrap items-center rounded-xl"
+      style={{ background: T.mist, border: `1px solid ${T.line}`, padding: 3 }}
     >
-      {TOP_VIEWS.map(({ key, label, icon: Icon }) => {
-        const active = value === key;
+      {options.map((o) => {
+        const active = o.value === value;
         return (
           <button
-            key={key}
-            onClick={() => onChange(key)}
+            key={String(o.value)}
             type="button"
+            onClick={() => onChange(o.value)}
+            className={`vr-focus rounded-full font-medium ${
+              size === "sm" ? "px-3 py-1 text-xs" : "px-4 py-1.5 text-sm"
+            }`}
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 7,
-              padding: "9px 18px",
-              borderRadius: 12,
+              background: active ? T.deep : "transparent",
+              color: active ? "#fff" : T.muted,
               border: "none",
-              background: active ? C.accent : "transparent",
-              color: active ? "#fff" : C.muted,
-              fontWeight: active ? 800 : 500,
-              fontSize: 13,
               cursor: "pointer",
-              transition: "all 0.18s",
-              letterSpacing: active ? "0.01em" : "0",
             }}
           >
-            <Icon size={14} />
-            {label}
+            {o.label}
           </button>
         );
       })}
@@ -796,2443 +269,2835 @@ function TopViewToggle({ value, onChange }) {
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+function Field({ label, value, onChange, options }) {
+  return (
+    <label className="flex items-center gap-2">
+      <span
+        className="text-xs font-semibold uppercase"
+        style={{ letterSpacing: "0.07em", color: T.muted }}
+      >
+        {label}
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="vr-focus"
+        style={{
+          padding: "6px 10px",
+          borderRadius: 999,
+          border: `1px solid ${T.line}`,
+          background: T.mist,
+          color: T.ink,
+          fontSize: 12,
+          cursor: "pointer",
+        }}
+      >
+        {options.map(([val, text]) => (
+          <option key={val} value={val}>
+            {text}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
-export default function VisitsRoomsTab({
-  selectedVillaName,
-  onVillaSelect,
-  onGoToML,
-}) {
-  // ── Shared constants ──────────────────────────────────────────────────────
-  const months = [
-    "All",
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
+const INFO = {
+  chart:
+    "Bars count valid unique bookings, or nights / revenue when you switch the metric. Bar colour is the villa's smallest bedroom layout. Select a bar to open that villa's full record.",
+  table:
+    "Rows aggregate the same bookings by villa or by bedroom count. Comp stays bill nothing, so their value is reported separately from paid revenue.",
+  reconcile:
+    "Statement Villa Income is the owner-payout total from statement_details. It is a separate reconciliation figure and will not equal booking-level folio revenue.",
+  split:
+    "Member and guest bookings are attributed through members.member_or_guest. Bookings with no member number cannot be attributed, so the two figures may not sum to total bookings.",
+};
 
-  const years = useMemo(() => {
-    const currentYear = new Date().getFullYear();
-    return [
-      "All",
-      ...Array.from(
-        { length: currentYear - 2018 + 1 },
-        (_, i) => currentYear - i,
-      ),
-    ];
+function InfoTip({ id }) {
+  const [open, setOpen] = useState(false);
+  const text = INFO[id];
+  if (!text) return null;
+  return (
+    <span style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        type="button"
+        aria-label="How this is calculated"
+        onClick={() => setOpen((v) => !v)}
+        className="vr-focus"
+        style={{
+          border: "none",
+          background: "none",
+          padding: 3,
+          cursor: "pointer",
+          color: open ? T.deep : T.slate,
+          display: "flex",
+        }}
+      >
+        <Info size={14} />
+      </button>
+      {open && (
+        <>
+          <span
+            onClick={() => setOpen(false)}
+            style={{ position: "fixed", inset: 0, zIndex: 49 }}
+          />
+          <span
+            role="tooltip"
+            style={{
+              position: "absolute",
+              top: "calc(100% + 6px)",
+              right: 0,
+              zIndex: 50,
+              width: 290,
+              padding: "11px 13px",
+              borderRadius: 12,
+              background: T.ink,
+              color: "#fff",
+              fontSize: 11,
+              lineHeight: 1.55,
+              boxShadow: "0 10px 26px rgba(26,39,51,0.22)",
+            }}
+          >
+            {text}
+          </span>
+        </>
+      )}
+    </span>
+  );
+}
+
+function DatePeriod({ period, onChange, years }) {
+  const [open, setOpen] = useState(false);
+  const [draftYear, setDraftYear] = useState(period.year ?? years[0]);
+  const [from, setFrom] = useState(period.from || "");
+  const [to, setTo] = useState(period.to || "");
+
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const createDateFilter = () => ({
-    mode: "ym", // ym | day | range
-    year: "All",
-    month: "All",
-    date: "",
-    startDate: "",
-    endDate: "",
+  const rangeReady = Boolean(from && to);
+  const applyRange = () => {
+    if (!rangeReady) return;
+    const [a, b] = isoToNum(from) <= isoToNum(to) ? [from, to] : [to, from];
+    onChange({ mode: "range", from: a, to: b });
+    setOpen(false);
+  };
+
+  const chipStyle = (active) => ({
+    background: active ? T.deep : T.mist,
+    color: active ? "#fff" : T.ink,
+    border: `1px solid ${active ? T.deep : T.line}`,
+    cursor: "pointer",
   });
 
-  const toDateParams = (filter) => {
-    if (filter.mode === "day") {
-      return filter.date ? { date: filter.date } : {};
-    }
+  return (
+    <div style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="vr-focus inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-medium"
+        style={{
+          background: T.deep,
+          color: "#fff",
+          border: "none",
+          cursor: "pointer",
+        }}
+      >
+        <CalendarDays size={14} style={{ color: T.flame }} />
+        Date period: {periodText(period)}
+        <ChevronDown
+          size={15}
+          style={{
+            color: T.flame,
+            transform: open ? "rotate(180deg)" : "none",
+            transition: "transform .18s ease",
+          }}
+        />
+      </button>
 
-    if (filter.mode === "range") {
-      return filter.startDate && filter.endDate
-        ? { start_date: filter.startDate, end_date: filter.endDate }
-        : {};
-    }
+      {open && (
+        <>
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 20 }}
+            onClick={() => setOpen(false)}
+          />
+          <div
+            className="rounded-xl p-4"
+            style={{
+              position: "absolute",
+              right: 0,
+              top: "calc(100% + 8px)",
+              zIndex: 30,
+              width: 320,
+              background: "#fff",
+              border: `1px solid ${T.line}`,
+              boxShadow: "0 14px 40px rgba(26,39,51,0.16)",
+            }}
+          >
+            <div
+              className="mb-3 text-xs font-semibold uppercase"
+              style={{ letterSpacing: "0.08em", color: T.muted }}
+            >
+              Custom period
+            </div>
 
+            <button
+              type="button"
+              onClick={() => {
+                onChange({ mode: "all" });
+                setOpen(false);
+              }}
+              className="vr-focus mb-4 w-full rounded-lg py-2 text-sm font-medium"
+              style={chipStyle(period.mode === "all")}
+            >
+              All time
+            </button>
+
+            <div className="mb-2 text-xs" style={{ color: T.muted }}>
+              Year
+            </div>
+            <div className="mb-4 flex flex-wrap gap-1.5">
+              {years.map((y) => {
+                const on = period.mode === "year" && period.year === y;
+                return (
+                  <button
+                    key={y}
+                    type="button"
+                    onClick={() => {
+                      setDraftYear(y);
+                      onChange({ mode: "year", year: y });
+                    }}
+                    className="vr-focus rounded-md px-2.5 py-1 text-sm"
+                    style={{
+                      background: on ? T.flame : T.mist,
+                      color: T.ink,
+                      border: `1px solid ${on ? T.flame : T.line}`,
+                      fontFamily: FONT_NUM,
+                      fontWeight: on ? 700 : 400,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {y}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mb-2 text-xs" style={{ color: T.muted }}>
+              Month in{" "}
+              <select
+                value={draftYear}
+                onChange={(e) => setDraftYear(Number(e.target.value))}
+                className="vr-focus"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: T.ink,
+                  fontFamily: FONT_NUM,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {years.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-4 gap-1.5">
+              {MONTHS.map((m, i) => {
+                const on =
+                  period.mode === "month" &&
+                  period.month === i &&
+                  period.year === draftYear;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => {
+                      onChange({ mode: "month", year: draftYear, month: i });
+                      setOpen(false);
+                    }}
+                    className="vr-focus rounded-md text-xs"
+                    style={{ ...chipStyle(on), padding: "5px 0" }}
+                  >
+                    {m}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              className="my-4"
+              style={{ borderTop: `1px solid ${T.line}` }}
+            />
+
+            <div className="mb-2 text-xs" style={{ color: T.muted }}>
+              Exact dates{" "}
+              <span style={{ color: T.slate }}>(e.g. 1–30 May)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {[
+                ["From", from, setFrom],
+                ["To", to, setTo],
+              ].map(([label, val, set]) => (
+                <label key={label} style={{ flex: 1 }}>
+                  <span
+                    className="mb-1 block"
+                    style={{ fontSize: 10, color: T.slate }}
+                  >
+                    {label}
+                  </span>
+                  <input
+                    type="date"
+                    value={val}
+                    onChange={(e) => set(e.target.value)}
+                    className="vr-focus w-full rounded-md px-2 py-1.5 text-xs"
+                    style={{
+                      background: T.mist,
+                      color: T.ink,
+                      border: `1px solid ${T.line}`,
+                      fontFamily: FONT_NUM,
+                    }}
+                  />
+                </label>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={applyRange}
+              disabled={!rangeReady}
+              className="vr-focus mt-3 w-full rounded-lg py-2 text-sm font-medium"
+              style={{
+                background: rangeReady ? T.ink : T.mist,
+                color: rangeReady ? "#fff" : T.slate,
+                border: `1px solid ${rangeReady ? T.ink : T.line}`,
+                cursor: rangeReady ? "pointer" : "not-allowed",
+              }}
+            >
+              Apply date range
+            </button>
+            <p className="mt-2" style={{ color: T.slate, fontSize: 10 }}>
+              Bookings are counted by check-in date.
+            </p>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ExportMenu({ rows, filenameBase, disabled }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        className="vr-focus inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold"
+        style={{
+          border: `1px solid ${T.line}`,
+          background: T.mist,
+          color: T.ink,
+          cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.55 : 1,
+        }}
+      >
+        <Download size={13} /> Export <ChevronDown size={11} />
+      </button>
+      {open && !disabled && (
+        <>
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 19 }}
+            onClick={() => setOpen(false)}
+          />
+          <div
+            style={{
+              position: "absolute",
+              right: 0,
+              top: "calc(100% + 6px)",
+              zIndex: 20,
+              minWidth: 130,
+              background: "#fff",
+              border: `1px solid ${T.line}`,
+              borderRadius: 10,
+              boxShadow: "0 10px 26px rgba(26,39,51,0.14)",
+              overflow: "hidden",
+            }}
+          >
+            {[
+              ["csv", "CSV"],
+              ["excel", "Excel"],
+              ["pdf", "PDF"],
+            ].map(([f, label]) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => {
+                  exportRows(rows, filenameBase, f);
+                  setOpen(false);
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  padding: "9px 12px",
+                  border: "none",
+                  background: "transparent",
+                  color: T.ink,
+                  textAlign: "left",
+                  cursor: "pointer",
+                  fontSize: 12,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function StatCard({ label, value, unit, note, icon: Icon, onClick }) {
+  const Tag = onClick ? "button" : "div";
+
+  return (
+    <Tag
+      type={onClick ? "button" : undefined}
+      onClick={onClick}
+      className={onClick ? "vr-focus vr-lift" : "vr-lift"}
+      style={{
+        width: "100%",
+        textAlign: "left",
+        border: `1px solid ${T.line}`,
+        borderRadius: 18,
+        background: T.mist,
+        padding: 16,
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        minWidth: 0,
+        cursor: onClick ? "pointer" : "default",
+        fontFamily: "inherit",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          color: T.muted,
+          fontSize: 11,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: 0.6,
+        }}
+      >
+        {Icon && <Icon size={13} />}
+        {label}
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 5,
+        }}
+      >
+        <span
+          style={{
+            fontFamily: FONT_DISPLAY,
+            fontSize: 28,
+            color: T.ink,
+            lineHeight: 1.1,
+          }}
+        >
+          {value}
+        </span>
+
+        {unit && (
+          <span
+            style={{
+              color: T.muted,
+              fontSize: 11,
+            }}
+          >
+            {unit}
+          </span>
+        )}
+      </div>
+
+      {note && (
+        <div
+          style={{
+            color: T.muted,
+            fontSize: 11,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+          title={note}
+        >
+          {note}
+        </div>
+      )}
+    </Tag>
+  );
+}
+
+function LeaderCard({
+  label,
+  name,
+  primary,
+  secondary,
+  tone,
+  icon: Icon,
+  onOpen,
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="vr-focus vr-lift w-full text-left"
+      style={{
+        background: T.card,
+        border: `1px solid ${T.line}`,
+        borderLeft: `3px solid ${tone}`,
+        borderRadius: 16,
+        padding: "18px 20px",
+        cursor: "pointer",
+      }}
+    >
+      <div
+        className="flex items-center gap-1.5 text-xs font-bold uppercase"
+        style={{ letterSpacing: "0.1em", color: T.muted, fontSize: 11 }}
+      >
+        <Icon size={13} style={{ color: tone }} />
+        {label}
+      </div>
+      <div
+        className="mt-3 truncate"
+        style={{
+          fontFamily: FONT_DISPLAY,
+          fontSize: 24,
+          lineHeight: 1.15,
+          color: T.ink,
+        }}
+      >
+        {name || "—"}
+      </div>
+      <div
+        className="mt-2"
+        style={{ fontFamily: FONT_NUM, fontSize: 13, color: T.deep }}
+      >
+        {primary}
+      </div>
+      <div className="mt-0.5" style={{ fontSize: 12, color: T.slate }}>
+        {secondary}
+      </div>
+    </button>
+  );
+}
+
+function SortHeader({ label, col, sort, setSort, align = "right" }) {
+  const active = sort.col === col;
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        setSort({ col, dir: active && sort.dir === "desc" ? "asc" : "desc" })
+      }
+      className="vr-focus flex w-full items-center gap-1 text-xs font-semibold uppercase"
+      style={{
+        justifyContent: align === "right" ? "flex-end" : "flex-start",
+        letterSpacing: "0.06em",
+        color: active ? T.ink : T.muted,
+        background: "none",
+        border: "none",
+        padding: "2px 0",
+        cursor: "pointer",
+      }}
+    >
+      {label}
+      {active ? (
+        sort.dir === "desc" ? (
+          <ArrowDown size={12} style={{ color: T.flame }} />
+        ) : (
+          <ArrowUp size={12} style={{ color: T.flame }} />
+        )
+      ) : (
+        <ArrowDown size={12} style={{ color: "#C7D4DE" }} />
+      )}
+    </button>
+  );
+}
+
+function ConfigSwatch({ configs }) {
+  const list = configs?.length ? configs : [null];
+  return (
+    <span
+      className="flex flex-col overflow-hidden rounded-full"
+      style={{ width: 6, height: 28 }}
+    >
+      {list.map((c, i) => (
+        <span key={`${c}-${i}`} style={{ flex: 1, background: bedColor(c) }} />
+      ))}
+    </span>
+  );
+}
+
+function SplitBar({
+  leftLabel,
+  left,
+  rightLabel,
+  right,
+  leftColor = T.deep,
+  rightColor = T.flame,
+}) {
+  const total = Number(left || 0) + Number(right || 0) || 1;
+  return (
+    <div>
+      <div
+        className="flex overflow-hidden rounded-full"
+        style={{ height: 10, background: T.mist }}
+      >
+        <div
+          style={{ width: `${(left / total) * 100}%`, background: leftColor }}
+        />
+        <div
+          style={{ width: `${(right / total) * 100}%`, background: rightColor }}
+        />
+      </div>
+      <div
+        className="mt-2 flex justify-between text-xs"
+        style={{ color: T.muted }}
+      >
+        <span>
+          <span
+            className="mr-1.5 inline-block rounded-full align-middle"
+            style={{ width: 8, height: 8, background: leftColor }}
+          />
+          {leftLabel} {n0(left)} · {pct(left, total)}
+        </span>
+        <span>
+          {rightLabel} {n0(right)} · {pct(right, total)}
+          <span
+            className="ml-1.5 inline-block rounded-full align-middle"
+            style={{ width: 8, height: 8, background: rightColor }}
+          />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ScrollShell({ children, maxHeight = 400 }) {
+  return (
+    <div
+      className="vr-scroll"
+      style={{
+        overflow: "auto",
+        maxHeight,
+        border: `1px solid ${T.line}`,
+        borderRadius: 12,
+        background: T.card,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Section({ title, action, children }) {
+  return (
+    <section style={{ marginTop: 24 }}>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3
+          className="text-xs font-bold uppercase"
+          style={{ letterSpacing: "0.1em", color: T.ink, fontSize: 11 }}
+        >
+          {title}
+        </h3>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Empty({ children }) {
+  return (
+    <div
+      style={{
+        padding: 34,
+        textAlign: "center",
+        color: T.slate,
+        fontSize: 13,
+        border: `1px dashed ${T.line}`,
+        borderRadius: 14,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SidePanel — drag the left edge to resize, or use the expand button
+   ═════════════════════════════════════════════════════════════════════════ */
+
+const MIN_PANEL = 360;
+
+function SidePanel({ eyebrow, title, subtitle, onClose, children }) {
+  const [width, setWidth] = useState(() =>
+    Math.min(900, Math.max(MIN_PANEL, Math.round(window.innerWidth * 0.62))),
+  );
+  const [expanded, setExpanded] = useState(false);
+  const restoreWidth = useRef(width);
+  const dragging = useRef(false);
+
+  const maxWidth = () =>
+    Math.max(0, window.innerWidth - (window.innerWidth <= 640 ? 0 : 24));
+
+  const onPointerDown = useCallback((e) => {
+    dragging.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }, []);
+
+  const onPointerMove = useCallback((e) => {
+    if (!dragging.current) return;
+    const next = Math.min(
+      Math.max(window.innerWidth - e.clientX, MIN_PANEL),
+      maxWidth(),
+    );
+    setWidth(next);
+    setExpanded(false);
+  }, []);
+
+  const endDrag = useCallback((e) => {
+    if (!dragging.current) return;
+    dragging.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* pointer already released */
+    }
+  }, []);
+
+  const toggleExpand = () => {
+    if (expanded) {
+      setWidth(restoreWidth.current);
+      setExpanded(false);
+    } else {
+      restoreWidth.current = width;
+      setWidth(maxWidth());
+      setExpanded(true);
+    }
+  };
+
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setWidth((current) => Math.min(current, maxWidth()));
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  return (
+    <>
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 900,
+          background: "rgba(26,39,51,0.42)",
+        }}
+        onClick={onClose}
+      />
+      <aside
+        className="visits-side-panel"
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 901,
+          width,
+          maxWidth: "100vw",
+          background: T.mist,
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "-24px 0 60px rgba(26,39,51,0.24)",
+        }}
+      >
+        {/* Resize handle */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize panel"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onDoubleClick={toggleExpand}
+          style={{
+            position: "absolute",
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 10,
+            marginLeft: -5,
+            cursor: "col-resize",
+            zIndex: 5,
+            touchAction: "none",
+          }}
+        >
+          <div
+            className="vr-grip"
+            style={{
+              position: "absolute",
+              left: 5,
+              top: 0,
+              bottom: 0,
+              width: 3,
+              background: T.flame,
+            }}
+          />
+        </div>
+
+        <header
+          className="flex items-start justify-between gap-4"
+          style={{ background: T.ink, padding: "20px 22px" }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div
+              className="text-xs font-bold uppercase"
+              style={{ letterSpacing: "0.1em", color: T.flame, fontSize: 11 }}
+            >
+              {eyebrow}
+            </div>
+            <h2
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontSize: 30,
+                color: "#fff",
+                margin: "4px 0 0",
+                lineHeight: 1.1,
+              }}
+            >
+              {title}
+            </h2>
+            {subtitle && (
+              <div className="mt-1" style={{ fontSize: 12, color: "#9FC0D2" }}>
+                {subtitle}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={toggleExpand}
+              className="vr-focus"
+              style={{
+                borderRadius: 999,
+                padding: 7,
+                background: "rgba(255,255,255,0.12)",
+                color: "#fff",
+                border: "none",
+                cursor: "pointer",
+              }}
+              aria-label={expanded ? "Shrink panel" : "Expand panel"}
+              title={expanded ? "Shrink panel" : "Expand panel"}
+            >
+              {expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="vr-focus"
+              style={{
+                borderRadius: 999,
+                padding: 7,
+                background: "rgba(255,255,255,0.12)",
+                color: "#fff",
+                border: "none",
+                cursor: "pointer",
+              }}
+              aria-label="Close panel"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </header>
+
+        <div
+          className="vr-scroll visits-panel-body"
+          style={{ flex: 1, overflowY: "auto" }}
+        >
+          {children}
+        </div>
+      </aside>
+    </>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Drill-down panel — villa or bedroom count
+   ═════════════════════════════════════════════════════════════════════════ */
+
+function DrillPanel({ selection, tab, params, period, onClose, onOpenVilla }) {
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [trend, setTrend] = useState([]);
+  const [groupBy, setGroupBy] = useState("month");
+  const [sort, setSort] = useState({ col: "check_in_date", dir: "desc" });
+  const [search, setSearch] = useState("");
+
+  const isVilla = selection.kind === "villa";
+  const selKey = selection.key;
+  const selLabel = selection.label;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setSearch("");
+
+    const load = isVilla
+      ? analyticsApi.villaSourceBookings(selKey, {
+          ...params,
+          ...(tab === "paid" ? { is_free: false } : {}),
+          ...(tab === "free" ? { is_free: true } : {}),
+        })
+      : analyticsApi.bedroomBookings(selKey, params);
+
+    load
+      .then((data) => {
+        if (!cancelled) setRecords(Array.isArray(data) ? data : []);
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) setRecords([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selKey, isVilla, tab, params]);
+
+  useEffect(() => {
+    if (!isVilla) {
+      setTrend([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const trendParams = groupBy === "year" ? {} : params;
+    analyticsApi
+      .villaMonthly(selKey, { group_by: groupBy, ...trendParams })
+      .then((data) => {
+        if (!cancelled) setTrend(Array.isArray(data) ? data : []);
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) setTrend([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selKey, isVilla, groupBy, params]);
+
+  const amountOf = (r) => Number(r.total_amount ?? r.revenue ?? 0);
+
+  const totals = useMemo(() => {
+    const bookings = records.length;
+    const nights = records.reduce((s, r) => s + Number(r.nights || 0), 0);
+    const guests = records.reduce((s, r) => s + Number(r.persons || 0), 0);
+    const paidRows = records.filter((r) => !r.is_free);
+    const compRows = records.filter((r) => r.is_free);
     return {
-      year: filter.year === "All" ? null : Number(filter.year),
-      month: filter.month === "All" ? null : months.indexOf(filter.month),
+      bookings,
+      nights,
+      revenue: paidRows.reduce((s, r) => s + amountOf(r), 0),
+      compValue: compRows.reduce((s, r) => s + amountOf(r), 0),
+      avgStay: bookings ? nights / bookings : null,
+      avgParty: bookings ? guests / bookings : null,
+      paid: paidRows.length,
+      comp: compRows.length,
+      hasFreeFlag: records.some((r) => r.is_free !== undefined),
     };
-  };
+  }, [records]);
 
-  const dateFilterFilePart = (filter) => {
-    if (filter.mode === "day") return filter.date || "all_dates";
-    if (filter.mode === "range") {
-      return filter.startDate && filter.endDate
-        ? `${filter.startDate}_to_${filter.endDate}`
-        : "all_dates";
-    }
-    return `${filter.year}_${filter.month}`;
-  };
-
-  // ── Top-level view ────────────────────────────────────────────────────────
-  const [topView, setTopView] = useState("overall");
-
-  // ── Tab-level data ────────────────────────────────────────────────────────
-  const [summaryData, setSummaryData] = useState({});
-  const [villaChartData, setVillaChartData] = useState([]);
-  const [villaTableData, setVillaTableData] = useState([]);
-  const [villaMonthlyData, setVillaMonthlyData] = useState([]);
-  const [bookingsByBedroomData, setBookingsByBedroomData] = useState([]);
-  const [monthlyRevenueData, setMonthlyRevenueData] = useState([]);
-  const [visitsDataLoading, setVisitsDataLoading] = useState(false);
-
-  const [summaryFilter, setSummaryFilter] = useState(createDateFilter);
-  const [villaChartFilter, setVillaChartFilter] = useState(createDateFilter);
-  const [villaTableFilter, setVillaTableFilter] = useState(createDateFilter);
-  const [selectedVillaChartFilter, setSelectedVillaChartFilter] =
-    useState(createDateFilter);
-  const [bedroomChartFilter, setBedroomChartFilter] =
-    useState(createDateFilter);
-  const [monthlyChartFilter, setMonthlyChartFilter] =
-    useState(createDateFilter);
-
-  const [villaTableSearch, setVillaTableSearch] = useState("");
-  const [villaTableSortKey, setVillaTableSortKey] = useState("bookings");
-  const [villaTableSortDir, setVillaTableSortDir] = useState("desc");
-
-  const [peopleSearch, setPeopleSearch] = useState("");
-  const [peopleSortKey, setPeopleSortKey] = useState("bookings");
-  const [peopleSortDir, setPeopleSortDir] = useState("desc");
-
-  const [bedroomSearch, setBedroomSearch] = useState("");
-  const [bedroomSortKey, setBedroomSortKey] = useState("check_in_date");
-  const [bedroomSortDir, setBedroomSortDir] = useState("desc");
-
-  const [villaBookingSearch, setVillaBookingSearch] = useState("");
-  const [villaBookingSortKey, setVillaBookingSortKey] =
-    useState("check_in_date");
-  const [villaBookingSortDir, setVillaBookingSortDir] = useState("desc");
-
-  const summaryFilters = useMemo(
-    () => toDateParams(summaryFilter),
-    [summaryFilter],
-  );
-  const villaChartFilters = useMemo(
-    () => toDateParams(villaChartFilter),
-    [villaChartFilter],
-  );
-  const villaTableFilters = useMemo(
-    () => toDateParams(villaTableFilter),
-    [villaTableFilter],
-  );
-  const selectedVillaChartFilters = useMemo(
-    () => toDateParams(selectedVillaChartFilter),
-    [selectedVillaChartFilter],
-  );
-  const bedroomChartFilters = useMemo(
-    () => toDateParams(bedroomChartFilter),
-    [bedroomChartFilter],
-  );
-  const monthlyChartFilters = useMemo(
-    () => toDateParams(monthlyChartFilter),
-    [monthlyChartFilter],
-  );
-
-  useEffect(() => {
-    if (topView !== "overall") return;
-    let cancelled = false;
-    async function loadSummary() {
-      setVisitsDataLoading(true);
-      try {
-        const data = await analyticsApi.visitsRoomsDashboard(summaryFilters);
-        if (cancelled) return;
-        setSummaryData(data?.summary ?? {});
-      } catch (err) {
-        console.error(err);
-      } finally {
-        if (!cancelled) setVisitsDataLoading(false);
-      }
-    }
-    loadSummary();
-    return () => {
-      cancelled = true;
-    };
-  }, [summaryFilters, topView]);
-
-  useEffect(() => {
-    if (topView !== "overall") return;
-    let cancelled = false;
-    async function loadVillaChart() {
-      try {
-        const data = await analyticsApi.visitsRoomsDashboard(villaChartFilters);
-        if (cancelled) return;
-        setVillaChartData(
-          Array.isArray(data?.villa_stats) ? data.villa_stats : [],
-        );
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) setVillaChartData([]);
-      }
-    }
-    loadVillaChart();
-    return () => {
-      cancelled = true;
-    };
-  }, [villaChartFilters, topView]);
-
-  useEffect(() => {
-    if (topView !== "overall") return;
-    let cancelled = false;
-    async function loadVillaTable() {
-      try {
-        const data = await analyticsApi.visitsRoomsDashboard(villaTableFilters);
-        if (cancelled) return;
-        setVillaTableData(
-          Array.isArray(data?.villa_stats) ? data.villa_stats : [],
-        );
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) setVillaTableData([]);
-      }
-    }
-    loadVillaTable();
-    return () => {
-      cancelled = true;
-    };
-  }, [villaTableFilters, topView]);
-
-  useEffect(() => {
-    if (topView !== "overall") return;
-    let cancelled = false;
-    async function loadBedroomCharts() {
-      try {
-        const data =
-          await analyticsApi.visitsRoomsDashboard(bedroomChartFilters);
-        if (cancelled) return;
-        setBookingsByBedroomData(
-          Array.isArray(data?.bookings_by_bedroom)
-            ? data.bookings_by_bedroom
-            : [],
-        );
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) setBookingsByBedroomData([]);
-      }
-    }
-    loadBedroomCharts();
-    return () => {
-      cancelled = true;
-    };
-  }, [bedroomChartFilters, topView]);
-
-  useEffect(() => {
-    if (topView !== "overall") return;
-    let cancelled = false;
-    async function loadMonthlyTrends() {
-      try {
-        const data =
-          await analyticsApi.visitsRoomsDashboard(monthlyChartFilters);
-        if (cancelled) return;
-        setMonthlyRevenueData(
-          Array.isArray(data?.monthly_revenue) ? data.monthly_revenue : [],
-        );
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) setMonthlyRevenueData([]);
-      }
-    }
-    loadMonthlyTrends();
-    return () => {
-      cancelled = true;
-    };
-  }, [monthlyChartFilters, topView]);
-
-  const [villaMonthlyGroupBy, setVillaMonthlyGroupBy] = useState("month");
-
-  const villaMonthlyFilters =
-    villaMonthlyGroupBy === "year"
-      ? { ...selectedVillaChartFilters, year: null, month: null }
-      : selectedVillaChartFilters;
-
-  useEffect(() => {
-    if (!selectedVillaName || topView !== "overall") return;
-    let cancelled = false;
-    async function loadSelectedVillaMonthly() {
-      try {
-        const data = await analyticsApi.villaMonthly(selectedVillaName, {
-          group_by: villaMonthlyGroupBy,
-          ...villaMonthlyFilters,
+  const breakdown = useMemo(() => {
+    const key = isVilla ? "bedroom_count" : "villa_name";
+    const map = new Map();
+    records.forEach((r) => {
+      const k = r[key] ?? "Unknown";
+      if (!map.has(k))
+        map.set(k, {
+          key: k,
+          bookings: 0,
+          nights: 0,
+          value: 0,
+          guests: 0,
+          paid: 0,
+          comp: 0,
         });
-        if (cancelled) return;
-        setVillaMonthlyData(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) setVillaMonthlyData([]);
-      }
-    }
-    loadSelectedVillaMonthly();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    selectedVillaName,
-    selectedVillaChartFilters,
-    villaMonthlyGroupBy,
-    topView,
-  ]);
+      const e = map.get(k);
+      e.bookings += 1;
+      e.nights += Number(r.nights || 0);
+      e.guests += Number(r.persons || 0);
+      e.value += amountOf(r);
+      if (r.is_free) e.comp += 1;
+      else e.paid += 1;
+    });
+    const arr = [...map.values()];
+    return isVilla
+      ? arr.sort((a, b) => Number(a.key) - Number(b.key))
+      : arr.sort((a, b) => b.bookings - a.bookings);
+  }, [records, isVilla]);
 
-  const tableVillas = villaTableData;
-
-  const filteredTableVillas = useMemo(() => {
-    const searched = searchRows(tableVillas, villaTableSearch);
-    return sortRows(searched, villaTableSortKey, villaTableSortDir);
-  }, [tableVillas, villaTableSearch, villaTableSortKey, villaTableSortDir]);
-
-  const chartVillas = villaChartData;
-
-  const villaBookingCount = (v) => Number(v?.bookings ?? 0);
-
-  const bookingCounts = chartVillas.map(villaBookingCount);
-  const positiveBookingCounts = bookingCounts.filter((n) => n > 0);
-
-  const mostBookingValue = bookingCounts.length
-    ? Math.max(...bookingCounts)
-    : null;
-
-  const leastBookingValue = positiveBookingCounts.length
-    ? Math.min(...positiveBookingCounts)
-    : null;
-
-  const mostVillaTies =
-    mostBookingValue == null
-      ? []
-      : chartVillas.filter((v) => villaBookingCount(v) === mostBookingValue);
-
-  const leastVillaTies =
-    leastBookingValue == null
-      ? []
-      : chartVillas.filter((v) => villaBookingCount(v) === leastBookingValue);
-
-  const mostVilla = mostVillaTies[0] ?? null;
-  const leastVilla = leastVillaTies[0] ?? null;
-
-  const selectedVilla =
-    tableVillas.find((v) => v.villa_name === selectedVillaName) ??
-    mostVilla ??
-    null;
-
-  const bedroomsLabel = (villa) => {
-    if (!villa) return "—";
-    if (villa.bedroom_counts) {
-      return String(villa.bedroom_counts)
-        .split(",")
-        .map((x) => x.trim())
-        .filter(Boolean)
-        .join(", ");
-    }
-    return villa.bedroom_count ?? "—";
-  };
-
-  // ── Villa modal ───────────────────────────────────────────────────────────
-  const [villaModalOpen, setVillaModalOpen] = useState(false);
-  const [villaBookings, setVillaBookings] = useState([]);
-  const [villaBookingsLoading, setVillaBookingsLoading] = useState(false);
-  const [villaModalFilter, setVillaModalFilter] = useState(createDateFilter);
-
-  const villaModalFilters = useMemo(
-    () => toDateParams(villaModalFilter),
-    [villaModalFilter],
+  const visibleRecords = useMemo(
+    () => sortRows(searchRows(records, search), sort.col, sort.dir),
+    [records, search, sort],
   );
 
-  useEffect(() => {
-    if (!villaModalOpen || !selectedVillaName) return;
-    let cancelled = false;
-    async function load() {
-      setVillaBookingsLoading(true);
-      try {
-        const data = await analyticsApi.villaBookings(
-          selectedVillaName,
-          villaModalFilters,
-        );
-        if (!cancelled) setVillaBookings(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) setVillaBookings([]);
-      } finally {
-        if (!cancelled) setVillaBookingsLoading(false);
-      }
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [villaModalOpen, selectedVillaName, villaModalFilters]);
-
-  const openVillaModal = (villaName) => {
-    if (!villaName) return;
-    onVillaSelect(villaName);
-    setVillaModalFilter(createDateFilter());
-    setVillaModalOpen(true);
-  };
-
-  // ── Bedroom modal ─────────────────────────────────────────────────────────
-  const [bedroomModalOpen, setBedroomModalOpen] = useState(false);
-  const [selectedBedroom, setSelectedBedroom] = useState(null);
-  const [bedroomBookings, setBedroomBookings] = useState([]);
-  const [bedroomBookingsLoading, setBedroomBookingsLoading] = useState(false);
-  const [bedroomModalFilter, setBedroomModalFilter] =
-    useState(createDateFilter);
-
-  const bedroomModalFilters = useMemo(
-    () => toDateParams(bedroomModalFilter),
-    [bedroomModalFilter],
-  );
-
-  useEffect(() => {
-    if (!bedroomModalOpen || !selectedBedroom) return;
-    let cancelled = false;
-    async function load() {
-      setBedroomBookingsLoading(true);
-      try {
-        const data = await analyticsApi.bedroomBookings(
-          selectedBedroom,
-          bedroomModalFilters,
-        );
-        if (!cancelled) setBedroomBookings(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) setBedroomBookings([]);
-      } finally {
-        if (!cancelled) setBedroomBookingsLoading(false);
-      }
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [bedroomModalOpen, selectedBedroom, bedroomModalFilters]);
-
-  const openBedroomModal = (beds) => {
-    if (!beds) return;
-    setSelectedBedroom(beds);
-    setBedroomModalFilter(createDateFilter());
-    setBedroomModalOpen(true);
-  };
-
-  // ── People modal ──────────────────────────────────────────────────────────
-  const [peopleModalOpen, setPeopleModalOpen] = useState(false);
-  const [peopleKind, setPeopleKind] = useState("members");
-  const [peopleRows, setPeopleRows] = useState([]);
-  const [peopleLoading, setPeopleLoading] = useState(false);
-  const [peopleFilter, setPeopleFilter] = useState(createDateFilter);
-
-  const peopleFilters = useMemo(
-    () => toDateParams(peopleFilter),
-    [peopleFilter],
-  );
-
-  useEffect(() => {
-    if (!peopleModalOpen) return;
-    let cancelled = false;
-    async function load() {
-      setPeopleLoading(true);
-      try {
-        const data = await analyticsApi.bookedPeople(peopleKind, peopleFilters);
-        if (!cancelled) setPeopleRows(Array.isArray(data) ? data : []);
-      } catch (err) {
-        console.error(err);
-        if (!cancelled) setPeopleRows([]);
-      } finally {
-        if (!cancelled) setPeopleLoading(false);
-      }
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [peopleModalOpen, peopleKind, peopleFilters]);
-
-  const openPeopleModal = (kind) => {
-    setPeopleKind(kind);
-    setPeopleFilter(createDateFilter());
-    setPeopleModalOpen(true);
-  };
-
-  const filteredPeopleRows = useMemo(() => {
-    const searched = searchRows(peopleRows, peopleSearch);
-    return sortRows(searched, peopleSortKey, peopleSortDir);
-  }, [peopleRows, peopleSearch, peopleSortKey, peopleSortDir]);
-
-  const filteredBedroomBookings = useMemo(() => {
-    const searched = searchRows(bedroomBookings, bedroomSearch);
-    return sortRows(searched, bedroomSortKey, bedroomSortDir);
-  }, [bedroomBookings, bedroomSearch, bedroomSortKey, bedroomSortDir]);
-
-  const filteredVillaBookings = useMemo(() => {
-    const searched = searchRows(villaBookings, villaBookingSearch);
-    return sortRows(searched, villaBookingSortKey, villaBookingSortDir);
-  }, [
-    villaBookings,
-    villaBookingSearch,
-    villaBookingSortKey,
-    villaBookingSortDir,
-  ]);
-
-  const today = new Date().toISOString().split("T")[0];
-
-  const villaBedroomLabel = (villa) =>
-    villa?.bedroom_count != null && villa?.bedroom_count !== ""
-      ? villa.bedroom_count
-      : bedroomsLabel(villa);
-
-  const villaPerformanceRows = filteredTableVillas.map((v) => ({
-    Villa: v.villa_name ?? "",
-    Bedrooms: villaBedroomLabel(v),
-    Bookings: v.bookings ?? "",
-    "Room Nights": v.total_nights ?? "",
-    "Avg Stay": v.avg_stay ?? "",
-    Revenue: v.revenue ?? "",
+  const exportData = visibleRecords.map((r) => ({
+    Selection: selLabel,
+    Guest: r.member_full_name || r.member_name || r.guest_name || "",
+    "Member #": r.member_number ?? "",
+    Email: r.email ?? "",
+    Phone: r.phone ?? "",
+    Country: r.country ?? "",
+    Villa: r.villa_name ?? "",
+    Bedrooms: r.bedroom_count ?? "",
+    Source: r.source ?? "",
+    "Paid / Comp": r.is_free === undefined ? "" : r.is_free ? "Comp" : "Paid",
+    Value: amountOf(r),
+    "Check In": r.check_in_date ?? "",
+    "Check Out": r.check_out_date ?? "",
+    Nights: r.nights ?? "",
+    Guests: r.persons ?? "",
+    "Conf Code": r.conf_code ?? "",
   }));
 
-  const villaPerformanceFilename = `villa_performance_by_bedroom_${safeFilePart(dateFilterFilePart(villaTableFilter))}_${today}`;
+  const headValue = tab === "free" ? totals.compValue : totals.revenue;
 
-  const peopleExportRows = filteredPeopleRows.map((p) => ({
-    Name:
-      p.member_full_name ||
-      p.member_name ||
-      p.folio_guest_name ||
-      p.guest_name ||
-      "",
-    Title: p.title ?? p.prefix ?? "",
-    Email: p.email ?? "",
-    Phone: p.phone ?? p.telephone ?? p.phone_number ?? "",
-    Address: p.address ?? "",
-    Country: p.country ?? "",
-    State: p.state ?? "",
+  return (
+    <SidePanel
+      eyebrow={`${isVilla ? "Villa" : "Bedroom layout"} · ${
+        tab === "overall"
+          ? "All bookings"
+          : tab === "paid"
+            ? "Paid only"
+            : "Comp only"
+      }`}
+      title={selLabel}
+      subtitle={`${periodText(period)}${
+        isVilla && selection.configs?.length
+          ? ` · lets as ${selection.configs.join(" / ")} bedrooms`
+          : ""
+      }`}
+      onClose={onClose}
+    >
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[
+          [tab === "free" ? "Comp value" : "Revenue", money(headValue)],
+          ["Bookings", n0(totals.bookings)],
+          [
+            "Avg stay",
+            totals.avgStay == null ? "—" : `${n1(totals.avgStay)} n`,
+          ],
+          ["Avg party", totals.avgParty == null ? "—" : n1(totals.avgParty)],
+        ].map(([l, v]) => (
+          <div
+            key={l}
+            style={{
+              background: T.card,
+              border: `1px solid ${T.line}`,
+              borderRadius: 12,
+              padding: 14,
+            }}
+          >
+            <div
+              className="text-xs font-bold uppercase"
+              style={{ letterSpacing: "0.08em", color: T.muted, fontSize: 10 }}
+            >
+              {l}
+            </div>
+            <div
+              style={{
+                fontFamily: FONT_DISPLAY,
+                fontSize: 24,
+                color: T.ink,
+                marginTop: 4,
+              }}
+            >
+              {v}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {tab === "free" && (
+        <div
+          className="mt-3 rounded-lg p-3 text-xs"
+          style={{
+            background: "#FFF4E6",
+            color: "#8A5A20",
+            border: "1px solid #F5DDBC",
+          }}
+        >
+          Comp stays bill nothing. The figure above is the rack value of{" "}
+          {n0(totals.nights)} room nights given away.
+        </div>
+      )}
+
+      {breakdown.length > 0 && (
+        <Section
+          title={
+            isVilla
+              ? "By bedroom layout"
+              : `Villas at this size (${breakdown.length})`
+          }
+        >
+          {isVilla ? (
+            <div style={{ display: "grid", gap: 8 }}>
+              {breakdown.map((c) => (
+                <div
+                  key={c.key}
+                  style={{
+                    background: T.card,
+                    border: `1px solid ${T.line}`,
+                    borderRadius: 12,
+                    padding: 14,
+                  }}
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <span
+                      className="flex items-center gap-2"
+                      style={{ color: T.ink, fontSize: 13 }}
+                    >
+                      <span
+                        style={{
+                          width: 10,
+                          height: 10,
+                          borderRadius: 3,
+                          background: bedColor(Number(c.key)),
+                          display: "inline-block",
+                        }}
+                      />
+                      {c.key === "Unknown"
+                        ? "Bedroom count not set"
+                        : `${c.key} bedroom`}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: FONT_NUM,
+                        color: T.deep,
+                        fontSize: 13,
+                      }}
+                    >
+                      {money(c.value)}
+                    </span>
+                  </div>
+                  <div
+                    className="flex flex-wrap"
+                    style={{ gap: "4px 18px", fontSize: 12, color: T.slate }}
+                  >
+                    <span>
+                      <b style={{ fontFamily: FONT_NUM, color: T.ink }}>
+                        {n0(c.bookings)}
+                      </b>{" "}
+                      bookings
+                    </span>
+                    <span>
+                      <b style={{ fontFamily: FONT_NUM, color: T.ink }}>
+                        {n0(c.nights)}
+                      </b>{" "}
+                      nights
+                    </span>
+                    <span>
+                      <b style={{ fontFamily: FONT_NUM, color: T.ink }}>
+                        {n1(c.nights / (c.bookings || 1))}
+                      </b>{" "}
+                      avg stay
+                    </span>
+                    <span>
+                      <b style={{ fontFamily: FONT_NUM, color: T.ink }}>
+                        {n1(c.guests / (c.bookings || 1))}
+                      </b>{" "}
+                      avg party
+                    </span>
+                    {tab === "overall" && totals.hasFreeFlag && (
+                      <span>
+                        <b style={{ fontFamily: FONT_NUM, color: T.ink }}>
+                          {n0(c.paid)}
+                        </b>{" "}
+                        paid ·{" "}
+                        <b style={{ fontFamily: FONT_NUM, color: T.ink }}>
+                          {n0(c.comp)}
+                        </b>{" "}
+                        comp
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <ScrollShell maxHeight={260}>
+              <table
+                style={{
+                  width: "100%",
+                  borderCollapse: "collapse",
+                  fontSize: 12,
+                }}
+              >
+                <tbody>
+                  {breakdown.map((v) => (
+                    <tr
+                      key={v.key}
+                      className="vr-row"
+                      onClick={() => onOpenVilla(v.key)}
+                      style={{
+                        borderTop: `1px solid ${T.line}`,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <td style={{ padding: "9px 12px", color: T.ink }}>
+                        {v.key}
+                      </td>
+                      <td
+                        style={{
+                          padding: "9px 8px",
+                          textAlign: "right",
+                          color: T.slate,
+                          fontFamily: FONT_NUM,
+                        }}
+                      >
+                        {n0(v.bookings)}
+                      </td>
+                      <td
+                        style={{
+                          padding: "9px 12px",
+                          textAlign: "right",
+                          color: T.deep,
+                          fontFamily: FONT_NUM,
+                        }}
+                      >
+                        {moneyShort(v.value)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </ScrollShell>
+          )}
+        </Section>
+      )}
+
+      {isVilla && (
+        <Section
+          title={`Bookings by ${groupBy === "year" ? "year" : "month"}`}
+          action={
+            <Segmented
+              size="sm"
+              value={groupBy}
+              onChange={setGroupBy}
+              options={[
+                { value: "month", label: "Month" },
+                { value: "year", label: "Year" },
+              ]}
+            />
+          }
+        >
+          <div
+            style={{
+              background: T.card,
+              border: `1px solid ${T.line}`,
+              borderRadius: 14,
+              padding: 12,
+              height: 220,
+            }}
+          >
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={trend}
+                margin={{ top: 6, right: 8, left: -18, bottom: 0 }}
+              >
+                <CartesianGrid vertical={false} stroke={T.lineSoft} />
+                <XAxis
+                  dataKey={groupBy === "year" ? "year" : "month"}
+                  tick={{ fill: T.slate, fontSize: 11 }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={{ fill: T.slate, fontSize: 11 }}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <Tooltip
+                  contentStyle={TIP_STYLE}
+                  cursor={{ fill: "rgba(0,58,89,0.05)" }}
+                />
+                <Bar dataKey="bookings" fill={T.deep} radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          {groupBy === "year" && (
+            <p className="mt-2" style={{ fontSize: 12, color: T.slate }}>
+              Yearly view ignores the page date period so the trend stays
+              comparable.
+            </p>
+          )}
+        </Section>
+      )}
+
+      {tab === "overall" &&
+        totals.hasFreeFlag &&
+        totals.paid + totals.comp > 0 && (
+          <Section title="Paid vs comp split">
+            <div
+              style={{
+                background: T.card,
+                border: `1px solid ${T.line}`,
+                borderRadius: 14,
+                padding: 16,
+              }}
+            >
+              <SplitBar
+                leftLabel="Paid"
+                left={totals.paid}
+                rightLabel="Comp"
+                right={totals.comp}
+              />
+            </div>
+          </Section>
+        )}
+
+      <Section
+        title={`Guest records · ${n0(visibleRecords.length)} of ${n0(records.length)}`}
+        action={
+          <div className="flex items-center gap-2">
+            <div
+              className="flex items-center gap-2 rounded-full px-3 py-1.5"
+              style={{ background: T.card, border: `1px solid ${T.line}` }}
+            >
+              <Search size={13} style={{ color: T.slate }} />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search records"
+                className="vr-focus"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  outline: "none",
+                  width: 130,
+                  fontSize: 12,
+                  color: T.ink,
+                }}
+              />
+            </div>
+            <ExportMenu
+              rows={exportData}
+              filenameBase={`${safeFilePart(selLabel)}_records_${safeFilePart(periodFilePart(period))}`}
+              disabled={loading || !exportData.length}
+            />
+          </div>
+        }
+      >
+        {loading ? (
+          <Empty>Loading booking records…</Empty>
+        ) : !records.length ? (
+          <Empty>
+            No bookings match the current period and payment filters.
+          </Empty>
+        ) : (
+          <ScrollShell maxHeight={420}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 12,
+                minWidth: 720,
+              }}
+            >
+              <thead>
+                <tr>
+                  {[
+                    ["Guest", "member_full_name", "left"],
+                    isVilla
+                      ? ["Beds", "bedroom_count", "right"]
+                      : ["Villa", "villa_name", "left"],
+                    ["Check in", "check_in_date", "right"],
+                    ["Nights", "nights", "right"],
+                    ["Party", "persons", "right"],
+                    isVilla ? ["Source", "source", "left"] : null,
+                    ["Value", isVilla ? "total_amount" : "revenue", "right"],
+                  ]
+                    .filter(Boolean)
+                    .map(([label, col, align]) => (
+                      <th
+                        key={col}
+                        style={{
+                          position: "sticky",
+                          top: 0,
+                          zIndex: 1,
+                          background: T.card,
+                          borderBottom: `1px solid ${T.line}`,
+                          padding: "9px 10px",
+                        }}
+                      >
+                        <SortHeader
+                          label={label}
+                          col={col}
+                          sort={sort}
+                          setSort={setSort}
+                          align={align}
+                        />
+                      </th>
+                    ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRecords.map((r, i) => (
+                  <tr
+                    key={r.conf_code ?? i}
+                    className="vr-row"
+                    style={{ borderTop: `1px solid ${T.lineSoft}` }}
+                  >
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        color: T.ink,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {r.member_full_name ||
+                        r.member_name ||
+                        r.guest_name ||
+                        "—"}
+                      <div style={{ color: T.slate, fontSize: 10 }}>
+                        #{r.member_number ?? "—"} · {r.conf_code ?? "—"}
+                      </div>
+                    </td>
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        textAlign: isVilla ? "right" : "left",
+                        color: T.muted,
+                        fontFamily: isVilla ? FONT_NUM : "inherit",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {isVilla
+                        ? (r.bedroom_count ?? "—")
+                        : (r.villa_name ?? "—")}
+                    </td>
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        textAlign: "right",
+                        color: T.muted,
+                        fontFamily: FONT_NUM,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {r.check_in_date ?? "—"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        textAlign: "right",
+                        color: T.ink,
+                        fontFamily: FONT_NUM,
+                      }}
+                    >
+                      {n0(r.nights)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        textAlign: "right",
+                        color: T.ink,
+                        fontFamily: FONT_NUM,
+                      }}
+                    >
+                      {n0(r.persons)}
+                    </td>
+                    {isVilla && (
+                      <td
+                        style={{
+                          padding: "9px 10px",
+                          color: T.muted,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {r.source ?? "—"}
+                      </td>
+                    )}
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        textAlign: "right",
+                        fontFamily: FONT_NUM,
+                        color: r.is_free ? "#B07B33" : T.deep,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {money(amountOf(r))}
+                      {r.is_free && (
+                        <div style={{ fontSize: 9, color: T.slate }}>comp</div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ScrollShell>
+        )}
+        {!isVilla && (
+          <p className="mt-2" style={{ fontSize: 12, color: T.slate }}>
+            Bedroom records come from /bedroom-bookings, which does not carry
+            the paid/comp flag — this list shows every payment type. Open a
+            villa for the split.
+          </p>
+        )}
+      </Section>
+    </SidePanel>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Member vs guest panel — opened from the Total bookings card
+   ═════════════════════════════════════════════════════════════════════════ */
+
+function MemberGuestPanel({ params, period, onClose }) {
+  const [data, setData] = useState({ members: [], guests: [] });
+  const [loading, setLoading] = useState(true);
+  const [kind, setKind] = useState("members");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState({ col: "bookings", dir: "desc" });
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    Promise.allSettled([
+      analyticsApi.bookedPeople("members", params),
+      analyticsApi.bookedPeople("guests", params),
+    ])
+      .then(([m, g]) => {
+        if (cancelled) return;
+        setData({
+          members:
+            m.status === "fulfilled" && Array.isArray(m.value) ? m.value : [],
+          guests:
+            g.status === "fulfilled" && Array.isArray(g.value) ? g.value : [],
+        });
+        if (m.status === "rejected") console.error(m.reason);
+        if (g.status === "rejected") console.error(g.reason);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [params]);
+
+  const roll = (rows) =>
+    rows.reduce(
+      (a, r) => ({
+        accounts: a.accounts + 1,
+        bookings: a.bookings + Number(r.bookings || 0),
+        nights: a.nights + Number(r.nights || 0),
+      }),
+      { accounts: 0, bookings: 0, nights: 0 },
+    );
+
+  const memberTotals = useMemo(() => roll(data.members), [data.members]);
+  const guestTotals = useMemo(() => roll(data.guests), [data.guests]);
+
+  const rows = kind === "members" ? data.members : data.guests;
+  const visible = useMemo(
+    () => sortRows(searchRows(rows, search), sort.col, sort.dir),
+    [rows, search, sort],
+  );
+
+  const exportData = visible.map((p) => ({
+    Account: kind === "members" ? "Member" : "Guest",
+    Name: p.member_full_name || p.member_name || p.folio_guest_name || "",
     "Member #": p.member_number ?? "",
     "Member Type": p.member_type ?? "",
-    Account: p.member_or_guest ?? "",
+    Email: p.email ?? "",
+    Phone: p.phone ?? "",
+    Country: p.country ?? "",
+    State: p.state ?? "",
     Bookings: p.bookings ?? "",
     Nights: p.nights ?? "",
     "First In": p.first_check_in ?? "",
     "Last Out": p.last_check_out ?? "",
   }));
 
-  const peopleFilename = `${peopleKind}_booked_${safeFilePart(dateFilterFilePart(peopleFilter))}_${today}`;
-
-  const bedroomExportRows = filteredBedroomBookings.map((b) => ({
-    Bedroom: selectedBedroom ?? "",
-    Who: b.member_full_name || b.member_name || b.guest_name || "",
-    Title: b.title ?? b.prefix ?? "",
-    Email: b.email ?? "",
-    Phone: b.phone ?? b.telephone ?? b.phone_number ?? "",
-    Address: b.address ?? "",
-    Country: b.country ?? "",
-    State: b.state ?? "",
-    Villa: b.villa_name ?? "",
-    "Check In": b.check_in_date ?? "",
-    "Check Out": b.check_out_date ?? "",
-    Nights: b.nights ?? "",
-    Guests: b.persons ?? "",
-    "Confirmation Code": b.conf_code ?? "",
-  }));
-
-  const bedroomFilename = `${safeFilePart(selectedBedroom)}_bedroom_bookings_${safeFilePart(dateFilterFilePart(bedroomModalFilter))}_${today}`;
-
-  const villaBookingRows = filteredVillaBookings.map((b) => ({
-    Villa: selectedVillaName ?? "",
-    Guest: b.member_full_name || b.member_name || b.guest_name || "",
-    Title: b.title ?? b.prefix ?? "",
-    Email: b.email ?? "",
-    Phone: b.phone ?? b.telephone ?? b.phone_number ?? "",
-    Address: b.address ?? "",
-    Country: b.country ?? "",
-    State: b.state ?? "",
-    "Member #": b.member_number ?? "",
-    "Confirmation Code": b.conf_code ?? "",
-    Revenue: b.revenue ?? "",
-    "Check In": b.check_in_date ?? "",
-    "Check Out": b.check_out_date ?? "",
-    Nights: b.nights ?? "",
-    Guests: b.persons ?? "",
-    "Guest Manifest": Array.isArray(b.guests)
-      ? b.guests
-          .map((g) => g.name || g.guest_name || g.full_name || "")
-          .filter(Boolean)
-          .join(", ")
-      : "",
-  }));
-
-  const villaBookingFilename = `${safeFilePart(selectedVillaName)}_bookings_${safeFilePart(dateFilterFilePart(villaModalFilter))}_${today}`;
-
-  // ─────────────────────────────────────────────────────────────────────────
-  const [villaChartLimit, setVillaChartLimit] = useState("15");
-
-  const visibleVillaChartData = useMemo(() => {
-    if (villaChartLimit === "All") return chartVillas;
-    return chartVillas.slice(0, Number(villaChartLimit));
-  }, [chartVillas, villaChartLimit]);
-
-  //---------------------
-
-  const [tieModalOpen, setTieModalOpen] = useState(false);
-  const [tieModalTitle, setTieModalTitle] = useState("");
-  const [tieModalRows, setTieModalRows] = useState([]);
-
-  const openTieModal = (title, rows) => {
-    setTieModalTitle(title);
-    setTieModalRows(rows);
-    setTieModalOpen(true);
-  };
-
-  ///--------------
-
-  /// ----------
   return (
-    <div className="dashboard-section">
-      {/* ── Top section: header + view toggle ──────────────────────────────── */}
+    <SidePanel
+      eyebrow="Total bookings · member vs guest"
+      title="Who booked"
+      subtitle={periodText(period)}
+      onClose={onClose}
+    >
       <div
-        className="dashboard-card"
         style={{
-          padding: 16,
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          flexWrap: "wrap",
-          alignItems: "center",
+          background: T.card,
+          border: `1px solid ${T.line}`,
+          borderRadius: 16,
+          padding: 18,
         }}
       >
+        <SplitBar
+          leftLabel="Member bookings"
+          left={memberTotals.bookings}
+          rightLabel="Guest bookings"
+          right={guestTotals.bookings}
+          leftColor={T.deep}
+          rightColor={T.flame}
+        />
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {[
+            ["Members", memberTotals, T.deep],
+            ["Guests", guestTotals, T.flame],
+          ].map(([label, t, tone]) => (
+            <div
+              key={label}
+              style={{
+                border: `1px solid ${T.line}`,
+                borderLeft: `3px solid ${tone}`,
+                borderRadius: 12,
+                padding: 14,
+                background: T.mist,
+              }}
+            >
+              <div
+                className="text-xs font-bold uppercase"
+                style={{
+                  letterSpacing: "0.09em",
+                  color: T.muted,
+                  fontSize: 10,
+                }}
+              >
+                {label}
+              </div>
+              <div
+                style={{
+                  fontFamily: FONT_DISPLAY,
+                  fontSize: 26,
+                  color: T.ink,
+                  marginTop: 4,
+                }}
+              >
+                {n0(t.bookings)}{" "}
+                <span style={{ fontSize: 13, color: T.slate }}>bookings</span>
+              </div>
+              <div style={{ fontSize: 12, color: T.link, marginTop: 2 }}>
+                {n0(t.accounts)} accounts · {n0(t.nights)} nights
+              </div>
+            </div>
+          ))}
+        </div>
+        <p
+          className="mt-3 flex items-center gap-1"
+          style={{ fontSize: 12, color: T.slate }}
+        >
+          Bookings without a member number can't be attributed to either side.
+          <InfoTip id="split" />
+        </p>
+      </div>
+
+      <Section
+        title={`${kind === "members" ? "Member" : "Guest"} accounts · ${n0(visible.length)} of ${n0(
+          rows.length,
+        )}`}
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <Segmented
+              size="sm"
+              value={kind}
+              onChange={(v) => {
+                setKind(v);
+                setSearch("");
+              }}
+              options={[
+                { value: "members", label: "Members" },
+                { value: "guests", label: "Guests" },
+              ]}
+            />
+            <div
+              className="flex items-center gap-2 rounded-full px-3 py-1.5"
+              style={{ background: T.card, border: `1px solid ${T.line}` }}
+            >
+              <Search size={13} style={{ color: T.slate }} />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search people"
+                className="vr-focus"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  outline: "none",
+                  width: 130,
+                  fontSize: 12,
+                  color: T.ink,
+                }}
+              />
+            </div>
+            <ExportMenu
+              rows={exportData}
+              filenameBase={`${kind}_booked_${safeFilePart(periodFilePart(period))}`}
+              disabled={loading || !exportData.length}
+            />
+          </div>
+        }
+      >
+        {loading ? (
+          <Empty>Loading people…</Empty>
+        ) : !rows.length ? (
+          <Empty>No {kind} booked in this period.</Empty>
+        ) : (
+          <ScrollShell maxHeight={460}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 12,
+                minWidth: 720,
+              }}
+            >
+              <thead>
+                <tr>
+                  {[
+                    ["Name", "member_full_name", "left"],
+                    ["Member #", "member_number", "right"],
+                    ["Type", "member_type", "left"],
+                    ["Bookings", "bookings", "right"],
+                    ["Nights", "nights", "right"],
+                    ["First in", "first_check_in", "right"],
+                    ["Last out", "last_check_out", "right"],
+                  ].map(([label, col, align]) => (
+                    <th
+                      key={col}
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 1,
+                        background: T.card,
+                        borderBottom: `1px solid ${T.line}`,
+                        padding: "9px 10px",
+                      }}
+                    >
+                      <SortHeader
+                        label={label}
+                        col={col}
+                        sort={sort}
+                        setSort={setSort}
+                        align={align}
+                      />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((p, i) => (
+                  <tr
+                    key={p.member_number ?? i}
+                    className="vr-row"
+                    style={{ borderTop: `1px solid ${T.lineSoft}` }}
+                  >
+                    <td style={{ padding: "9px 10px", color: T.ink }}>
+                      {p.member_full_name ||
+                        p.member_name ||
+                        p.folio_guest_name ||
+                        "Unknown"}
+                      {p.email && (
+                        <div style={{ color: T.slate, fontSize: 10 }}>
+                          {p.email}
+                        </div>
+                      )}
+                    </td>
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        textAlign: "right",
+                        color: T.muted,
+                        fontFamily: FONT_NUM,
+                      }}
+                    >
+                      {p.member_number ?? "—"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        color: p.member_type ? T.muted : "#B07B33",
+                        fontWeight: p.member_type ? 400 : 700,
+                      }}
+                    >
+                      {p.member_type ?? "Not set"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        textAlign: "right",
+                        color: T.ink,
+                        fontFamily: FONT_NUM,
+                      }}
+                    >
+                      {n0(p.bookings)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        textAlign: "right",
+                        color: T.ink,
+                        fontFamily: FONT_NUM,
+                      }}
+                    >
+                      {n0(p.nights)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        textAlign: "right",
+                        color: T.muted,
+                        fontFamily: FONT_NUM,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {p.first_check_in ?? "—"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "9px 10px",
+                        textAlign: "right",
+                        color: T.muted,
+                        fontFamily: FONT_NUM,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {p.last_check_out ?? "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ScrollShell>
+        )}
+      </Section>
+    </SidePanel>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Page
+   ═════════════════════════════════════════════════════════════════════════ */
+
+export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
+  const years = useMemo(() => {
+    const current = new Date().getFullYear();
+    return Array.from({ length: current - 2018 + 1 }, (_, i) => current - i);
+  }, []);
+
+  const [period, setPeriod] = useState({ mode: "all" });
+  const [tab, setTab] = useState("overall"); // overall | paid | free
+
+  const [chartDim, setChartDim] = useState("villa");
+  const [chartMetric, setChartMetric] = useState("bookings");
+  const [chartSort, setChartSort] = useState("desc");
+  const [chartLimit, setChartLimit] = useState(30);
+
+  const [tableDim, setTableDim] = useState("villa");
+  const [tableSort, setTableSort] = useState({ col: "value", dir: "desc" });
+  const [query, setQuery] = useState("");
+
+  const [selection, setSelection] = useState(null);
+  const [splitOpen, setSplitOpen] = useState(false);
+
+  const [summary, setSummary] = useState({});
+  const [villaStats, setVillaStats] = useState([]);
+  const [bedroomStats, setBedroomStats] = useState([]);
+  const [sourceRows, setSourceRows] = useState([]);
+  const [bedroomSourceRows, setBedroomSourceRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const params = useMemo(() => periodToParams(period), [period]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const timer = setTimeout(() => {
+      Promise.allSettled([
+        analyticsApi.visitsRoomsDashboard(params),
+        analyticsApi.villaSourceBreakdown(params),
+        analyticsApi.villaSourceBedroomBreakdown(params),
+      ])
+        .then(([dash, src, bedSrc]) => {
+          if (cancelled) return;
+          if (dash.status === "fulfilled") {
+            setSummary(dash.value?.summary ?? {});
+            setVillaStats(
+              Array.isArray(dash.value?.villa_stats)
+                ? dash.value.villa_stats
+                : [],
+            );
+            setBedroomStats(
+              Array.isArray(dash.value?.bookings_by_bedroom)
+                ? dash.value.bookings_by_bedroom
+                : [],
+            );
+          } else console.error(dash.reason);
+          if (src.status === "fulfilled")
+            setSourceRows(Array.isArray(src.value) ? src.value : []);
+          else console.error(src.reason);
+          if (bedSrc.status === "fulfilled")
+            setBedroomSourceRows(
+              Array.isArray(bedSrc.value) ? bedSrc.value : [],
+            );
+          else console.error(bedSrc.reason);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [params]);
+
+  /* villa_stats returns one row per villa AND bedroom_count — that is where
+     the bedroom layouts and the published avg stay come from. */
+  const villaMeta = useMemo(() => {
+    const map = new Map();
+    villaStats.forEach((r) => {
+      if (!r.villa_name) return;
+      if (!map.has(r.villa_name))
+        map.set(r.villa_name, { configs: [], stayWeight: 0, bookings: 0 });
+      const e = map.get(r.villa_name);
+      if (r.bedroom_count != null && !e.configs.includes(r.bedroom_count))
+        e.configs.push(r.bedroom_count);
+      const b = Number(r.bookings || 0);
+      e.bookings += b;
+      e.stayWeight += Number(r.avg_stay || 0) * b;
+    });
+    map.forEach((e) => {
+      e.configs.sort((a, b) => a - b);
+      e.avgStay = e.bookings ? e.stayWeight / e.bookings : null;
+    });
+    return map;
+  }, [villaStats]);
+
+  const keepRow = (r) =>
+    tab === "overall" || (tab === "paid" ? !r.is_free : r.is_free);
+
+  const villaRows = useMemo(() => {
+    const map = new Map();
+    sourceRows.filter(keepRow).forEach((r) => {
+      const key = r.villa_name || "Unknown villa";
+      if (!map.has(key))
+        map.set(key, {
+          key,
+          name: key,
+          bookings: 0,
+          nights: 0,
+          revenue: 0,
+          compValue: 0,
+          paid: 0,
+          comp: 0,
+          members: 0,
+        });
+      const e = map.get(key);
+      const b = Number(r.bookings || 0);
+      e.bookings += b;
+      e.nights += Number(r.total_nights || 0);
+      e.members += Number(r.unique_members || 0);
+      if (r.is_free) {
+        e.comp += b;
+        e.compValue += Number(r.free_value ?? r.total_value ?? 0);
+      } else {
+        e.paid += b;
+        e.revenue += Number(r.revenue || 0);
+      }
+    });
+    return [...map.values()].map((e) => {
+      const meta = villaMeta.get(e.name);
+      return {
+        ...e,
+        configs: meta?.configs ?? [],
+        avgStay: meta?.avgStay ?? (e.bookings ? e.nights / e.bookings : null),
+        value: tab === "free" ? e.compValue : e.revenue,
+      };
+    });
+  }, [sourceRows, tab, villaMeta]);
+
+  const bedroomRows = useMemo(() => {
+    const stayByBed = new Map(
+      bedroomStats.map((r) => [Number(r.beds), Number(r.avg_stay || 0)]),
+    );
+    const map = new Map();
+    bedroomSourceRows.filter(keepRow).forEach((r) => {
+      const key = r.bedroom_count ?? "Unknown";
+      if (!map.has(key))
+        map.set(key, {
+          key,
+          name: key === "Unknown" ? "Not set" : `${key} bedroom`,
+          configs: [Number(key)],
+          bookings: 0,
+          nights: 0,
+          revenue: 0,
+          compValue: 0,
+          paid: 0,
+          comp: 0,
+          members: 0,
+        });
+      const e = map.get(key);
+      const b = Number(r.bookings || 0);
+      e.bookings += b;
+      e.nights += Number(r.total_nights || 0);
+      e.members += Number(r.unique_members || 0);
+      if (r.is_free) {
+        e.comp += b;
+        e.compValue += Number(r.free_value || 0);
+      } else {
+        e.paid += b;
+        e.revenue += Number(r.revenue || 0);
+      }
+    });
+    return [...map.values()].map((e) => ({
+      ...e,
+      avgStay:
+        stayByBed.get(Number(e.key)) ??
+        (e.bookings ? e.nights / e.bookings : null),
+      value: tab === "free" ? e.compValue : e.revenue,
+    }));
+  }, [bedroomSourceRows, bedroomStats, tab]);
+
+  const totals = useMemo(() => {
+    const t = villaRows.reduce(
+      (a, r) => ({
+        bookings: a.bookings + r.bookings,
+        nights: a.nights + r.nights,
+        revenue: a.revenue + r.revenue,
+        compValue: a.compValue + r.compValue,
+        paid: a.paid + r.paid,
+        comp: a.comp + r.comp,
+      }),
+      { bookings: 0, nights: 0, revenue: 0, compValue: 0, paid: 0, comp: 0 },
+    );
+    const unsplit = tab === "overall"; // averages are only published unsplit
+    return {
+      ...t,
+      value: tab === "free" ? t.compValue : t.revenue,
+      avgStay: unsplit
+        ? (summary?.avg_length_of_stay ?? null)
+        : t.bookings
+          ? t.nights / t.bookings
+          : null,
+      avgParty: unsplit ? (summary?.avg_party_size ?? null) : null,
+      avgStayDerived: !unsplit,
+    };
+  }, [villaRows, tab, summary]);
+
+  const leaders = useMemo(() => {
+    const withBookings = villaRows.filter((r) => r.bookings > 0);
+    const withValue = villaRows.filter((r) => r.value > 0);
+    const byBookings = [...withBookings].sort(
+      (a, b) => b.bookings - a.bookings,
+    );
+    const byValue = [...withValue].sort((a, b) => b.value - a.value);
+    return {
+      mostBooked: byBookings[0],
+      leastBooked: byBookings[byBookings.length - 1],
+      mostValue: byValue[0],
+      leastValue: byValue[byValue.length - 1],
+    };
+  }, [villaRows]);
+
+  const chartAll = useMemo(() => {
+    const rows = chartDim === "villa" ? villaRows : bedroomRows;
+    const metricKey = chartMetric === "revenue" ? "value" : chartMetric;
+    const arr = rows.map((r) => ({
+      ...r,
+      label: chartDim === "villa" ? r.name : `${r.key} bed`,
+    }));
+    arr.sort((a, b) =>
+      chartSort === "name"
+        ? String(a.label).localeCompare(String(b.label))
+        : chartSort === "asc"
+          ? a[metricKey] - b[metricKey]
+          : b[metricKey] - a[metricKey],
+    );
+    return arr;
+  }, [villaRows, bedroomRows, chartDim, chartMetric, chartSort]);
+
+  const chartData =
+    chartDim === "bedroom" || chartLimit === "all"
+      ? chartAll
+      : chartAll.slice(0, chartLimit);
+  const chartKey = chartMetric === "revenue" ? "value" : chartMetric;
+
+  const tableRows = useMemo(() => {
+    const rows = tableDim === "villa" ? villaRows : bedroomRows;
+    const searched = query.trim()
+      ? rows.filter((r) =>
+          String(r.name).toLowerCase().includes(query.trim().toLowerCase()),
+        )
+      : rows;
+    return sortRows(searched, tableSort.col, tableSort.dir);
+  }, [villaRows, bedroomRows, tableDim, query, tableSort]);
+
+  const tableExport = tableRows.map((r) => ({
+    [tableDim === "villa" ? "Villa" : "Bedrooms"]: r.name,
+    Bedrooms: r.configs?.join(" / ") ?? "",
+    Revenue: r.revenue,
+    "Comp Value": r.compValue,
+    Bookings: r.bookings,
+    Paid: r.paid,
+    Comp: r.comp,
+    "Nights Spent": r.nights,
+    "Avg Stay": r.avgStay == null ? "" : Number(r.avgStay).toFixed(1),
+    Members: r.members,
+  }));
+
+  const openVilla = (name) => {
+    const meta = villaMeta.get(name);
+    onVillaSelect?.(name);
+    setSelection({
+      kind: "villa",
+      key: name,
+      label: name,
+      configs: meta?.configs ?? [],
+    });
+  };
+  const openBedroom = (beds) =>
+    setSelection({
+      kind: "bedroom",
+      key: beds,
+      label: `${beds}-bedroom stays`,
+    });
+
+  const openFromChart = (d) => {
+    if (!d) return;
+    if (chartDim === "villa") openVilla(d.key);
+    else if (d.key !== "Unknown") openBedroom(d.key);
+  };
+
+  const barWidth = chartDim === "villa" ? 48 : 96;
+  const plotWidth = Math.max(720, chartData.length * barWidth);
+  const valueLabel = tab === "free" ? "Comp value" : "Revenue";
+
+  return (
+    <div className="dashboard-section visits-page">
+      <style>{`
+        .vr-focus:focus-visible { outline: 2px solid ${T.deep}; outline-offset: 2px; }
+        .vr-row:hover { background: ${T.mist}; }
+        .vr-lift { transition: box-shadow .18s ease, transform .18s ease; }
+        .vr-lift:hover { box-shadow: 0 8px 22px rgba(26,39,51,0.08); }
+        .vr-grip { opacity: .55; transition: opacity .15s ease; }
+        [role="separator"]:hover .vr-grip { opacity: 1; }
+        .vr-scroll::-webkit-scrollbar { height: 10px; width: 10px; }
+        .vr-scroll::-webkit-scrollbar-track { background: ${T.mist}; border-radius: 8px; }
+        .vr-scroll::-webkit-scrollbar-thumb { background: #C7D8E4; border-radius: 8px; }
+        .vr-scroll::-webkit-scrollbar-thumb:hover { background: ${T.link}; }
+        @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+      `}</style>
+
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="dashboard-eyebrow">Villa Performance & Demand</div>
-          <h2 className="dashboard-card-title" style={{ marginBottom: 0 }}>
-            Villa Analytics
-          </h2>
-          <p style={{ color: C.muted, fontSize: 12, margin: "4px 0 0" }}>
-            {topView === "overall"
-              ? "KPIs, villa rankings, monthly bookings, revenue trends, bedroom analytics, and detailed performance."
-              : "Business-source cards, paid vs. free/comp performance, source trends, drill-downs, and marketing signals."}
+          <div
+            className="text-xs font-bold uppercase"
+            style={{ letterSpacing: "0.12em", color: T.link, fontSize: 11 }}
+          >
+            Visits &amp; rooms
+          </div>
+          <h1
+            className="visits-page-title"
+            style={{
+              fontFamily: FONT_DISPLAY,
+              color: T.ink,
+              margin: "4px 0 0",
+              lineHeight: 1,
+            }}
+          >
+            Villa bookings
+          </h1>
+          <p className="mt-1" style={{ fontSize: 12, color: T.slate }}>
+            {loading
+              ? "Updating…"
+              : `${n0(villaRows.length)} villas in this period`}
           </p>
         </div>
-
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 10,
-            alignItems: "flex-end",
-          }}
-        >
-          <TopViewToggle value={topView} onChange={setTopView} />
+        <div className="visits-toolbar">
+          <Segmented
+            value={tab}
+            onChange={(v) => {
+              setTab(v);
+              setSelection(null);
+            }}
+            options={[
+              { value: "overall", label: "Overall" },
+              { value: "paid", label: "Paid" },
+              { value: "free", label: "Comp" },
+            ]}
+          />
+          <DatePeriod period={period} onChange={setPeriod} years={years} />
         </div>
       </div>
 
-      {/* ════════════════════════════════════════════════════════════════════ */}
-      {/* OVERALL VIEW                                                        */}
-      {/* ════════════════════════════════════════════════════════════════════ */}
-
-      {topView === "overall" && (
-        <>
-          {visitsDataLoading && (
-            <div style={{ color: C.muted, fontSize: 12, padding: "0 4px" }}>
-              Updating visits and rooms data…
+      {/* ── Revenue banner ─────────────────────────────────────────────── */}
+      <div
+        className="visits-revenue-banner flex flex-wrap items-end justify-between gap-6"
+        style={{
+          background: T.ink,
+          borderRadius: 18,
+          color: "#fff",
+        }}
+      >
+        <div>
+          <div
+            className="text-xs font-bold uppercase"
+            style={{ letterSpacing: "0.12em", color: T.flame, fontSize: 11 }}
+          >
+            {tab === "free" ? "Total comp value" : "Total villa revenue"}
+          </div>
+          <div
+            className="visits-revenue-value"
+            style={{
+              fontFamily: FONT_DISPLAY,
+              lineHeight: 1,
+              marginTop: 10,
+            }}
+          >
+            {money(
+              tab === "overall" ? summary?.villa_rental_revenue : totals.value,
+            )}
+          </div>
+        </div>
+        <div style={{ fontSize: 14, color: "#A8C6D8", maxWidth: 420 }}>
+          {tab === "free"
+            ? "Comp stays bill nothing — this is the rack value of the rooms given away."
+            : `${n0(totals.bookings)} bookings · ${periodText(period)}`}
+          {tab === "overall" && (
+            <div className="mt-2" style={{ fontSize: 12 }}>
+              Villa Income from owner statements
             </div>
           )}
+        </div>
+      </div>
 
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <DateFilterBar
-              value={summaryFilter}
-              onChange={setSummaryFilter}
-              years={years}
-              months={months}
-            />
-          </div>
+      {/* ── Summary cards ──────────────────────────────────────────────── */}
+      <div className="visits-summary-grid">
+        <StatCard
+          label="Total bookings"
+          value={n0(totals.bookings)}
+          note={
+            tab === "overall"
+              ? "Member vs guest split — open"
+              : `${tab === "paid" ? "Paid" : "Comp"} bookings only`
+          }
+          icon={CalendarDays}
+          onClick={() => setSplitOpen(true)}
+        />
+        <StatCard
+          label="Total room nights"
+          value={n0(totals.nights)}
+          note="Occupied room-date nights"
+          icon={Moon}
+        />
+        <StatCard
+          label="Avg length of stay"
+          value={totals.avgStay == null ? "—" : n1(totals.avgStay)}
+          unit="nights"
+          note={
+            totals.avgStayDerived
+              ? "Nights ÷ bookings for this filter"
+              : "Nights per booking"
+          }
+          icon={CalendarClock}
+        />
+        <StatCard
+          label="Avg party size"
+          value={totals.avgParty == null ? "—" : n1(totals.avgParty)}
+          unit={totals.avgParty == null ? "" : "guests"}
+          note={
+            totals.avgParty == null
+              ? "Not published per payment type"
+              : "People per booking"
+          }
+          icon={Users}
+        />
+      </div>
 
-          {/* KPI band */}
-          <section
-            className="dashboard-kpi-band"
-            style={{ padding: "20px 18px" }}
-          >
-            <Stat
-              icon={Users}
-              label="Total Members Booked"
-              value={fmt(summaryData?.total_members_booked)}
-              sub="Unique member accounts"
-              infoId="totalMembersBooked"
-              onClick={() => openPeopleModal("members")}
-            />
-            <Stat
-              icon={Users}
-              label="Total Guests Booked"
-              value={fmt(summaryData?.total_guests_booked)}
-              sub="Unique guest accounts"
-              infoId="totalGuestsBooked"
-              onClick={() => openPeopleModal("guests")}
-            />
-            <Stat
-              icon={CalendarClock}
-              label="Average Length of Stay"
-              value={`${num(summaryData?.avg_length_of_stay)} nights`}
-              sub="Nights per booking"
-              infoId="averageLengthOfStay"
-            />
-            <Stat
-              icon={Users}
-              label="Average Party Size"
-              value={num(summaryData?.avg_party_size)}
-              sub="People per booking"
-              infoId="averagePartySize"
-            />
-            <Stat
-              icon={BedDouble}
-              label="Total Room Nights"
-              value={fmt(summaryData?.total_room_nights)}
-              sub="Occupied room-date nights"
-              infoId="totalRoomNights"
-            />
-            <Stat
-              icon={DollarSign}
-              label="Villa Rental Revenue"
-              value={money(summaryData?.villa_rental_revenue)}
-              sub="Villa income total"
-              infoId="villaRentalRevenue"
-            />
-          </section>
+      {/* ── Leaders ────────────────────────────────────────────────────── */}
+      <div className="visits-leader-grid">
+        <LeaderCard
+          label="Most booked"
+          tone={T.deep}
+          icon={TrendingUp}
+          name={leaders.mostBooked?.name}
+          primary={
+            leaders.mostBooked
+              ? `${n0(leaders.mostBooked.bookings)} bookings`
+              : "—"
+          }
+          secondary={
+            leaders.mostBooked
+              ? `${n0(leaders.mostBooked.nights)} nights spent`
+              : ""
+          }
+          onOpen={() =>
+            leaders.mostBooked && openVilla(leaders.mostBooked.name)
+          }
+        />
+        <LeaderCard
+          label="Least booked"
+          tone="#B0CADB"
+          icon={TrendingDown}
+          name={leaders.leastBooked?.name}
+          primary={
+            leaders.leastBooked
+              ? `${n0(leaders.leastBooked.bookings)} bookings`
+              : "—"
+          }
+          secondary={
+            leaders.leastBooked
+              ? `${n0(leaders.leastBooked.nights)} nights spent`
+              : ""
+          }
+          onOpen={() =>
+            leaders.leastBooked && openVilla(leaders.leastBooked.name)
+          }
+        />
+        <LeaderCard
+          label={tab === "free" ? "Most comp value" : "Most revenue"}
+          tone={T.flame}
+          icon={ArrowUpRight}
+          name={leaders.mostValue?.name}
+          primary={leaders.mostValue ? money(leaders.mostValue.value) : "—"}
+          secondary={
+            leaders.mostValue
+              ? `${n0(leaders.mostValue.bookings)} bookings`
+              : ""
+          }
+          onOpen={() => leaders.mostValue && openVilla(leaders.mostValue.name)}
+        />
+        <LeaderCard
+          label={tab === "free" ? "Least comp value" : "Least revenue"}
+          tone="#85AEC7"
+          icon={ArrowDownRight}
+          name={leaders.leastValue?.name}
+          primary={leaders.leastValue ? money(leaders.leastValue.value) : "—"}
+          secondary={
+            leaders.leastValue
+              ? `${n0(leaders.leastValue.bookings)} bookings`
+              : ""
+          }
+          onOpen={() =>
+            leaders.leastValue && openVilla(leaders.leastValue.name)
+          }
+        />
+      </div>
 
-          {/* Villa charts */}
-          <Card
-            title="Bookings by Villa"
-            action={
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <Select
-                  label="Show"
-                  value={villaChartLimit}
-                  onChange={setVillaChartLimit}
-                  options={["10", "15", "30", "40", "50", "All"]}
-                />
-                <ChartInfo id="bookingsByVilla" />
-              </div>
-            }
-          >
-            <DateFilterBar
-              value={villaChartFilter}
-              onChange={setVillaChartFilter}
-              years={years}
-              months={months}
-            />
-            <div style={{ overflowX: "auto" }}>
-              <div
-                style={{
-                  minWidth: Math.max(visibleVillaChartData.length * 60, 420),
-                  height: 320,
-                }}
-              >
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={visibleVillaChartData}
-                    margin={{ top: 8, right: 16, bottom: 90, left: 16 }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                    <XAxis
-                      dataKey="villa_name"
-                      stroke={AX}
-                      fontSize={11}
-                      angle={-35}
-                      textAnchor="end"
-                      interval={0}
-                      height={90}
-                      label={{
-                        value: "Villa",
-                        position: "insideBottom",
-                        offset: -20,
-                        style: LABEL_STYLE,
-                      }}
-                    />
-                    <YAxis
-                      stroke={AX}
-                      fontSize={11}
-                      label={{
-                        value: "Bookings",
-                        angle: -90,
-                        position: "insideLeft",
-                        offset: 10,
-                        dy: 40,
-                        style: LABEL_STYLE,
-                      }}
-                    />
-                    <Tooltip contentStyle={TIP} />
-                    <Bar
-                      dataKey="bookings"
-                      fill="var(--dashboard-flame)"
-                      radius={[6, 6, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </Card>
-
-          <Card
-            title="Most / Least Booked Villa"
-            sub="Click through to ML Insights"
-          >
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              {[
-                { villa: mostVilla, label: "Most Booked", ties: mostVillaTies },
-                {
-                  villa: leastVilla,
-                  label: "Least Booked",
-                  ties: leastVillaTies,
-                },
-              ].map(({ villa, label, ties }, i) => (
-                <button
-                  key={`${label}-${villa?.villa_name ?? i}`}
-                  type="button"
-                  onClick={() => {
-                    if (villa?.villa_name) onVillaSelect(villa.villa_name);
-                  }}
-                  style={{
-                    flex: "1 1 200px",
-                    textAlign: "left",
-                    border: `1px solid ${C.border}`,
-                    borderRadius: 16,
-                    background: i === 0 ? C.panelAlt : C.panel,
-                    padding: 16,
-                    cursor: "pointer",
-                  }}
-                >
-                  <div className="dashboard-eyebrow">{label}</div>
-                  <div
-                    style={{
-                      fontFamily: "'Cormorant Garamond', serif",
-                      fontSize: 24,
-                      color: C.text,
-                    }}
-                  >
-                    {villa?.villa_name ?? "—"}
-                  </div>
-                  <div style={{ color: C.soft, fontSize: 12 }}>
-                    {fmt(villa?.bookings)} bookings · {bedroomsLabel(villa)}{" "}
-                    bedrooms
-                  </div>
-
-                  {ties.length > 1 && (
-                    <div
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openTieModal(`${label} Villas`, ties);
-                      }}
-                      style={{
-                        marginTop: 8,
-                        color: C.accent,
-                        fontSize: 11,
-                        fontWeight: 900,
-                        cursor: "pointer",
-                      }}
-                    >
-                      View all {ties.length} tied villas
-                    </div>
-                  )}
-                </button>
-              ))}
-            </div>
-
-            <button
-              onClick={onGoToML}
+      {/* ── Chart ──────────────────────────────────────────────────────── */}
+      <div
+        className="visits-panel-card"
+        style={{
+          background: T.card,
+          border: `1px solid ${T.line}`,
+          borderRadius: 18,
+          minWidth: 0,
+        }}
+      >
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2
               style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                width: "100%",
-                marginTop: 12,
-                padding: "13px 15px",
-                borderRadius: 14,
-                border: `1px dashed ${C.accent2}`,
-                background: C.panelAlt,
-                color: C.accent,
-                fontWeight: 700,
-                cursor: "pointer",
+                fontFamily: FONT_DISPLAY,
+                fontSize: 22,
+                color: T.ink,
+                margin: 0,
               }}
             >
-              View season × villa insights
-              <ArrowUpRight size={17} />
-            </button>
-          </Card>
-
-          {/* Villa table + drilldown */}
-          <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
-            <div
-              className="dashboard-card"
-              style={{ flex: "0 0 420px", minWidth: 0 }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "flex-start",
-                }}
-              >
-                <div>
-                  <div className="dashboard-eyebrow">All Villas</div>
-                  <h2 className="dashboard-card-title">Villa performance</h2>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <ExportMenu
-                    rows={villaPerformanceRows}
-                    filenameBase={villaPerformanceFilename}
-                    disabled={!villaPerformanceRows.length}
-                  />
-                  <ChartInfo id="villaTable" />
-                </div>
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  marginTop: 10,
-                  marginBottom: 10,
-                }}
-              >
-                <DateFilterBar
-                  value={villaTableFilter}
-                  onChange={setVillaTableFilter}
-                  years={years}
-                  months={months}
-                />
-              </div>
-
-              <TableControls
-                search={villaTableSearch}
-                onSearchChange={setVillaTableSearch}
-                sortKey={villaTableSortKey}
-                onSortKeyChange={setVillaTableSortKey}
-                sortDir={villaTableSortDir}
-                onSortDirChange={setVillaTableSortDir}
-                sortOptions={[
-                  "villa_name",
-                  "bedroom_count",
-                  "bookings",
-                  "total_nights",
-                  "avg_stay",
-                  "revenue",
+              Bookings by {chartDim === "villa" ? "villa" : "bedroom count"}
+            </h2>
+            <p className="mt-0.5" style={{ fontSize: 12, color: T.slate }}>
+              Select a bar to open its full record. Scroll sideways for the
+              rest.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Segmented
+              size="sm"
+              value={chartDim}
+              onChange={setChartDim}
+              options={[
+                { value: "villa", label: "Villa" },
+                { value: "bedroom", label: "Bedrooms" },
+              ]}
+            />
+            <Segmented
+              size="sm"
+              value={chartMetric}
+              onChange={setChartMetric}
+              options={[
+                { value: "bookings", label: "Bookings" },
+                { value: "revenue", label: valueLabel },
+                { value: "nights", label: "Nights" },
+              ]}
+            />
+            <Segmented
+              size="sm"
+              value={chartSort}
+              onChange={setChartSort}
+              options={[
+                { value: "desc", label: "High–low" },
+                { value: "asc", label: "Low–high" },
+                { value: "name", label: "A–Z" },
+              ]}
+            />
+            {chartDim === "villa" && (
+              <Segmented
+                size="sm"
+                value={chartLimit}
+                onChange={setChartLimit}
+                options={[
+                  { value: 10, label: "Top 10" },
+                  { value: 30, label: "Top 30" },
+                  { value: 60, label: "Top 60" },
+                  { value: "all", label: `All ${chartAll.length}` },
                 ]}
-                placeholder="Search villas..."
               />
+            )}
+            <InfoTip id="chart" />
+          </div>
+        </div>
 
-              <div style={{ overflowY: "auto", maxHeight: 567, marginTop: 8 }}>
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: 12,
+        {!chartData.length ? (
+          <Empty>
+            No bookings match the current period and payment filters.
+          </Empty>
+        ) : (
+          <div
+            className="vr-scroll"
+            style={{ overflowX: "auto", paddingBottom: 4 }}
+          >
+            <div style={{ width: plotWidth, height: 460 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={chartData}
+                  margin={{
+                    top: 10,
+                    right: 10,
+                    left: 0,
+                    bottom: chartDim === "villa" ? 70 : 10,
                   }}
                 >
-                  <thead
-                    style={{
-                      position: "sticky",
-                      top: 0,
-                      background: C.bg,
-                      zIndex: 1,
-                    }}
-                  >
-                    <tr className="dashboard-eyebrow">
-                      {[
-                        "Villa",
-                        "Bedrooms",
-                        "Bookings",
-                        "Room Nights",
-                        "Avg Stay",
-                        "Revenue",
-                      ].map((h) => (
-                        <th
-                          key={h}
-                          style={{
-                            textAlign: h === "Villa" ? "left" : "right",
-                            padding: "10px 10px",
-                            borderBottom: `1px solid ${C.border}`,
-                            fontWeight: 600,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredTableVillas.map((villa) => {
-                      const active = villa.villa_name === selectedVillaName;
-                      return (
-                        <tr
-                          key={`${villa.villa_name}-${villaBedroomLabel(villa)}`}
-                          onClick={() => openVillaModal(villa.villa_name)}
-                          style={{
-                            borderBottom: `1px solid ${C.border}`,
-                            background: active ? C.panelAlt : "transparent",
-                            borderLeft: active
-                              ? `3px solid ${C.accent2}`
-                              : "3px solid transparent",
-                            cursor: "pointer",
-                            transition: "background 0.15s",
-                          }}
-                          onMouseEnter={(e) => {
-                            if (!active)
-                              e.currentTarget.style.background = C.panel;
-                          }}
-                          onMouseLeave={(e) => {
-                            if (!active)
-                              e.currentTarget.style.background = "transparent";
-                          }}
-                        >
-                          <td
-                            style={{
-                              padding: "10px 10px",
-                              fontWeight: active ? 700 : 400,
-                              color: C.text,
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {villa.villa_name}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px 10px",
-                              textAlign: "right",
-                              color: C.soft,
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {villaBedroomLabel(villa)}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px 10px",
-                              textAlign: "right",
-                              color: C.soft,
-                            }}
-                          >
-                            {fmt(villa.bookings)}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px 10px",
-                              textAlign: "right",
-                              color: C.soft,
-                            }}
-                          >
-                            {fmt(villa.total_nights)}
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px 10px",
-                              textAlign: "right",
-                              color: C.soft,
-                            }}
-                          >
-                            {num(villa.avg_stay)}n
-                          </td>
-                          <td
-                            style={{
-                              padding: "10px 10px",
-                              textAlign: "right",
-                              color: C.soft,
-                            }}
-                          >
-                            {money(villa.revenue)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Drilldown charts */}
-            <div
-              style={{
-                flex: 1,
-                minWidth: 0,
-                display: "flex",
-                flexDirection: "column",
-                gap: 16,
-              }}
-            >
-              {selectedVilla ? (
-                <>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      gap: 10,
-                      marginBottom: 2,
-                    }}
-                  >
-                    <Select
-                      label="Group by"
-                      value={villaMonthlyGroupBy}
-                      onChange={setVillaMonthlyGroupBy}
-                      options={["month", "year"]}
-                    />
-                  </div>
-
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      gap: 10,
-                      marginBottom: 12,
-                    }}
-                  >
-                    <DateFilterBar
-                      value={selectedVillaChartFilter}
-                      onChange={setSelectedVillaChartFilter}
-                      years={years}
-                      months={months}
-                    />
-                  </div>
-                  <Card
-                    title={`${selectedVilla.villa_name} — ${villaMonthlyGroupBy === "year" ? "Yearly" : "Monthly"} Bookings`}
-                    sub={`Selected villa drill-down by ${villaMonthlyGroupBy}`}
-                    action={<ChartInfo id="villaMonthlyBookings" />}
-                  >
-                    <div style={{ height: 200 }}>
-                      <ResponsiveContainer>
-                        <LineChart
-                          data={villaMonthlyData}
-                          margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-                        >
-                          <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                          <XAxis
-                            dataKey={
-                              villaMonthlyGroupBy === "year" ? "year" : "month"
-                            }
-                            stroke={AX}
-                            fontSize={11}
-                            label={{
-                              value:
-                                villaMonthlyGroupBy === "year"
-                                  ? "Year"
-                                  : "Month",
-                              position: "insideBottom",
-                              offset: -10,
-                              style: LABEL_STYLE,
-                            }}
-                          />
-                          <YAxis
-                            stroke={AX}
-                            fontSize={11}
-                            label={{
-                              value: "Bookings",
-                              angle: -90,
-                              position: "insideLeft",
-                              offset: 10,
-                              dy: 30,
-                              style: LABEL_STYLE,
-                            }}
-                          />
-                          <Tooltip contentStyle={TIP} />
-                          <Line
-                            type="monotone"
-                            dataKey="bookings"
-                            stroke="var(--dashboard-deep-blue)"
-                            strokeWidth={2.5}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </Card>
-
-                  <Card
-                    title={`${selectedVilla.villa_name} — ${villaMonthlyGroupBy === "year" ? "Yearly" : "Monthly"} Rental Revenue`}
-                    sub={`${villaMonthlyGroupBy === "year" ? "Yearly" : "Monthly"} villa revenue`}
-                    action={<ChartInfo id="villaMonthlyRevenue" />}
-                  >
-                    <div style={{ height: 200 }}>
-                      <ResponsiveContainer>
-                        <LineChart
-                          data={villaMonthlyData}
-                          margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-                        >
-                          <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                          <XAxis
-                            dataKey={
-                              villaMonthlyGroupBy === "year" ? "year" : "month"
-                            }
-                            stroke={AX}
-                            fontSize={11}
-                            label={{
-                              value:
-                                villaMonthlyGroupBy === "year"
-                                  ? "Year"
-                                  : "Month",
-                              position: "insideBottom",
-                              offset: -10,
-                              style: LABEL_STYLE,
-                            }}
-                          />
-                          <YAxis
-                            stroke={AX}
-                            fontSize={11}
-                            label={{
-                              value: "Revenue ($)",
-                              angle: -90,
-                              position: "insideLeft",
-                              offset: 10,
-                              dy: 40,
-                              style: LABEL_STYLE,
-                            }}
-                          />
-                          <Tooltip contentStyle={TIP} />
-                          <Line
-                            type="monotone"
-                            dataKey="revenue"
-                            stroke="var(--dashboard-truffle)"
-                            strokeWidth={2.5}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </Card>
-                </>
-              ) : (
-                <div
-                  className="dashboard-card"
-                  style={{
-                    height: "100%",
-                    minHeight: 200,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    color: C.muted,
-                    fontSize: 13,
-                  }}
-                >
-                  Select a villa to see monthly detail
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Bedroom */}
-          <div>
-            <div
-              style={{
-                width: "100%",
-                display: "flex",
-                justifyContent: "flex-end",
-                paddingBottom: 10,
-              }}
-            >
-              <DateFilterBar
-                value={bedroomChartFilter}
-                onChange={setBedroomChartFilter}
-                years={years}
-                months={months}
-              />
-            </div>
-
-            <div className="dashboard-grid dashboard-grid-main">
-              <Card
-                title="Bookings by Bedroom Count"
-                sub="Bedroom demand"
-                action={<ChartInfo id="bookingsByBedroom" />}
-              >
-                <div style={{ height: 240 }}>
-                  <ResponsiveContainer>
-                    <BarChart
-                      data={bookingsByBedroomData}
-                      margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis
-                        dataKey="beds"
-                        stroke={AX}
-                        fontSize={11}
-                        label={{
-                          value: "Bedrooms",
-                          position: "insideBottom",
-                          offset: -10,
-                          style: LABEL_STYLE,
-                        }}
-                      />
-                      <YAxis
-                        stroke={AX}
-                        fontSize={11}
-                        label={{
-                          value: "Bookings",
-                          angle: -90,
-                          position: "insideLeft",
-                          offset: 10,
-                          dy: 40,
-                          style: LABEL_STYLE,
-                        }}
-                      />
-                      <Tooltip contentStyle={TIP} />
-                      <Bar
-                        dataKey="bookings"
-                        fill="var(--dashboard-flame)"
-                        radius={[6, 6, 0, 0]}
-                        cursor="pointer"
-                        onClick={(entry) => openBedroomModal(entry?.beds)}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-
-              <Card
-                title="Average Stay by Bedroom Count"
-                sub="Length of stay"
-                action={<ChartInfo id="avgStayByBedroom" />}
-              >
-                <div style={{ height: 240 }}>
-                  <ResponsiveContainer>
-                    <BarChart
-                      data={bookingsByBedroomData}
-                      margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis
-                        dataKey="beds"
-                        stroke={AX}
-                        fontSize={11}
-                        label={{
-                          value: "Bedrooms",
-                          position: "insideBottom",
-                          offset: -10,
-                          style: LABEL_STYLE,
-                        }}
-                      />
-                      <YAxis
-                        stroke={AX}
-                        fontSize={11}
-                        label={{
-                          value: "Nights",
-                          angle: -90,
-                          position: "insideLeft",
-                          offset: 10,
-                          dy: 30,
-                          style: LABEL_STYLE,
-                        }}
-                      />
-                      <Tooltip contentStyle={TIP} />
-                      <Bar
-                        dataKey="avg_stay"
-                        fill="var(--dashboard-deep-blue)"
-                        radius={[6, 6, 0, 0]}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-            </div>
-          </div>
-
-          {/* Monthly revenue */}
-          <div>
-            <div
-              style={{
-                width: "100%",
-                display: "flex",
-                justifyContent: "flex-end",
-                paddingBottom: 10,
-              }}
-            >
-              <DateFilterBar
-                value={monthlyChartFilter}
-                onChange={setMonthlyChartFilter}
-                years={years}
-                months={months}
-              />
-            </div>
-
-            <div className="dashboard-grid dashboard-grid-main">
-              <Card
-                title="Bookings by Month"
-                sub="Monthly booking trend"
-                action={<ChartInfo id="bookingsByMonth" />}
-              >
-                <div style={{ height: 240 }}>
-                  <ResponsiveContainer>
-                    <LineChart
-                      data={monthlyRevenueData}
-                      margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis
-                        dataKey="month"
-                        stroke={AX}
-                        fontSize={11}
-                        label={{
-                          value: "Month",
-                          position: "insideBottom",
-                          offset: -10,
-                          style: LABEL_STYLE,
-                        }}
-                      />
-                      <YAxis
-                        stroke={AX}
-                        fontSize={11}
-                        label={{
-                          value: "Bookings",
-                          angle: -90,
-                          position: "insideLeft",
-                          offset: 10,
-                          dy: 40,
-                          style: LABEL_STYLE,
-                        }}
-                      />
-                      <Tooltip contentStyle={TIP} />
-                      <Line
-                        type="monotone"
-                        dataKey="bookings"
-                        stroke="var(--dashboard-deep-blue)"
-                        strokeWidth={2.5}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-
-              <Card
-                title="Villa Rental Revenue by Month"
-                sub="Folio rental revenue"
-                action={<ChartInfo id="revenueByMonth" />}
-              >
-                <div style={{ height: 240 }}>
-                  <ResponsiveContainer>
-                    <BarChart
-                      data={monthlyRevenueData}
-                      margin={{ top: 8, right: 16, bottom: 28, left: 16 }}
-                    >
-                      <CartesianGrid strokeDasharray="3 3" stroke={GRID} />
-                      <XAxis
-                        dataKey="month"
-                        stroke={AX}
-                        fontSize={11}
-                        label={{
-                          value: "Month",
-                          position: "insideBottom",
-                          offset: -10,
-                          style: LABEL_STYLE,
-                        }}
-                      />
-                      <YAxis
-                        stroke={AX}
-                        fontSize={11}
-                        label={{
-                          value: "Revenue ($)",
-                          angle: -90,
-                          position: "insideLeft",
-                          offset: 10,
-                          dy: 40,
-                          style: LABEL_STYLE,
-                        }}
-                      />
-                      <Tooltip contentStyle={TIP} />
-                      <Bar
-                        dataKey="revenue"
-                        fill="var(--dashboard-truffle)"
-                        radius={[6, 6, 0, 0]}
-                      />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-            </div>
-          </div>
-
-          {/* ── People modal ───────────────────────────────────────────────── */}
-          {peopleModalOpen && (
-            <div
-              onClick={() => setPeopleModalOpen(false)}
-              style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(8, 18, 32, 0.48)",
-                zIndex: 1000,
-                display: "flex",
-                justifyContent: "flex-end",
-              }}
-            >
-              <aside
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  width: "min(820px, 96vw)",
-                  height: "100vh",
-                  background: C.bg,
-                  borderLeft: `1px solid ${C.border}`,
-                  overflowY: "auto",
-                  padding: 26,
-                }}
-              >
-                <button onClick={() => setPeopleModalOpen(false)}>
-                  <X size={18} />
-                </button>
-                <div className="dashboard-eyebrow">
-                  {peopleKind === "members"
-                    ? "Members booked"
-                    : "Guests booked"}
-                </div>
-                <h2 className="dashboard-card-title">
-                  {peopleKind === "members"
-                    ? "Total Members Booked"
-                    : "Total Guests Booked"}
-                </h2>
-
-                <DateFilterBar
-                  value={peopleFilter}
-                  onChange={setPeopleFilter}
-                  years={years}
-                  months={months}
-                />
-
-                <TableControls
-                  search={peopleSearch}
-                  onSearchChange={setPeopleSearch}
-                  sortKey={peopleSortKey}
-                  onSortKeyChange={setPeopleSortKey}
-                  sortDir={peopleSortDir}
-                  onSortDirChange={setPeopleSortDir}
-                  sortOptions={[
-                    "member_full_name",
-                    "member_number",
-                    "member_type",
-                    "member_or_guest",
-                    "bookings",
-                    "nights",
-                    "first_check_in",
-                    "last_check_out",
-                  ]}
-                  placeholder="Search people..."
-                />
-
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: 12,
-                  }}
-                >
-                  <div style={{ color: C.muted, fontSize: 12 }}>
-                    {filteredPeopleRows.length} of {peopleRows.length} records
-                  </div>
-                  <ExportMenu
-                    rows={peopleExportRows}
-                    filenameBase={peopleFilename}
-                    disabled={peopleLoading || !peopleExportRows.length}
+                  <CartesianGrid vertical={false} stroke={T.lineSoft} />
+                  <XAxis
+                    dataKey="label"
+                    interval={0}
+                    angle={chartDim === "villa" ? -40 : 0}
+                    textAnchor={chartDim === "villa" ? "end" : "middle"}
+                    height={chartDim === "villa" ? 92 : 34}
+                    tick={{ fill: T.muted, fontSize: 11 }}
+                    axisLine={{ stroke: T.line }}
+                    tickLine={false}
                   />
-                </div>
-
-                {peopleLoading ? (
-                  <div style={{ color: C.muted }}>Loading people...</div>
-                ) : (
-                  <div style={{ overflowX: "auto" }}>
-                    <table
-                      style={{
-                        width: "100%",
-                        borderCollapse: "collapse",
-                        fontSize: 12,
-                      }}
-                    >
-                      <thead>
-                        <tr className="dashboard-eyebrow">
-                          {[
-                            "Name",
-                            "Member #",
-                            "Member Type",
-                            "Account",
-                            "Bookings",
-                            "Nights",
-                            "First In",
-                            "Last Out",
-                          ].map((h) => (
-                            <th
-                              key={h}
-                              style={{
-                                textAlign: h === "Name" ? "left" : "right",
-                                padding: "10px",
-                                borderBottom: `1px solid ${C.border}`,
-                              }}
-                            >
-                              {h}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredPeopleRows.map((p, i) => {
-                          const name =
-                            p.member_full_name ||
-                            p.member_name ||
-                            p.folio_guest_name ||
-                            p.guest_name ||
-                            "Unknown";
-                          const missingMemberType = !p.member_type;
-                          return (
-                            <tr
-                              key={`${name}-${p.member_number ?? i}`}
-                              style={{
-                                background: missingMemberType
-                                  ? "rgba(255, 193, 7, 0.14)"
-                                  : "transparent",
-                                borderTop: `1px solid ${C.border}`,
-                              }}
-                            >
-                              <td style={{ padding: "10px", color: C.text }}>
-                                {name}
-                                {missingMemberType && (
-                                  <div
-                                    style={{
-                                      marginTop: 4,
-                                      color: C.accent3,
-                                      fontSize: 10,
-                                      fontWeight: 800,
-                                      textTransform: "uppercase",
-                                      letterSpacing: "0.05em",
-                                    }}
-                                  >
-                                    Member type is null
-                                  </div>
-                                )}
-                              </td>
-                              <td
-                                style={{
-                                  padding: "10px",
-                                  textAlign: "right",
-                                  color: C.soft,
-                                }}
-                              >
-                                {p.member_number ?? "—"}
-                              </td>
-                              <td
-                                style={{
-                                  padding: "10px",
-                                  textAlign: "right",
-                                  color: missingMemberType ? C.accent3 : C.soft,
-                                  fontWeight: missingMemberType ? 800 : 400,
-                                }}
-                              >
-                                {p.member_type ?? "NULL"}
-                              </td>
-                              <td
-                                style={{
-                                  padding: "10px",
-                                  textAlign: "right",
-                                  color: !p.member_or_guest
-                                    ? C.accent3
-                                    : C.soft,
-                                  fontWeight: !p.member_or_guest ? 800 : 400,
-                                }}
-                              >
-                                {p.member_or_guest ?? "NULL"}
-                              </td>
-                              <td
-                                style={{
-                                  padding: "10px",
-                                  textAlign: "right",
-                                  color: C.soft,
-                                }}
-                              >
-                                {fmt(p.bookings)}
-                              </td>
-                              <td
-                                style={{
-                                  padding: "10px",
-                                  textAlign: "right",
-                                  color: C.soft,
-                                }}
-                              >
-                                {fmt(p.nights)}
-                              </td>
-                              <td
-                                style={{
-                                  padding: "10px",
-                                  textAlign: "right",
-                                  color: C.soft,
-                                }}
-                              >
-                                {p.first_check_in ?? "—"}
-                              </td>
-                              <td
-                                style={{
-                                  padding: "10px",
-                                  textAlign: "right",
-                                  color: C.soft,
-                                }}
-                              >
-                                {p.last_check_out ?? "—"}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </aside>
-            </div>
-          )}
-
-          {/* ── Bedroom modal ──────────────────────────────────────────────── */}
-          {bedroomModalOpen && (
-            <div
-              onClick={() => setBedroomModalOpen(false)}
-              style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(8, 18, 32, 0.48)",
-                zIndex: 1000,
-                display: "flex",
-                justifyContent: "flex-end",
-              }}
-            >
-              <aside
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  width: "min(760px, 96vw)",
-                  height: "100vh",
-                  background: C.bg,
-                  borderLeft: `1px solid ${C.border}`,
-                  overflowY: "auto",
-                  padding: 26,
-                }}
-              >
-                <button onClick={() => setBedroomModalOpen(false)}>
-                  <X size={18} />
-                </button>
-                <div className="dashboard-eyebrow">Bedroom booking profile</div>
-                <h2 className="dashboard-card-title">
-                  {selectedBedroom} Bedroom Bookings
-                </h2>
-
-                <DateFilterBar
-                  value={bedroomModalFilter}
-                  onChange={setBedroomModalFilter}
-                  years={years}
-                  months={months}
-                />
-
-                <TableControls
-                  search={bedroomSearch}
-                  onSearchChange={setBedroomSearch}
-                  sortKey={bedroomSortKey}
-                  onSortKeyChange={setBedroomSortKey}
-                  sortDir={bedroomSortDir}
-                  onSortDirChange={setBedroomSortDir}
-                  sortOptions={[
-                    "member_full_name",
-                    "villa_name",
-                    "check_in_date",
-                    "check_out_date",
-                    "nights",
-                    "persons",
-                  ]}
-                  placeholder="Search bedroom bookings..."
-                />
-
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    marginBottom: 12,
-                  }}
-                >
-                  <div style={{ color: C.muted, fontSize: 12 }}>
-                    {bedroomBookingsLoading
-                      ? null
-                      : `${filteredBedroomBookings.length} of ${bedroomBookings.length} records`}
-                  </div>
-                  <ExportMenu
-                    rows={bedroomExportRows}
-                    filenameBase={bedroomFilename}
-                    disabled={
-                      bedroomBookingsLoading || !bedroomExportRows.length
+                  <YAxis
+                    tick={{ fill: T.muted, fontSize: 11 }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={72}
+                    tickFormatter={(v) =>
+                      chartMetric === "revenue" ? moneyShort(v) : n0(v)
                     }
                   />
-                </div>
-
-                {bedroomBookingsLoading ? (
-                  <div style={{ color: C.muted }}>Loading bookings…</div>
-                ) : (
-                  <table
-                    style={{
-                      width: "100%",
-                      borderCollapse: "collapse",
-                      fontSize: 12,
-                    }}
-                  >
-                    <thead>
-                      <tr className="dashboard-eyebrow">
-                        {[
-                          "Who",
-                          "Villa",
-                          "Check in",
-                          "Check out",
-                          "Nights",
-                          "Guests",
-                        ].map((h) => (
-                          <th
-                            key={h}
-                            style={{ textAlign: "left", padding: 10 }}
-                          >
-                            {h}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredBedroomBookings.map((b) => (
-                        <tr
-                          key={b.conf_code}
-                          style={{ borderTop: `1px solid ${C.border}` }}
-                        >
-                          <td style={{ padding: 10 }}>
-                            {b.member_full_name ||
-                              b.member_name ||
-                              b.guest_name ||
-                              "—"}
-                          </td>
-                          <td style={{ padding: 10 }}>{b.villa_name || "—"}</td>
-                          <td style={{ padding: 10 }}>
-                            {b.check_in_date || "—"}
-                          </td>
-                          <td style={{ padding: 10 }}>
-                            {b.check_out_date || "—"}
-                          </td>
-                          <td style={{ padding: 10 }}>{fmt(b.nights)}</td>
-                          <td style={{ padding: 10 }}>{fmt(b.persons)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </aside>
-            </div>
-          )}
-
-          {/* ── Villa modal ────────────────────────────────────────────────── */}
-          {villaModalOpen && selectedVilla && (
-            <div
-              onClick={() => setVillaModalOpen(false)}
-              style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(8, 18, 32, 0.48)",
-                zIndex: 1000,
-                display: "flex",
-                justifyContent: "flex-end",
-                backdropFilter: "blur(3px)",
-              }}
-            >
-              <aside
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  width: "min(860px, 96vw)",
-                  height: "100vh",
-                  background: C.bg,
-                  borderLeft: `1px solid ${C.border}`,
-                  boxShadow: "-24px 0 60px rgba(0,0,0,0.22)",
-                  overflowY: "auto",
-                }}
-              >
-                <div
-                  style={{
-                    position: "sticky",
-                    top: 0,
-                    zIndex: 5,
-                    background: C.bg,
-                    borderBottom: `1px solid ${C.border}`,
-                    padding: "22px 26px 18px",
-                  }}
-                >
-                  <button
-                    onClick={() => setVillaModalOpen(false)}
-                    style={{
-                      position: "absolute",
-                      right: 22,
-                      top: 22,
-                      border: `1px solid ${C.border}`,
-                      background: C.panel,
-                      width: 36,
-                      height: 36,
-                      borderRadius: 999,
-                      cursor: "pointer",
-                      color: C.text,
-                    }}
-                  >
-                    <X size={18} />
-                  </button>
-                  <div className="dashboard-eyebrow">Villa booking profile</div>
-                  <h2
-                    style={{
-                      fontFamily: "'Cormorant Garamond', serif",
-                      fontSize: 38,
-                      color: C.text,
-                      margin: "4px 48px 4px 0",
-                      lineHeight: 1,
-                    }}
-                  >
-                    {selectedVilla.villa_name}
-                  </h2>
-                  <div style={{ color: C.soft, fontSize: 13 }}>
-                    {fmt(selectedVilla.bookings)} bookings ·{" "}
-                    {fmt(selectedVilla.total_nights)} room nights ·{" "}
-                    {money(selectedVilla.revenue)} revenue
-                  </div>
-                  <div style={{ marginTop: 14 }}>
-                    <DateFilterBar
-                      value={villaModalFilter}
-                      onChange={setVillaModalFilter}
-                      years={years}
-                      months={months}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ padding: 26 }}>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-                      gap: 12,
-                      marginBottom: 24,
-                    }}
-                  >
-                    {[
-                      ["Bookings", fmt(selectedVilla.bookings), "Total stays"],
-                      ["Revenue", money(selectedVilla.revenue), "Rental spend"],
-                      [
-                        "Avg Stay",
-                        `${num(selectedVilla.avg_stay)}n`,
-                        "Per booking",
-                      ],
-                      [
-                        "Guests",
-                        fmt(selectedVilla.total_guests),
-                        "Total guests",
-                      ],
-                      ["Bedrooms", bedroomsLabel(selectedVilla), "Villa setup"],
-                      [
-                        "Members",
-                        fmt(selectedVilla.unique_members),
-                        "Unique members",
-                      ],
-                    ].map(([label, value, sub]) => (
-                      <div
-                        key={label}
-                        style={{
-                          border: `1px solid ${C.border}`,
-                          background: C.panel,
-                          borderRadius: 18,
-                          padding: 16,
-                        }}
-                      >
-                        <div className="dashboard-eyebrow">{label}</div>
-                        <div
-                          style={{
-                            fontFamily: "'Cormorant Garamond', serif",
-                            color: C.text,
-                            fontSize: 28,
-                            marginTop: 4,
-                          }}
-                        >
-                          {value}
-                        </div>
-                        <div style={{ color: C.muted, fontSize: 11 }}>
-                          {sub}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      gap: 12,
-                      alignItems: "end",
-                      marginBottom: 12,
-                    }}
-                  >
-                    <div>
-                      <div className="dashboard-eyebrow">Booking timeline</div>
-                      <h3
-                        style={{
-                          color: C.text,
-                          margin: "4px 0 0",
-                          fontSize: 22,
-                        }}
-                      >
-                        People who booked this villa
-                      </h3>
-                    </div>
-                    <div
-                      style={{ display: "flex", alignItems: "center", gap: 10 }}
-                    >
-                      <div
-                        style={{
-                          color: C.muted,
-                          fontSize: 12,
-                          border: `1px solid ${C.border}`,
-                          borderRadius: 999,
-                          padding: "7px 11px",
-                          background: C.panelAlt,
-                        }}
-                      >
-                        {filteredVillaBookings.length} of {villaBookings.length}{" "}
-                        records
-                      </div>
-                      <ExportMenu
-                        rows={villaBookingRows}
-                        filenameBase={villaBookingFilename}
-                        disabled={
-                          villaBookingsLoading || !villaBookingRows.length
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  <TableControls
-                    search={villaBookingSearch}
-                    onSearchChange={setVillaBookingSearch}
-                    sortKey={villaBookingSortKey}
-                    onSortKeyChange={setVillaBookingSortKey}
-                    sortDir={villaBookingSortDir}
-                    onSortDirChange={setVillaBookingSortDir}
-                    sortOptions={[
-                      "member_full_name",
-                      "member_number",
-                      "conf_code",
-                      "check_in_date",
-                      "check_out_date",
-                      "nights",
-                      "persons",
-                      "revenue",
+                  <Tooltip
+                    cursor={{ fill: "rgba(0,58,89,0.05)" }}
+                    contentStyle={TIP_STYLE}
+                    formatter={(v) => [
+                      chartMetric === "revenue" ? money(v) : n0(v),
+                      chartMetric === "revenue" ? valueLabel : chartMetric,
                     ]}
-                    placeholder="Search villa bookings..."
                   />
-
-                  {villaBookingsLoading ? (
-                    <div
-                      style={{
-                        padding: 34,
-                        textAlign: "center",
-                        color: C.muted,
-                        border: `1px dashed ${C.border}`,
-                        borderRadius: 18,
-                      }}
-                    >
-                      Loading booking details...
-                    </div>
-                  ) : villaBookings.length === 0 ? (
-                    <div
-                      style={{
-                        padding: 34,
-                        textAlign: "center",
-                        color: C.muted,
-                        border: `1px dashed ${C.border}`,
-                        borderRadius: 18,
-                      }}
-                    >
-                      No booking details found.
-                    </div>
-                  ) : filteredVillaBookings.length === 0 ? (
-                    <div
-                      style={{
-                        padding: 34,
-                        textAlign: "center",
-                        color: C.muted,
-                        border: `1px dashed ${C.border}`,
-                        borderRadius: 18,
-                      }}
-                    >
-                      No matching booking details found.
-                    </div>
-                  ) : (
-                    <div style={{ position: "relative" }}>
-                      <div
-                        style={{
-                          position: "absolute",
-                          left: 17,
-                          top: 8,
-                          bottom: 8,
-                          width: 2,
-                          background: C.border,
-                        }}
+                  <Bar
+                    dataKey={chartKey}
+                    radius={[5, 5, 0, 0]}
+                    cursor="pointer"
+                    onClick={(d) => openFromChart(d?.payload ?? d)}
+                  >
+                    {chartData.map((d) => (
+                      <Cell
+                        key={d.key}
+                        fill={
+                          chartDim === "bedroom"
+                            ? bedColor(Number(d.key))
+                            : bedColor(
+                                d.configs?.length
+                                  ? Math.min(...d.configs)
+                                  : null,
+                              )
+                        }
+                        stroke={
+                          selection && selection.key === d.key
+                            ? T.flame
+                            : "none"
+                        }
+                        strokeWidth={3}
                       />
-                      {filteredVillaBookings.map((b, index) => {
-                        const guests = Array.isArray(b.guests) ? b.guests : [];
-                        const primaryName =
-                          b.member_full_name ??
-                          b.member_name ??
-                          b.guest_name ??
-                          "Unknown guest";
-                        return (
-                          <div
-                            key={b.conf_code ?? index}
-                            style={{
-                              position: "relative",
-                              display: "grid",
-                              gridTemplateColumns: "38px 1fr",
-                              gap: 14,
-                              marginBottom: 16,
-                            }}
-                          >
-                            <div
-                              style={{
-                                width: 34,
-                                height: 34,
-                                borderRadius: 999,
-                                background: C.accent2,
-                                color: "#fff",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                fontSize: 12,
-                                fontWeight: 800,
-                                zIndex: 1,
-                                marginTop: 10,
-                              }}
-                            >
-                              {index + 1}
-                            </div>
-                            <div
-                              style={{
-                                border: `1px solid ${C.border}`,
-                                background: index === 0 ? C.panelAlt : C.panel,
-                                borderRadius: 20,
-                                padding: 18,
-                                boxShadow: "0 10px 28px rgba(0,0,0,0.04)",
-                              }}
-                            >
-                              <div
-                                style={{
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  gap: 14,
-                                  alignItems: "flex-start",
-                                }}
-                              >
-                                <div>
-                                  <div
-                                    style={{
-                                      fontSize: 18,
-                                      fontWeight: 850,
-                                      color: C.text,
-                                    }}
-                                  >
-                                    {primaryName}
-                                  </div>
-                                  <div
-                                    style={{
-                                      color: C.soft,
-                                      fontSize: 12,
-                                      marginTop: 4,
-                                    }}
-                                  >
-                                    Member #{b.member_number ?? "—"} ·
-                                    Confirmation {b.conf_code ?? "—"}
-                                  </div>
-                                </div>
-                                <div
-                                  style={{ textAlign: "right", minWidth: 100 }}
-                                >
-                                  <div
-                                    style={{
-                                      fontWeight: 900,
-                                      color: C.text,
-                                      fontSize: 18,
-                                    }}
-                                  >
-                                    {money(b.revenue)}
-                                  </div>
-                                  <div style={{ color: C.muted, fontSize: 11 }}>
-                                    revenue
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div
-                                style={{
-                                  marginTop: 16,
-                                  display: "grid",
-                                  gridTemplateColumns: "1fr auto 1fr",
-                                  alignItems: "center",
-                                  gap: 10,
-                                  background: C.bg,
-                                  border: `1px solid ${C.border}`,
-                                  borderRadius: 16,
-                                  padding: 12,
-                                }}
-                              >
-                                <div>
-                                  <div className="dashboard-eyebrow">
-                                    Check-in
-                                  </div>
-                                  <div
-                                    style={{ color: C.text, fontWeight: 800 }}
-                                  >
-                                    {b.check_in_date ?? "—"}
-                                  </div>
-                                </div>
-                                <div
-                                  style={{
-                                    borderRadius: 999,
-                                    padding: "7px 12px",
-                                    background: C.panelAlt,
-                                    color: C.accent,
-                                    fontWeight: 800,
-                                    fontSize: 12,
-                                    whiteSpace: "nowrap",
-                                  }}
-                                >
-                                  {fmt(b.nights)} nights · {fmt(b.persons)}{" "}
-                                  guests
-                                </div>
-                                <div style={{ textAlign: "right" }}>
-                                  <div className="dashboard-eyebrow">
-                                    Check-out
-                                  </div>
-                                  <div
-                                    style={{ color: C.text, fontWeight: 800 }}
-                                  >
-                                    {b.check_out_date ?? "—"}
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div
-                                style={{
-                                  display: "grid",
-                                  gridTemplateColumns: "1fr 1fr",
-                                  gap: 10,
-                                  marginTop: 12,
-                                }}
-                              >
-                                {[
-                                  ["Email", b.email ?? "—"],
-                                  ["Phone", b.phone ?? "—"],
-                                ].map(([lbl, val]) => (
-                                  <div
-                                    key={lbl}
-                                    style={{
-                                      border: `1px solid ${C.border}`,
-                                      borderRadius: 14,
-                                      padding: 11,
-                                      background: C.bg,
-                                    }}
-                                  >
-                                    <div className="dashboard-eyebrow">
-                                      {lbl}
-                                    </div>
-                                    <div
-                                      style={{
-                                        color: C.soft,
-                                        fontSize: 12,
-                                        wordBreak: "break-word",
-                                      }}
-                                    >
-                                      {val}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-
-                              {guests.length > 0 && (
-                                <div style={{ marginTop: 15 }}>
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      alignItems: "center",
-                                      justifyContent: "space-between",
-                                      marginBottom: 8,
-                                    }}
-                                  >
-                                    <div className="dashboard-eyebrow">
-                                      Guest manifest
-                                    </div>
-                                    <div
-                                      style={{ color: C.muted, fontSize: 11 }}
-                                    >
-                                      {guests.length} guest
-                                      {guests.length === 1 ? "" : "s"}
-                                    </div>
-                                  </div>
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      flexWrap: "wrap",
-                                      gap: 8,
-                                    }}
-                                  >
-                                    {guests.map((g, i) => (
-                                      <div
-                                        key={`${b.conf_code}-${i}`}
-                                        style={{
-                                          border: `1px solid ${C.border}`,
-                                          borderRadius: 999,
-                                          padding: "8px 11px",
-                                          background: g.is_owner
-                                            ? C.panelAlt
-                                            : C.bg,
-                                          color: C.text,
-                                          fontSize: 12,
-                                          display: "flex",
-                                          gap: 6,
-                                          alignItems: "center",
-                                        }}
-                                      >
-                                        <span style={{ fontWeight: 800 }}>
-                                          {g.guest_name ?? "Unnamed guest"}
-                                        </span>
-                                        <span style={{ color: C.muted }}>
-                                          {g.is_owner ? "Owner" : "Guest"}
-                                        </span>
-                                        {g.room_number && (
-                                          <span style={{ color: C.soft }}>
-                                            Room {g.room_number}
-                                          </span>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </aside>
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* ── Tied villas modal ─────────────────────────────────────────── */}
-          {tieModalOpen && (
-            <div
-              onClick={() => setTieModalOpen(false)}
+        <div
+          className="mt-3 flex flex-wrap items-center"
+          style={{ gap: "4px 16px" }}
+        >
+          <span style={{ fontSize: 12, color: T.slate }}>
+            {chartDim === "villa"
+              ? "Bar colour = villa's smallest bedroom layout"
+              : "Bar colour = bedroom count"}
+          </span>
+          {[2, 3, 4, 5, 6, 7].map((b) => (
+            <span
+              key={b}
+              className="flex items-center gap-1.5"
+              style={{ fontSize: 12, color: T.muted }}
+            >
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 3,
+                  background: bedColor(b),
+                  display: "inline-block",
+                }}
+              />
+              {b}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Performance table ──────────────────────────────────────────── */}
+      <div
+        className="visits-panel-card"
+        style={{
+          background: T.card,
+          border: `1px solid ${T.line}`,
+          borderRadius: 18,
+          minWidth: 0,
+        }}
+      >
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2
               style={{
-                position: "fixed",
-                inset: 0,
-                background: "rgba(8, 18, 32, 0.48)",
-                zIndex: 1000,
-                display: "flex",
-                justifyContent: "flex-end",
+                fontFamily: FONT_DISPLAY,
+                fontSize: 22,
+                color: T.ink,
+                margin: 0,
               }}
             >
-              <aside
-                onClick={(e) => e.stopPropagation()}
-                style={{
-                  width: "min(620px, 96vw)",
-                  height: "100vh",
-                  background: C.bg,
-                  borderLeft: `1px solid ${C.border}`,
-                  overflowY: "auto",
-                  padding: 26,
-                }}
-              >
-                <button onClick={() => setTieModalOpen(false)}>
-                  <X size={18} />
-                </button>
+              Performance by {tableDim === "villa" ? "villa" : "bedroom count"}
+            </h2>
+            <p className="mt-0.5" style={{ fontSize: 12, color: T.slate }}>
+              {n0(tableRows.length)} row{tableRows.length === 1 ? "" : "s"}
+              {query.trim() ? ` matching “${query}”` : ""} · select a row for
+              its full record
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Segmented
+              size="sm"
+              value={tableDim}
+              onChange={(v) => {
+                setTableDim(v);
+                setQuery("");
+              }}
+              options={[
+                { value: "villa", label: "Villa" },
+                { value: "bedroom", label: "Bedrooms" },
+              ]}
+            />
+            <ExportMenu
+              rows={tableExport}
+              filenameBase={`villa_performance_${tableDim}_${safeFilePart(periodFilePart(period))}`}
+              disabled={!tableExport.length}
+            />
+            <InfoTip id="table" />
+          </div>
+        </div>
 
-                <div className="dashboard-eyebrow">Tied villas</div>
-                <h2 className="dashboard-card-title">{tieModalTitle}</h2>
+        {/* Sort + search controls */}
+        <div
+          className="visits-toolbar mb-4"
+          style={{
+            background: T.mist,
+            border: `1px solid ${T.line}`,
+            borderRadius: 14,
+            padding: "10px 14px",
+          }}
+        >
+          <Field
+            label="Sort by"
+            value={tableSort.col}
+            onChange={(col) => setTableSort((s) => ({ ...s, col }))}
+            options={[
+              ["value", valueLabel],
+              ["bookings", "Bookings"],
+              ["nights", "Nights spent"],
+              ["avgStay", "Avg stay"],
+              ["members", "Members"],
+              ["name", tableDim === "villa" ? "Villa name" : "Bedroom size"],
+            ]}
+          />
+          <Field
+            label="Order"
+            value={tableSort.dir}
+            onChange={(dir) => setTableSort((s) => ({ ...s, dir }))}
+            options={[
+              ["desc", "Descending"],
+              ["asc", "Ascending"],
+            ]}
+          />
+          <div
+            className="ml-auto flex items-center gap-2 rounded-full px-3 py-1.5"
+            style={{ background: T.card, border: `1px solid ${T.line}` }}
+          >
+            <Search size={14} style={{ color: T.slate }} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={
+                tableDim === "villa" ? "Search villas" : "Search bedroom size"
+              }
+              className="vr-focus"
+              style={{
+                background: "transparent",
+                border: "none",
+                outline: "none",
+                width: 160,
+                fontSize: 13,
+                color: T.ink,
+              }}
+            />
+          </div>
+        </div>
 
-                <table
-                  style={{
-                    width: "100%",
-                    borderCollapse: "collapse",
-                    fontSize: 12,
-                  }}
-                >
-                  <thead>
-                    <tr className="dashboard-eyebrow">
-                      {[
-                        "Villa",
-                        "Bedrooms",
-                        "Bookings",
-                        "Nights",
-                        "Revenue",
-                      ].map((h) => (
-                        <th
-                          key={h}
-                          style={{
-                            textAlign: h === "Villa" ? "left" : "right",
-                            padding: 10,
-                          }}
-                        >
-                          {h}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
+        {!tableRows.length ? (
+          <Empty>
+            {query.trim()
+              ? `Nothing matches “${query}”. Clear the search to see everything.`
+              : "No rows for the current period and payment filters."}
+          </Empty>
+        ) : (
+          <ScrollShell maxHeight={460}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                minWidth: 780,
+              }}
+            >
+              <thead>
+                <tr>
+                  {[
+                    [
+                      tableDim === "villa" ? "Villa" : "Bedrooms",
+                      "name",
+                      "left",
+                    ],
+                    [valueLabel, "value", "right"],
+                    ["Bookings", "bookings", "right"],
+                    ["Nights spent", "nights", "right"],
+                    ["Avg stay", "avgStay", "right"],
+                    ["Members", "members", "right"],
+                  ].map(([label, col, align]) => (
+                    <th
+                      key={col}
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 1,
+                        background: T.card,
+                        borderBottom: `2px solid ${T.line}`,
+                        padding: "10px 12px",
+                      }}
+                    >
+                      <SortHeader
+                        label={label}
+                        col={col}
+                        sort={tableSort}
+                        setSort={setTableSort}
+                        align={align}
+                      />
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {tableRows.map((r) => (
+                  <tr
+                    key={r.key}
+                    className="vr-row"
+                    onClick={() =>
+                      tableDim === "villa"
+                        ? openVilla(r.name)
+                        : r.key !== "Unknown" && openBedroom(r.key)
+                    }
+                    style={{
+                      borderBottom: `1px solid ${T.lineSoft}`,
+                      cursor: "pointer",
+                      background:
+                        tableDim === "villa" && r.name === selectedVillaName
+                          ? T.mist
+                          : "transparent",
+                    }}
+                  >
+                    <td style={{ padding: "11px 12px" }}>
+                      <div className="flex items-center gap-3">
+                        <ConfigSwatch configs={r.configs} />
+                        <div>
+                          <div style={{ fontSize: 13, color: T.ink }}>
+                            {r.name}
+                          </div>
+                          <div style={{ fontSize: 11, color: T.slate }}>
+                            {tableDim === "villa"
+                              ? r.configs?.length
+                                ? `${r.configs.join(" / ")} bedroom${r.configs.length > 1 ? " layouts" : ""}`
+                                : "Bedroom count not set"
+                              : `${n0(r.members)} member accounts`}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td
+                      style={{
+                        padding: "11px 12px",
+                        textAlign: "right",
+                        fontFamily: FONT_NUM,
+                        fontSize: 13,
+                        color: tab === "free" ? "#B07B33" : T.deep,
+                      }}
+                    >
+                      {money(r.value)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "11px 12px",
+                        textAlign: "right",
+                        fontFamily: FONT_NUM,
+                        fontSize: 13,
+                        color: T.ink,
+                      }}
+                    >
+                      {n0(r.bookings)}
+                      {tab === "overall" && (
+                        <div style={{ fontSize: 10, color: T.slate }}>
+                          {n0(r.paid)} paid · {n0(r.comp)} comp
+                        </div>
+                      )}
+                    </td>
+                    <td
+                      style={{
+                        padding: "11px 12px",
+                        textAlign: "right",
+                        fontFamily: FONT_NUM,
+                        fontSize: 13,
+                        color: T.ink,
+                      }}
+                    >
+                      {n0(r.nights)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "11px 12px",
+                        textAlign: "right",
+                        fontFamily: FONT_NUM,
+                        fontSize: 13,
+                        color: T.muted,
+                      }}
+                    >
+                      {r.avgStay == null ? "—" : n1(r.avgStay)}
+                    </td>
+                    <td
+                      style={{
+                        padding: "11px 12px",
+                        textAlign: "right",
+                        fontFamily: FONT_NUM,
+                        fontSize: 13,
+                        color: T.muted,
+                      }}
+                    >
+                      {n0(r.members)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </ScrollShell>
+        )}
 
-                  <tbody>
-                    {tieModalRows.map((villa) => (
-                      <tr
-                        key={villa.villa_name}
-                        onClick={() => {
-                          setTieModalOpen(false);
-                          openVillaModal(villa.villa_name);
-                        }}
-                        style={{
-                          borderTop: `1px solid ${C.border}`,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <td style={{ padding: 10, color: C.text }}>
-                          {villa.villa_name}
-                        </td>
-                        <td
-                          style={{
-                            padding: 10,
-                            textAlign: "right",
-                            color: C.soft,
-                          }}
-                        >
-                          {villaBedroomLabel(villa)}
-                        </td>
-                        <td
-                          style={{
-                            padding: 10,
-                            textAlign: "right",
-                            color: C.soft,
-                          }}
-                        >
-                          {fmt(villa.bookings)}
-                        </td>
-                        <td
-                          style={{
-                            padding: 10,
-                            textAlign: "right",
-                            color: C.soft,
-                          }}
-                        >
-                          {fmt(villa.total_nights)}
-                        </td>
-                        <td
-                          style={{
-                            padding: 10,
-                            textAlign: "right",
-                            color: C.soft,
-                          }}
-                        >
-                          {money(villa.revenue)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </aside>
-            </div>
-          )}
-        </>
+        <p
+          className="mt-3 flex items-center gap-1"
+          style={{ fontSize: 12, color: T.slate }}
+        >
+          Money is the netted Overview ledger, so this page ties out to Finance.
+          <InfoTip id="reconcile" />
+        </p>
+      </div>
+
+      {/* Panels mount only while open — nothing dereferences a cleared selection. */}
+      {selection && (
+        <DrillPanel
+          selection={selection}
+          tab={tab}
+          params={params}
+          period={period}
+          onClose={() => setSelection(null)}
+          onOpenVilla={openVilla}
+        />
       )}
 
-      {/* ════════════════════════════════════════════════════════════════════ */}
-      {/* SOURCES VIEW                                                        */}
-      {/* ════════════════════════════════════════════════════════════════════ */}
-
-      {topView === "sources" && (
-        <VillaSourceBreakdown years={years} months={months} />
+      {splitOpen && (
+        <MemberGuestPanel
+          params={params}
+          period={period}
+          onClose={() => setSplitOpen(false)}
+        />
       )}
     </div>
   );
