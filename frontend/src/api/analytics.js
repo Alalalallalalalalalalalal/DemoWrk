@@ -33,6 +33,12 @@ const withQuery = (endpoint, params = {}) => {
   return queryString ? `${endpoint}?${queryString}` : endpoint;
 };
 
+// Small helper so every call can optionally take { signal } for cancellation
+// without repeating the same ternary. Passing an empty object to fetch() is
+// the same as passing nothing.
+const withSignal = (options = {}) =>
+  options.signal ? { signal: options.signal } : {};
+
 export const analyticsApi = {
   // Combined dashboard endpoint
   dashboardSummary: () => fetchData("/analytics/dashboard-summary"),
@@ -131,35 +137,75 @@ export const analyticsApi = {
 
   // Member segments
   memberSegments: () => fetchData("/analytics/ml/member-segments"),
-  // Inside the analyticsApi object, add alongside memberSegments:
   getSegmentConfig: () => fetchData("/analytics/ml/segment-config"),
   updateSegmentConfig: (payload) =>
     fetchData("/analytics/ml/segment-config", jsonRequest("PATCH", payload)),
 
-  visitsRoomsDashboard: (params = {}) =>
-    fetchData(withQuery("/analytics/visits-rooms-dashboard", params)),
+  // ── Visits & Rooms ────────────────────────────────────────────────
+  //
+  // As of the Aug 2026 perf work, this ONE call returns everything the
+  // Visits & Rooms page needs on load:
+  //   summary, villa_stats, bookings_by_bedroom, villa_paid_free_totals,
+  //   monthly_revenue, villa_source_breakdown, villa_source_bedroom_breakdown
+  //
+  // It used to be three separate calls, and the backend rebuilt its whole
+  // booking base for each one. Second arg takes { signal } so a superseded
+  // request can be aborted instead of left in flight holding a DB
+  // connection — same pattern overviewApi.summary() already uses.
+  visitsRoomsDashboard: (params = {}, options = {}) =>
+    fetchData(
+      withQuery("/analytics/visits-rooms-dashboard", params),
+      withSignal(options),
+    ),
 
-  // frontend/src/api/analytics.js
-  villaMonthly: (villa, params = {}) =>
-    fetchData(withQuery("/analytics/villa-monthly", { villa, ...params })),
+  villaMonthly: (villa, params = {}, options = {}) =>
+    fetchData(
+      withQuery("/analytics/villa-monthly", { villa, ...params }),
+      withSignal(options),
+    ),
+
   villaBookings: (villaName, params = {}) =>
     fetchData(
       withQuery("/analytics/villa-bookings", { villa: villaName, ...params }),
     ),
 
-  bedroomBookings: (beds, params = {}) =>
-    fetchData(withQuery("/analytics/bedroom-bookings", { beds, ...params })),
+  bedroomBookings: (beds, params = {}, options = {}) =>
+    fetchData(
+      withQuery("/analytics/bedroom-bookings", { beds, ...params }),
+      withSignal(options),
+    ),
 
-  bookedPeople: (kind, params = {}) =>
-    fetchData(withQuery("/analytics/booked-people", { kind, ...params })),
+  bookedPeople: (kind, params = {}, options = {}) =>
+    fetchData(
+      withQuery("/analytics/booked-people", { kind, ...params }),
+      withSignal(options),
+    ),
 
-  // Villa × business source
-  villaSourceBreakdown: (params = {}) =>
-    fetchData(withQuery("/analytics/villa-source-breakdown", params)),
+  // ── Villa × business source ───────────────────────────────────────
+  //
+  // KEEP THESE. The Visits page no longer calls villaSourceBreakdown or
+  // villaSourceBedroomBreakdown on load (both datasets now arrive inside
+  // visitsRoomsDashboard above), but the backend endpoints still exist and
+  // removing these client methods breaks any other caller — and broke the
+  // Visits page itself while it still referenced them.
+  villaSourceBreakdown: (params = {}, options = {}) =>
+    fetchData(
+      withQuery("/analytics/villa-source-breakdown", params),
+      withSignal(options),
+    ),
 
-  villaSourceBookings: (villa, params = {}) =>
+  villaSourceBedroomBreakdown: (params = {}, options = {}) =>
+    fetchData(
+      withQuery("/analytics/villa-source-bedroom-breakdown", params),
+      withSignal(options),
+    ),
+
+  // `limit` is optional — the drawer passes one, because a busy villa can
+  // return thousands of rows each carrying a nested guests JSON blob.
+  villaSourceBookings: (villa, params = {}, options = {}) =>
     fetchData(
       withQuery("/analytics/villa-source-bookings", { villa, ...params }),
+      withSignal(options),
     ),
 
   villaSources: (villa = null, params = {}) =>
@@ -170,9 +216,7 @@ export const analyticsApi = {
       }),
     ),
 
-  villaSourceBedroomBreakdown: (params = {}) =>
-    fetchData(withQuery("/analytics/villa-source-bedroom-breakdown", params)),
-
+  // ── Marketing ─────────────────────────────────────────────────────
   marketingCampaigns: (includeInactive = false) =>
     fetchData(
       withQuery("/analytics/ml/marketing-campaigns", {

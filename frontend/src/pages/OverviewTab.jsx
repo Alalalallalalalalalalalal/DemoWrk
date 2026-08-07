@@ -153,7 +153,7 @@ function FixedTooltip() {
     const ctx = useContext(TooltipContext);
     if (!ctx?.active) return null;
     const { text, rect, width: customWidth } = ctx.active;
-    const width = customWidth || 280;
+    const width = Math.min(customWidth || 380, window.innerWidth - 16);
     const margin = 8;
     let left = rect.right - width;
     left = Math.max(margin, Math.min(left, window.innerWidth - width - margin));
@@ -171,63 +171,89 @@ function FixedTooltip() {
     // all running together in one wall of text.
     const isSections = Array.isArray(text);
     return (
-        <div style={{
-            position: "fixed",
-            top: preferAbove ? undefined : top,
-            bottom: preferAbove ? window.innerHeight - rect.top + 6 : undefined,
-            left,
-            width,
-            maxHeight: "calc(100vh - 16px)",
-            overflowY: "auto",
-            background: "#1B2632",
-            color: "#EEE9DF",
-            fontSize: 11,
-            lineHeight: 1.5,
-            padding: isSections ? "10px 12px" : "8px 10px",
-            borderRadius: 8,
-            zIndex: 9999,
-            fontFamily: "sans-serif",
-            fontWeight: 400,
-            pointerEvents: "none",
-            boxShadow: "0 6px 20px rgba(0,0,0,0.18)",
-        }}>
-            {isSections ? (
-                text.map((section, i) => (
-                    <div
-                        key={section.label ?? i}
-                        style={{
-                            paddingTop: i === 0 ? 0 : 8,
-                            marginTop: i === 0 ? 0 : 8,
-                            borderTop: i === 0 ? "none" : "1px solid rgba(255,255,255,0.14)",
-                        }}
-                    >
-                        {section.label && (
-                            <div style={{ fontWeight: 700, color: "#fff", marginBottom: 2, fontSize: 11 }}>
-                                {section.label}
-                            </div>
-                        )}
-                        <div>{section.body}</div>
-                    </div>
-                ))
-            ) : text}
-        </div>
+        <>
+            {/* click-away backdrop, same pattern as VillaFeesTab's InfoButton */}
+            <div
+                onClick={() => ctx.hide()}
+                style={{ position: "fixed", inset: 0, zIndex: 9998 }}
+            />
+            <div style={{
+                position: "fixed",
+                top: preferAbove ? undefined : top,
+                bottom: preferAbove ? window.innerHeight - rect.top + 6 : undefined,
+                left,
+                width,
+                maxHeight: 420,
+                overflowY: "auto",
+                background: C.bg,
+                border: `1px solid ${C.border}`,
+                color: C.text,
+                fontSize: 12,
+                lineHeight: 1.55,
+                padding: 14,
+                borderRadius: 14,
+                zIndex: 9999,
+                fontFamily: "sans-serif",
+                fontWeight: 400,
+                boxShadow: "0 14px 34px rgba(0,0,0,0.18)",
+            }}>
+                {isSections ? (
+                    text.map((section, i) => (
+                        <div key={section.label ?? i} style={{ marginBottom: 10 }}>
+                            {section.label && (
+                                <div style={{
+                                    fontSize: 10,
+                                    fontWeight: 800,
+                                    textTransform: "uppercase",
+                                    letterSpacing: 0.6,
+                                    color: C.accent,
+                                    marginBottom: 3,
+                                }}>
+                                    {section.label}
+                                </div>
+                            )}
+                            <div style={{ color: C.soft }}>{section.body}</div>
+                        </div>
+                    ))
+                ) : <div style={{ color: C.soft }}>{text}</div>}
+            </div>
+        </>
     );
 }
 
+// [2026-08-07] CLICK, not hover. The panel is scrollable now, and a
+// hover tooltip cannot be scrolled: it needs pointerEvents "none" so the
+// pointer can still reach the icon, and moving toward the scrollbar fires
+// mouseleave and closes it. Click also matches the Annual Fees info
+// button. Position stays FIXED - see the note above FixedTooltip for the
+// overflow:hidden clipping that rules out an absolute panel here.
+let _infoDotSeq = 0;
+
 const InfoDot = ({ tip, width }) => {
     const ctx = useContext(TooltipContext);
+    const [id] = useState(() => ++_infoDotSeq);
+    const isOpen = ctx?.active?.id === id;
     return (
-        <div
-            style={{
-                width: 15, height: 15, borderRadius: "50%",
-                border: `1px solid ${C.border}`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontSize: 9, color: C.muted, fontWeight: 700, lineHeight: 1,
-                flexShrink: 0, cursor: "default",
+        <button
+            type="button"
+            aria-label="About this card"
+            aria-expanded={isOpen}
+            onClick={(e) => {
+                e.stopPropagation();
+                if (isOpen) ctx?.hide();
+                else ctx?.show(tip, e.currentTarget.getBoundingClientRect(), width, id);
             }}
-            onMouseEnter={(e) => ctx?.show(tip, e.currentTarget.getBoundingClientRect(), width)}
-            onMouseLeave={() => ctx?.hide()}
-        >i</div>
+            style={{
+                width: 16, height: 16, borderRadius: "50%",
+                border: `1px solid ${isOpen ? C.accent : C.border}`,
+                background: isOpen ? C.accent : "transparent",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 9, color: isOpen ? C.navyText : C.muted,
+                fontWeight: 700, lineHeight: 1,
+                flexShrink: 0, cursor: "pointer", padding: 0,
+                fontFamily: "sans-serif",
+            }}
+        >i</button>
     );
 };
 
@@ -527,7 +553,7 @@ export default function OverviewTab({
     const [tooltipActive, setTooltipActive] = useState(null);
     const tooltipCtxValue = useMemo(() => ({
         active: tooltipActive,
-        show: (text, rect, width) => setTooltipActive({ text, rect, width }),
+        show: (text, rect, width, id) => setTooltipActive({ text, rect, width, id }),
         hide: () => setTooltipActive(null),
     }), [tooltipActive]);
 
@@ -983,7 +1009,7 @@ export default function OverviewTab({
     const distinctVillasWithBookings = new Set(villaStats.map(v => v.villa_name)).size;
 
     const heroKpis = [
-        { label: "Villa Revenue ($USD)", value: heroVillaRevenue > 0 ? money(heroVillaRevenue) : "—", sub: "Incl. rental programme income", color: C.flame, tip: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. This is all villa rental income for the period: stays billed through member accounts plus the rental-programme payouts to villa owners (used exactly as paid out - no commission is deducted; tax is already excluded). Amenities are not included. Matches the Villa figure on Finance at a glance exactly. Always shows the full picture, regardless of any toggle elsewhere on the page." },
+        { label: "Villa Revenue ($USD)", value: heroVillaRevenue > 0 ? money(heroVillaRevenue) : "—", sub: "Statements Posted", color: C.flame, tip: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected via the member statements. Stays still in progress and future bookings are not counted until checkout. This is all villa rental income for the period. Amenities are not included." },
         // "Outstanding ($USD)" removed again 2026-07-03, per request. Was
         // rebuilt earlier the same day using the new statements table
         // (/overview/outstanding-balance-summary) after being removed on
@@ -992,9 +1018,9 @@ export default function OverviewTab({
         // The backend endpoint and dashboard.jsx wiring are left intact
         // in case this comes back again later — only the hero tile itself
         // is removed here.
-        { label: "Room Nights", value: heroSummary?.total_room_nights?.toLocaleString() ?? "—", sub: `Avg ${heroSummary?.avg_length_of_stay?.toFixed(1) ?? "—"} nights/stay`, color: C.navyText, tip: "Total nights stayed across every reservation - one 7-night stay counts as 7. Rental-programme stays are not included, because those bookings are not individually tracked in our data, only their income is." },
-        { label: "Rev / Booking ($USD)", value: (heroReservationCount ?? 0) > 0 ? money(heroBookingLevelVillaRevenue / heroReservationCount) : "—", sub: "Avg. rate charged per reservation", color: C.navyText, tip: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. This is posted villa rental money from tracked bookings, divided by the number of those bookings - the average one booking brings in from the room charge alone, not counting amenities. Rental-programme income is left out because those stays have no booking count, so including it would inflate the average." },
-        { label: "Peak Month", value: peakMonth?.month ?? "—", sub: peakMonth ? money(peakMonth.revenue) : "—", color: C.flame, tip: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. Peak Month is the month with the most posted money - villa plus amenities, including rental-programme income in the month it was earned. Follows the Overall/Paid/Free toggle on the Revenue by month card further down." },
+        { label: "Room Nights", value: heroSummary?.total_room_nights?.toLocaleString() ?? "—", sub: `Avg ${heroSummary?.avg_length_of_stay?.toFixed(1) ?? "—"} nights/stay`, color: C.navyText, tip: "Total nights stayed across every reservation - one 7-night stay counts as 7." },
+        { label: "Rev / Booking ($USD)", value: (heroReservationCount ?? 0) > 0 ? money(heroBookingLevelVillaRevenue / heroReservationCount) : "—", sub: "Avg. rate charged per reservation", color: C.navyText, tip: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. This is posted villa rental money from tracked bookings, divided by the number of those bookings - the average one booking brings in from the room charge alone, not counting amenities." },
+        { label: "Peak Month", value: peakMonth?.month ?? "—", sub: peakMonth ? money(peakMonth.revenue) : "—", color: C.flame, tip: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. Peak Month is the month with the most posted money - villa plus amenities." },
         { label: "Active Accounts", value: membersByStatus.find(s => s.status === "Active")?.total?.toLocaleString() ?? "—", sub: `of ${totalAccounts.toLocaleString()} total`, color: C.navyText, tip: "How many member and guest accounts are currently marked Active, out of every account on file. A count of accounts, not dollars." },
     ];
 
@@ -1045,7 +1071,7 @@ export default function OverviewTab({
                             tip={[
                                 {
                                     label: "How this card counts accounts",
-                                    body: "A simple headcount of every member and guest account on file. No dollar amounts, no bookings. The date picker above does not affect this card - it is always a current snapshot.",
+                                    body: "A simple headcount of every member and guest account on file. The date picker above does not affect this card - it is always a current snapshot.",
                                 },
                                 {
                                     label: "Active members / Active guests / Inactive accounts",
@@ -1101,11 +1127,11 @@ export default function OverviewTab({
                             tip={[
                                 {
                                     label: "How this card counts bookings",
-                                    body: "Counts whole reservations, not charges. Someone who booked twice counts as 2. Cancelled and no-show bookings are excluded. Paid or Free here means whether the stay itself was paid or comped. Rental-programme stays are not counted - those bookings are not individually tracked in our data, only their income is (shown on the revenue cards).",
+                                    body: "Counts whole reservations. Someone who booked twice counts as 2. Cancelled and no-show bookings are excluded. Paid or Free here means whether the stay itself was paid or comped.",
                                 },
                                 {
                                     label: "Bookings by members / by guests",
-                                    body: "These always add up to Total bookings - every booking is one or the other.",
+                                    body: "These always add up to Total bookings - every booking is either a member or a guest.",
                                 },
                                 {
                                     label: "Total room nights",
@@ -1113,15 +1139,15 @@ export default function OverviewTab({
                                 },
                                 {
                                     label: "ADR (avg. daily rate)",
-                                    body: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. ADR is that posted villa rental money divided by nights sold - the real average earned per night after discounts and corrections, not the list price. Rental-programme income is left out because it has no night count to divide by.",
+                                    body: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. ADR is that posted villa rental money divided by nights sold - the real average earned per night after discounts and corrections, not the list price.",
                                 },
                                 {
                                     label: "Rack rate ADR",
-                                    body: "The list price per night, averaged the same way as ADR. The gap between the two is the average discount being given. If ADR is higher than rack, stays were billed above list price on average - that is real, not an error.",
+                                    body: "The list price per night, averaged the same way as ADR. The gap between the two is the average discount being given. If ADR is higher than rack, stays were billed above list price on average.",
                                 },
                                 {
                                     label: "Avg. stay / Avg. party size",
-                                    body: "Average nights per stay and average people per booking, following the filter above.",
+                                    body: "Average nights per stay and average people per booking.",
                                 },
                                 {
                                     label: "Most booked bedroom",
@@ -1140,8 +1166,8 @@ export default function OverviewTab({
                             <StatRow label="Bookings by members" value={bookingsSummary?.total_members_booked?.toLocaleString() ?? "—"} />
                             <StatRow label="Bookings by guests" value={bookingsSummary?.total_guests_booked?.toLocaleString() ?? "—"} />
                             <StatRow label="Total room nights" value={bookingsSummary?.total_room_nights?.toLocaleString() ?? "—"} />
-                            <StatRow label="ADR (avg. daily rate)" value={adr != null ? money(adr, 2) : "—"} />
-                            <StatRow label="Rack rate ADR" value={rackAdr != null ? money(rackAdr, 2) : "—"} sub={effectiveDiscountPct != null ? `${effectiveDiscountPct.toFixed(1)}% avg. discount off rack` : "Published/list price"} />
+                            <StatRow label="ADR, avg. daily rate ($USD)" value={adr != null ? money(adr, 2) : "—"} />
+                            <StatRow label="Rack rate ADR ($USD)" value={rackAdr != null ? money(rackAdr, 2) : "—"} sub={effectiveDiscountPct != null ? `${effectiveDiscountPct.toFixed(1)}% avg. discount off rack` : "Published/list price"} />
                             <StatRow label="Avg. stay" value={bookingsSummary?.avg_length_of_stay != null ? `${bookingsSummary.avg_length_of_stay.toFixed(1)} nights` : "—"} />
                             <StatRow label="Avg. party size" value={bookingsSummary?.avg_party_size != null ? bookingsSummary.avg_party_size.toFixed(1) : "—"} sub={bookingsSummary?.party_size_sample != null && totalBookingsMadeForBookings > 0 ? `from ${bookingsSummary.party_size_sample.toLocaleString()} of ${totalBookingsMadeForBookings.toLocaleString()} bookings` : undefined} />
                             <StatRow label="Most booked bedroom" value={topBedroom ? `${topBedroom.beds} BR` : "—"} sub={topBedroom ? `${topBedroom.bookings} bookings` : undefined} />
@@ -1158,19 +1184,19 @@ export default function OverviewTab({
                             tip={[
                                 {
                                     label: "How this card counts money",
-                                    body: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. This card counts individual charges, not whole bookings. Paid means real money was charged, after cancelling out any matching refund. Free means the charge ended up at zero (comped or reversed) - the booking itself may still have been paid. Villa revenue includes the rental-programme payouts to villa owners, used exactly as paid out (no commission is deducted; tax is already excluded). Under the Free pill, Total revenue shows the value given away - what was originally charged before being comped - since collected money on anything Free is zero by definition. Under Overall and Paid, Total revenue also includes Member dues. The rows further down (Reversed charges, Cash advance, Tips, Payments collected, Payment corrections, Unexplained reversals) are separate buckets kept out of revenue - they do not change with the Paid/Free toggle.",
+                                    body: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. This card counts individual charges. Paid means money was charged after cancelling out any matching refund. Free means the charge ended up at zero (comped or reversed) - the booking itself may still have been paid. Villa revenue includes the posted statement payouts to villa owners. The rows further down (Reversed charges, Cash advance, Tips, Payments collected, Payment corrections, Unexplained reversals) are separate buckets kept out of revenue - they do not change with the Paid/Free toggle.",
                                 },
                                 {
                                     label: "Reversed charges",
-                                    body: `Charges that were fully reversed (a charge and its exact-opposite correction, even when worded differently) are pulled out of Total revenue entirely so they don't inflate or distort the numbers.${reversalsSummary?.reversed_count != null ? ` Currently ${reversalsSummary.reversed_count.toLocaleString()} charges.` : ""}`,
+                                    body: `Charges that were fully reversed (a charge and its exact-opposite correction are pulled out of Total revenue entirely so they don't inflate or distort the numbers.${reversalsSummary?.reversed_count != null ? ` Currently ${reversalsSummary.reversed_count.toLocaleString()} charges.` : ""}`,
                                 },
                                 {
                                     label: "Cash advance",
-                                    body: `Cash handed directly to a guest and billed to their folio - not product or service revenue, so it's pulled out the same way.${cashAdvanceSummary?.cash_advance_count != null ? ` Currently ${cashAdvanceSummary.cash_advance_count.toLocaleString()} charges.` : ""}`,
+                                    body: `Cash handed directly to a guest and billed to their folio.${cashAdvanceSummary?.cash_advance_count != null ? ` Currently ${cashAdvanceSummary.cash_advance_count.toLocaleString()} charges.` : ""}`,
                                 },
                                 {
                                     label: "Tips",
-                                    body: `Standalone staff-gratuity charges, also pulled out. Tips bundled into a single combined spa/amenity charge stay in Amenity revenue since they aren't reliably separable.${tipsSummary?.tip_count != null ? ` Currently ${tipsSummary.tip_count.toLocaleString()} charges.` : ""}`,
+                                    body: `Standalone staff-gratuity charges.${tipsSummary?.tip_count != null ? ` Currently ${tipsSummary.tip_count.toLocaleString()} charges.` : ""}`,
                                 },
                                 {
                                     label: "Payments collected",
@@ -1182,11 +1208,11 @@ export default function OverviewTab({
                                 },
                                 {
                                     label: "Unexplained reversals",
-                                    body: "A few refunds that do not clearly match any known charge, so they cannot be treated as normal reversals. The table further down the page lists each one.",
+                                    body: "A few refunds that do not clearly match any known charge, so they cannot be treated as normal reversals.",
                                 },
                                 {
                                     label: "Revenue breakdown",
-                                    body: "Total revenue splits into villa, amenity, and membership fees underneath. The same split by member vs guest is on the Member vs guest revenue card.",
+                                    body: "Total revenue splits into villa, amenity, and membership fees underneath.",
                                 },
                             ]}
                             filter={financeFilter}
@@ -1297,15 +1323,15 @@ export default function OverviewTab({
                                 tip={[
                                     {
                                         label: "What this counts",
-                                        body: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. Revenue is split between member and guest accounts - villa rental and amenities combined, with matching refunds cancelled out. Rental-programme income counts under Member (villa owners are members), which is why the Member villa figure is much bigger than the guest one.",
+                                        body: "Revenue realized: this shows posted money from completed stays only. Stays still in progress and future bookings are not counted until checkout. Revenue is split between member and guest accounts - villa rental and amenities combined, with matching refunds cancelled out.",
                                     },
                                     {
                                         label: "The three colors in each bar",
-                                        body: "Navy is villa, orange is amenities, rust is membership money. For guests, rust is temp membership fees. For members, rust is real dues charges from their statements.",
+                                        body: "Navy is villa, orange is amenities. For guests, rust is temp membership fees. For members, rust is dues charges from their statements.",
                                     },
                                     {
                                         label: "How Member dues is calculated",
-                                        body: "Actual posted dues charges from member statements - membership dues, maintenance fees, capital contributions, and the F&B minimum. These are real dated charges, not estimates, so they follow the date picker and count toward the Member total and the Combined total like any other revenue.",
+                                        body: "Posted charges from member statements: family membership dues, monthly maintenance fees, and corporate golf membership. Capital expenditure contributions are excluded. Tax and third-party vendor invoices are also excluded.",
                                     },
                                 ]}
                             />
@@ -1342,8 +1368,9 @@ export default function OverviewTab({
                                     // Member accounts (confirmed 2026-07-02 — Temp Membership Fee
                                     // only ever applies to Guests), so membershipRevenue from the
                                     // folio-based split is always $0 for Members. Real member dues
-                                    // (Capital Expenditure Contribution, Family Membership Dues,
-                                    // Monthly Maintenance Fee, etc.) come from statement_details
+                                    // (Family Membership Dues, Monthly Maintenance Fee, Corporate
+                                    // Golf Membership; Capital Expenditure Contribution is
+                                    // deliberately EXCLUDED) come from statement_details
                                     // instead — real itemized dues charges with an actual
                                     // transaction_date per line, filtered to lines matching those
                                     // known dues-type names — see the tooltip's "How Member dues is
@@ -1456,7 +1483,7 @@ export default function OverviewTab({
                     <div style={{ ...block, display: "flex", flexDirection: "column" }}>
                         <CardHeaderF
                             label="Revenue by month ($USD)"
-                            tip="Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. Each month's bar is the money posted that month, split into villa rental (navy) and amenity spend like food, golf, and wine (orange). Comped and cancelled charges do not count. Villa includes rental-programme income in the month it was earned. The Paid/Free toggle filters by whether the underlying stay was paid or comped."
+                            tip="Revenue realized: this shows posted money from completed stays only. Stays still in progress and future bookings are not counted. Each month's bar is the money posted that month, split into villa rental (navy) and amenity spend like food, golf, and wine (orange). The Paid/Free toggle filters by whether the underlying stay was paid or comped."
                             filter={monthlyFilter}
                             onFilterChange={setMonthlyFilter}
                         />
@@ -1525,15 +1552,15 @@ export default function OverviewTab({
                             tip={[
                                 {
                                     label: "The metric toggle",
-                                    body: "Revenue realized: this shows posted money from completed stays only - charges actually billed and collected. Stays still in progress and future bookings are not counted until checkout. The toggle ranks villas by either amenity spend (food, golf, spa, wine, and so on) or the villa rental charge itself. Only charges that were actually paid count - comped or reversed charges are zero and excluded. Bookings always counts every stay at the villa, even ones with no amenity spend. Rental-programme income is not shown per villa here - see Finance at a glance for the complete villa total.",
+                                    body: "Revenue realized: Shows posted money from completed stays. Stays still in progress and future bookings are not counted. The toggle ranks villas by either amenity spend or the villa rental charge. Bookings count every stay at the villa, even ones with no amenity spend.",
                                 },
                                 {
-                                    label: "Paid / Free pill",
-                                    body: "Filters by whether the stay itself was paid or comped. A comped stay can still show real amenity revenue - the guest may have paid for extras even though the villa was free.",
+                                    label: "Paid / Free toggle",
+                                    body: "Filters by whether the stay itself was paid or comped. A comped stay can still show amenity revenue.",
                                 },
                                 {
-                                    label: "One exception",
-                                    body: "Free plus Villa rental shows a negative number instead: the value of the nights given away (list price, or the actual amount charged if that was higher). If no list price is on file for those dates, the villa will not appear here - see Top villas by bookings for the full list.",
+                                    label: "Free + Villa rental",
+                                    body: "Free plus Villa rental shows a negative number: the value of the nights given away.",
                                 },
                             ]}
                             filter={villaRevFilter}
@@ -1610,7 +1637,7 @@ export default function OverviewTab({
                     <div style={{ ...block, display: "flex", flexDirection: "column" }}>
                         <CardHeaderF
                             label="Top villas by bookings"
-                            tip="Ranks villas by how many reservations they have had - a count of bookings, not dollars. A villa can appear here with bookings that had no amenity spend, so its count may differ from Top villas by revenue. Rental-programme stays are not counted, since those bookings are not individually tracked."
+                            tip="Ranks villas by how many reservations they have had, a count of bookings. Paid or Free describes whether the stay itself was paid or comped."
                             filter={villaBookingsFilter}
                             onFilterChange={(val) => { setVillaBookingsFilter(val); setVillaBookingsVisibleCount(10); }}
                         />
@@ -1649,7 +1676,7 @@ export default function OverviewTab({
                     <div style={block}>
                         <CardHeader
                             label="Unexplained reversals"
-                            tip="Refunds that could not be matched to a specific charge - either several same-amount charges exist in the booking, or no matching charge exists at all. These are already kept out of every revenue total on this page; they are listed here so they can be reviewed instead of just disappearing."
+                            tip="Refunds that could not be matched to a specific charge - either several same-amount charges exist in the booking or no matching charge found. These are kept out of every revenue total on this page. They are listed here for review."
                         />
                         {anomalies.length > 0 && (
                             <div style={{ display: "grid", gridTemplateColumns: "0.8fr 1.3fr 2.4fr 0.9fr 1fr", padding: "7px 16px", borderBottom: `1px solid ${C.border}`, background: C.panelAlt }}>

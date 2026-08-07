@@ -37,11 +37,11 @@ const money = (v) =>
     : `$${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
 const FEE_COLUMNS = [
-  ["Maintenance Fees", "Maintenance"],
-  ["Capital Expenditure Fees", "Capital Exp."],
-  ["Annual Fees - Family Membership", "Family Membership"],
-  ["Annual Fees - Family Membership Deferred", "Family Membership Deferred"],
-  ["GCT on Family Membership (tax)", "GCT (tax)"],
+  ["Maintenance Fees", "Maintenance ($USD)"],
+  ["Capital Expenditure Fees", "Capital Exp. ($USD)"],
+  ["Annual Fees - Family Membership", "Family Membership ($USD)"],
+  ["Annual Fees - Family Membership Deferred", "Family Membership Deferred ($USD)"],
+  ["GCT on Family Membership (tax)", "GCT tax ($USD)"],
 ];
 
 function downloadFile(blob, filename) {
@@ -279,10 +279,8 @@ export default function DuesHistorySection() {
           <div style={{ color: C.muted, fontSize: 11, maxWidth: 620 }}>
             From member statements. Capital Expenditure sums monthly + annual
             charges. Deferred (Adj) is the mid-cycle family membership dues
-            adjustment, shown separately from the base annual charge.
-            One-off maintenance work (repairs, contractor invoices) is not
-            dues and is excluded. Full multi-member coverage starts Dec
-            2024 — 2025 is the only complete year.
+            adjustment, shown separately from the base annual charge. The
+            Total column here includes GCT.
           </div>
         </div>
         <ExportMenu rows={exportData} disabled={!exportData.length} />
@@ -298,7 +296,7 @@ export default function DuesHistorySection() {
             <tr>
               {th("Year", false)}
               {FEE_COLUMNS.map(([, label]) => th(label))}
-              {th("Total")}
+              {th("Total ($USD)")}
               {th("Villas")}
               {th("Members")}
             </tr>
@@ -330,7 +328,7 @@ export default function DuesHistorySection() {
                   colSpan={FEE_COLUMNS.length + 4}
                   style={{ padding: 20, textAlign: "center", color: C.muted }}
                 >
-                  No dues history found — make sure the SETUP section of
+                  No dues history found. Make sure the SETUP section of
                   HISTORICAL_DUES_SYNOPSIS.sql has been run in the database.
                 </td>
               </tr>
