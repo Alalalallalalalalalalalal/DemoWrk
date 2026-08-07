@@ -35,18 +35,13 @@
 # data can answer. They stay as whole-portfolio snapshots regardless of
 # the period picker.
 # ════════════════════════════════════════════════════════════════════════
-
 from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-
 from postgres.database import SessionLocal
 from postgres.analytics_shared import filter_params
-
 router = APIRouter()
-
-
 def overview_get_db():
     """DB session dependency, scoped to the Overview tab router."""
     db = SessionLocal()
@@ -54,18 +49,12 @@ def overview_get_db():
         yield db
     finally:
         db.close()
-
-
 def overview_rows(db: Session, sql: str, params: dict | None = None):
     """Run a query expected to return multiple rows, for Overview endpoints."""
     return [dict(row) for row in db.execute(text(sql), params or {}).mappings().all()]
-
-
 def overview_one(db: Session, sql: str, params: dict | None = None):
     """Run a query expected to return a single row, for Overview endpoints."""
     return dict(db.execute(text(sql), params or {}).mappings().first() or {})
-
-
 def overview_payment_type_filter_sql(alias: str = "ovb"):
     """
     Returns the SQL fragment that filters overview_villa_bookings (aliased
@@ -78,8 +67,55 @@ def overview_payment_type_filter_sql(alias: str = "ovb"):
         OR {alias}.overview_payment_type = :overview_payment_type
       )
     """
-
-
+# ─────────────────────────────────────────────────────────────────────────
+# NON-VILLA ROOM CODES [2026-07-31]
+#
+# 'ZZ Comp' is a PMS placeholder room code, not a real property — it's
+# where comped/administrative stays get parked when no actual villa is
+# assigned. It was being counted as a villa across the Overview tab: in
+# the villa rankings, in the "Villa types available" count, in avg-stay
+# and avg-party-size, and — worst — as 29 room nights carrying $0 rack
+# rate in rate_details_with_discount, which silently dragged Rack ADR
+# down (~$3,135 vs ~$3,251 once excluded) and correspondingly overstated
+# the effective-discount-off-rack figure.
+#
+# Filtered out of every VILLA-SCOPED query below. Deliberately NOT
+# filtered out of the transaction/finance queries: those stays carry
+# real collected money (~$4.3k amenity + ~$1.8k membership fees at time
+# of writing) that still belongs in revenue. The rule is "ZZ Comp is not
+# a villa", not "ZZ Comp never happened".
+#
+# Matching is space- and case-insensitive, so 'ZZ Comp', 'ZZComp' and
+# 'zz comp' are all caught — the PMS is not consistent about the space.
+# Add further placeholder codes to the tuple; every call site picks them
+# up automatically.
+# ─────────────────────────────────────────────────────────────────────────
+OVERVIEW_NON_VILLA_ROOM_NAMES = ("ZZ Comp",)
+def overview_non_villa_filter_sql(alias="ovb", column="overview_villa_name", keep_null=True):
+    """
+    Returns the SQL fragment excluding OVERVIEW_NON_VILLA_ROOM_NAMES from a
+    villa-scoped query.
+      alias / column — which table and column hold the villa name, mirroring
+                       overview_date_filter_sql()'s convention. Pass
+                       alias=None for an unqualified column reference.
+      keep_null      — True keeps rows with no villa name at all (correct
+                       for booking-level aggregates, where dropping them
+                       would silently undercount bookings whose villa never
+                       resolved); False drops them too, for queries that
+                       group BY villa and already required NOT NULL.
+    The name list is a module-owned constant, never user input, so it's
+    inlined as literals rather than bound — single quotes are still doubled
+    defensively in case someone later adds a name like "Bumper's Nest".
+    """
+    col = f"{alias}.{column}" if alias else column
+    names = ", ".join(
+        "'" + n.upper().replace(" ", "").replace("'", "''") + "'"
+        for n in OVERVIEW_NON_VILLA_ROOM_NAMES
+    )
+    norm = f"UPPER(REPLACE(TRIM({col}), ' ', ''))"
+    if keep_null:
+        return f"\n          AND ({col} IS NULL OR {norm} NOT IN ({names}))"
+    return f"\n          AND {col} IS NOT NULL AND {norm} NOT IN ({names})"
 def overview_date_filter_sql(alias="ovb", column="overview_check_in_date",
                             end_column="overview_check_out_date", mode="checkin"):
     """
@@ -94,17 +130,14 @@ def overview_date_filter_sql(alias="ovb", column="overview_check_in_date",
         overview_check_in_date / overview_check_out_date (defaults)
       - rate_details_with_discount: alias="rd", column="check_in_date",
         end_column="check_out_date"
-
     Priority (first matching branch wins, mirrors filter_params()'s
     mutually-exclusive design): start_date/end_date range > exact date >
     year+month > year alone > no filter at all (TRUE, i.e. unrestricted).
-
     Expects the standard filter_params() bind set already in the params
     dict passed to execute(): :year, :month, :date, :start_date, :end_date.
     """
     d = f"{alias}.{column}"
     out = f"{alias}.{end_column}"
-
     if mode == "checkin":
         # [2026-07-19] ONE STAY, ONE PERIOD. The stay is attributed to the
         # period containing its CHECK-IN date, so it is counted exactly
@@ -128,7 +161,6 @@ def overview_date_filter_sql(alias="ovb", column="overview_check_in_date",
             END
         )
     """
-
     # mode="overlap": kept for per-NIGHT sources (rate_details_with_discount),
     # where each row already belongs to exactly one date and overlap is the
     # correct "which nights fall in this period" test.
@@ -151,8 +183,6 @@ def overview_date_filter_sql(alias="ovb", column="overview_check_in_date",
             END
         )
     """
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/available-years
 #
@@ -167,15 +197,14 @@ def overview_date_filter_sql(alias="ovb", column="overview_check_in_date",
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/available-years")
 def overview_available_years(db: Session = Depends(overview_get_db)):
-    rows_ = overview_rows(db, """
+    rows_ = overview_rows(db, f"""
         SELECT DISTINCT EXTRACT(YEAR FROM overview_check_in_date)::int AS year
         FROM overview_villa_bookings
         WHERE overview_check_in_date IS NOT NULL
+          {overview_non_villa_filter_sql(alias=None)}
         ORDER BY year DESC
     """)
     return [r["year"] for r in rows_]
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/villa-amenity-revenue
 #
@@ -228,17 +257,15 @@ def overview_villa_amenity_revenue(
           ON ovb.overview_conf_code = otl.overview_conf_code
         WHERE otl.overview_line_category = 'Amenity'
           AND otl.overview_line_status = 'Paid'
-          AND otl.overview_villa_name IS NOT NULL
           AND (
             :overview_payment_type IS NULL
             OR otl.overview_booking_payment_type = :overview_payment_type
           )
+          {overview_non_villa_filter_sql("otl", "overview_villa_name", keep_null=False)}
           {overview_date_filter_sql("ovb")}
         GROUP BY otl.overview_villa_name, otl.overview_booking_payment_type
         ORDER BY amenity_revenue DESC
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/villa-stats
 #
@@ -300,6 +327,7 @@ def overview_villa_stats(
             FROM overview_villa_bookings ovb
             WHERE 1=1
               {overview_payment_type_filter_sql("ovb")}
+              {overview_non_villa_filter_sql("ovb")}
               {overview_date_filter_sql("ovb")}
             GROUP BY overview_villa_name, overview_bedroom_count, overview_payment_type
         ) b
@@ -315,7 +343,7 @@ def overview_villa_stats(
             JOIN overview_booking_meta ovb2 USING (overview_conf_code)
             WHERE otl.overview_line_category = 'Villa'
               AND otl.overview_line_status   = 'Paid'
-              AND otl.overview_villa_name IS NOT NULL
+              {overview_non_villa_filter_sql("otl", "overview_villa_name", keep_null=False)}
               {overview_payment_type_filter_sql("ovb2")}
               {overview_date_filter_sql("ovb2")}
             GROUP BY otl.overview_villa_name, ovb2.overview_payment_type
@@ -327,8 +355,6 @@ def overview_villa_stats(
           AND b.revenue_row        = 1
         ORDER BY b.bookings DESC, b.villa_name, b.bedroom_count NULLS LAST
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/bookings-by-bedroom
 #
@@ -356,12 +382,11 @@ def overview_bookings_by_bedroom(
         FROM overview_villa_bookings ovb
         WHERE overview_bedroom_count IS NOT NULL
           {overview_payment_type_filter_sql("ovb")}
+          {overview_non_villa_filter_sql("ovb")}
           {overview_date_filter_sql("ovb")}
         GROUP BY overview_bedroom_count, overview_payment_type
         ORDER BY overview_bedroom_count
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/monthly-revenue
 #
@@ -393,12 +418,11 @@ def overview_monthly_revenue(
         FROM overview_villa_bookings ovb
         WHERE 1=1
           {overview_payment_type_filter_sql("ovb")}
+          {overview_non_villa_filter_sql("ovb")}
           {overview_date_filter_sql("ovb")}
         GROUP BY month, month_num, overview_payment_type
         ORDER BY month_num
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/monthly-revenue-by-category
 #
@@ -406,6 +430,10 @@ def overview_monthly_revenue(
 # Villa vs Amenity (overview_line_category), instead of booking-level
 # villa-rental-only revenue. Powers the stacked Villa/Amenity bars on the
 # "Revenue by month" card.
+#
+# [2026-07-31] Deliberately NOT filtered for ZZ Comp: this is a revenue
+# total, and the amenity/membership money charged on those placeholder
+# stays was really collected. See OVERVIEW_NON_VILLA_ROOM_NAMES.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/monthly-revenue-by-category")
 def overview_monthly_revenue_by_category(
@@ -433,13 +461,25 @@ def overview_monthly_revenue_by_category(
           ON ovb.overview_conf_code = otl.overview_conf_code
         WHERE otl.overview_line_status = 'Paid'
           AND ovb.overview_check_in_date IS NOT NULL
+          -- [2026-07-24] Villa revenue is statement-backed only: for
+          -- VILLA lines keep just the rental-programme payouts
+          -- (conf >= 9000000), which drops the Free owner/comp stays
+          -- and direct Pinnacle rental. Amenity and Membership lines
+          -- are unaffected — the condition only bites when category is
+          -- Villa. Keeps Finance at a glance and Member vs guest on the
+          -- same $11,310,319 villa figure as the hero, and the
+          -- guest/member split still foots because the allocation lives
+          -- in synthetic_villa_income_lines.
+          AND (
+                otl.overview_line_category <> 'Villa'
+             OR (otl.overview_conf_code::text ~ '^[0-9]+$'
+                 AND otl.overview_conf_code::text::bigint >= 9000000)
+          )
           {overview_payment_type_filter_sql("ovb")}
           {overview_date_filter_sql("ovb")}
         GROUP BY month, month_num, ovb.overview_payment_type, otl.overview_line_category
         ORDER BY month_num
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/visits-summary
 #
@@ -476,11 +516,9 @@ def overview_visits_summary(
                 WHERE overview_member_or_guest = 'Member'
                    OR overview_member_or_guest IS NULL
             )                                                    AS total_members_booked,
-
             COUNT(*) FILTER (
                 WHERE overview_member_or_guest = 'Guest'
             )                                                    AS total_guests_booked,
-
             ROUND(AVG(overview_nights)::numeric, 1)              AS avg_length_of_stay,
             ROUND(AVG(overview_persons)::numeric, 1)             AS avg_party_size,
             COALESCE(SUM(overview_nights), 0)                    AS total_room_nights,
@@ -488,10 +526,9 @@ def overview_visits_summary(
         FROM overview_villa_bookings ovb
         WHERE 1=1
           {overview_payment_type_filter_sql("ovb")}
+          {overview_non_villa_filter_sql("ovb")}
           {overview_date_filter_sql("ovb")}
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/visits-summary-by-payment-type
 #
@@ -509,7 +546,6 @@ def overview_visits_summary_by_payment_type(
     db: Session = Depends(overview_get_db),
 ):
     params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
-
     overview_overall_summary = overview_one(db, f"""
         SELECT
             COUNT(*)                                              AS total_bookings,
@@ -526,9 +562,9 @@ def overview_visits_summary_by_payment_type(
             COALESCE(SUM(overview_villa_revenue), 0)             AS villa_rental_revenue
         FROM overview_villa_bookings ovb
         WHERE 1=1
+          {overview_non_villa_filter_sql("ovb")}
           {overview_date_filter_sql("ovb")}
     """, params)
-
     overview_summary_by_type = overview_rows(db, f"""
         SELECT
             overview_payment_type AS villa_payment_type,
@@ -546,10 +582,10 @@ def overview_visits_summary_by_payment_type(
             COALESCE(SUM(overview_villa_revenue), 0)             AS villa_rental_revenue
         FROM overview_villa_bookings ovb
         WHERE 1=1
+          {overview_non_villa_filter_sql("ovb")}
           {overview_date_filter_sql("ovb")}
         GROUP BY overview_payment_type
     """, params)
-
     # total_villa_revenue (added 2026-07-17): TRANSACTION-level Paid Villa
     # net — member-journal rentals PLUS the rental-programme income lines
     # (folio_source synthetic_villa_income, conf codes 9,000,000+), i.e.
@@ -560,6 +596,10 @@ def overview_visits_summary_by_payment_type(
     # to booking-level villa_rental_revenue — this field simply never
     # existed on the backend until now, so the fallback (which EXCLUDES
     # programme income) was always what rendered.
+    #
+    # [2026-07-31] No ZZ Comp filter needed here: the conf >= 9000000
+    # rule below already restricts this to synthetic programme payout
+    # lines, and ZZ Comp stays carry ordinary direct conf codes.
     overview_total_villa_revenue = overview_one(db, f"""
         SELECT
             COALESCE(SUM(otl.overview_net_amount), 0) AS total_villa_revenue
@@ -568,16 +608,22 @@ def overview_visits_summary_by_payment_type(
           ON ovb.overview_conf_code = otl.overview_conf_code
         WHERE otl.overview_line_status = 'Paid'
           AND otl.overview_line_category = 'Villa'
+          -- [2026-07-24] Statement-backed villa revenue only: keep the
+          -- rental-programme payout lines (synthetic conf codes
+          -- >= 9000000) and drop everything else. This removes the
+          -- $205,004.74 of Free owner/comp stays AND the ~$9,106 of
+          -- direct Pinnacle rental in one condition, since both have
+          -- ordinary direct conf codes. Result: $11,310,319, matching
+          -- the homeowner-statement Villa Income exactly.
+          AND otl.overview_conf_code::text ~ '^[0-9]+$'
+          AND otl.overview_conf_code::text::bigint >= 9000000
           {overview_date_filter_sql("ovb")}
     """, params)
-
     return {
         **overview_overall_summary,
         "total_villa_revenue": overview_total_villa_revenue.get("total_villa_revenue", 0),
         "by_payment_type": overview_summary_by_type,
     }
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/member-status
 #
@@ -595,8 +641,6 @@ def overview_member_status(db: Session = Depends(overview_get_db)):
         FROM overview_member_status
         ORDER BY overview_total DESC
     """)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/member-type
 #
@@ -612,8 +656,6 @@ def overview_member_type(db: Session = Depends(overview_get_db)):
         FROM overview_member_type
         ORDER BY overview_total DESC
     """)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/amount-due
 #
@@ -626,8 +668,6 @@ def overview_amount_due(db: Session = Depends(overview_get_db)):
         SELECT overview_total_amount_due AS total_amount_due
         FROM overview_statements_summary
     """)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/amount-due-by-period
 #
@@ -646,8 +686,6 @@ def overview_amount_due_by_period(db: Session = Depends(overview_get_db)):
         FROM overview_statements_by_period
         ORDER BY overview_statement_period
     """)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/dependents
 #
@@ -660,8 +698,6 @@ def overview_dependents(db: Session = Depends(overview_get_db)):
         SELECT overview_total_dependents AS total_dependents
         FROM overview_dependents_summary
     """)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/member-dues-summary
 #
@@ -707,6 +743,17 @@ def overview_member_dues_summary(
                  sd.description ILIKE 'Monthly Maintenance Fee%'
               OR sd.description ILIKE '%Family Membership Dues%'
               OR sd.description ILIKE '%Corporate Golf Membership%'
+                 -- [2026-08-07] Coded descriptions on older statements,
+                 -- matching the classification the Annual Fees page picked
+                 -- up on 2026-08-06 (see HISTORICAL_DUES_SYNOPSIS):
+                 --     MDUES / MDUE      = Monthly Maintenance Fee
+                 --     Family Memb. Dues = Family Membership Dues
+                 --     Fam. Mem. Dues    = Family Membership Dues
+                 -- Without these, pre-2024 statements contributed to the
+                 -- Annual Fees page but not to this figure. POSIX classes,
+                 -- no backslashes - this SQL lives in an f-string.
+              OR sd.description ~* '(^|[^a-z])mdues?([^a-z]|$)'
+              OR sd.description ~* 'fam(ily|[.])?[[:space:]]*mem'
                  -- CAPEX: Capital Expenditure Contribution is deliberately
                  -- EXCLUDED (~$489,271 for 2026). It funds a reserve for
                  -- future capital works — a balance-sheet item, not
@@ -731,8 +778,6 @@ def overview_member_dues_summary(
           AND LOWER(sd.description) NOT LIKE '%villa income%'
           {overview_date_filter_sql("sd", "transaction_date", "transaction_date")}
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/email-on-file
 #
@@ -755,8 +800,6 @@ def overview_email_on_file(db: Session = Depends(overview_get_db)):
             COUNT(*)     AS total
         FROM members
     """)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/rack-rate-summary
 #
@@ -777,6 +820,11 @@ def overview_email_on_file(db: Session = Depends(overview_get_db)):
 # Added 2026-07-17: referenced by OverviewTab.jsx's rackRateSummary prop
 # since 2026-07-01 but never built — Rack ADR and Effective discount have
 # rendered "—" ever since.
+#
+# [2026-07-31] ZZ Comp excluded — it contributed 29 room nights at $0
+# rack rate, inflating the denominator only. Rack ADR moves ~$3,135 ->
+# ~$3,251, and the effective-discount figure was overstated by the same
+# distortion.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/rack-rate-summary")
 def overview_rack_rate_summary(
@@ -788,7 +836,6 @@ def overview_rack_rate_summary(
     db: Session = Depends(overview_get_db),
 ):
     params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
-
     overview_rack_overall = overview_one(db, f"""
         SELECT
             COALESCE(SUM(rd.rack_rate), 0)    AS rack_rate_total,
@@ -809,9 +856,16 @@ def overview_rack_rate_summary(
           -- completed stays only — matches overview_villa_bookings, so
           -- ADR and rack ADR cover the same nights
           AND rd.check_out_date < CURRENT_DATE
-          {overview_date_filter_sql("rd", "check_in_date", "check_out_date", mode="overlap")}
+          {overview_non_villa_filter_sql("rd", "villa_name")}
+          -- [2026-08-07] Was mode="overlap" while every other stat on the
+          -- Bookings card uses check-in attribution ("one stay, one
+          -- period"). Under a year/month filter a boundary-crossing stay
+          -- landed in ADR for both periods but in Total bookings for only
+          -- one. overview_nights already attributes a stay's FULL length to
+          -- its check-in period, so check-in on this per-night table gives
+          -- ADR the same night set as the room-nights figure beside it.
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
     """, params)
-
     overview_rack_by_type = overview_rows(db, f"""
         SELECT
             -- NULLIF(TRIM(...)) so blank payment_type (journal_scraper
@@ -827,16 +881,14 @@ def overview_rack_rate_summary(
         WHERE COALESCE(LOWER(rd.reservation_status), '')
                   NOT IN ('cancelled', 'canceled', 'no-show')
           AND rd.check_out_date < CURRENT_DATE
-          {overview_date_filter_sql("rd", "check_in_date", "check_out_date", mode="overlap")}
+          {overview_non_villa_filter_sql("rd", "villa_name")}
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
         GROUP BY COALESCE(NULLIF(TRIM(rd.payment_type), ''), 'Unknown')
     """, params)
-
     return {
         **overview_rack_overall,
         "by_payment_type": overview_rack_by_type,
     }
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/member-vs-guest-revenue
 #
@@ -870,6 +922,7 @@ def overview_member_vs_guest_revenue(
         FROM overview_villa_bookings ovb
         WHERE 1=1
           {overview_payment_type_filter_sql("ovb")}
+          {overview_non_villa_filter_sql("ovb")}
           {overview_date_filter_sql("ovb")}
         GROUP BY
             CASE
@@ -878,8 +931,6 @@ def overview_member_vs_guest_revenue(
             END,
             overview_payment_type
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/member-vs-guest-revenue-by-payment-type
 #
@@ -897,7 +948,6 @@ def overview_member_vs_guest_revenue_by_payment_type(
     db: Session = Depends(overview_get_db),
 ):
     params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
-
     overview_overall_rows = overview_rows(db, f"""
         SELECT
             CASE
@@ -909,6 +959,7 @@ def overview_member_vs_guest_revenue_by_payment_type(
             COUNT(DISTINCT overview_member_number)                AS "uniqueAccounts"
         FROM overview_villa_bookings ovb
         WHERE 1=1
+          {overview_non_villa_filter_sql("ovb")}
           {overview_date_filter_sql("ovb")}
         GROUP BY
             CASE
@@ -916,7 +967,6 @@ def overview_member_vs_guest_revenue_by_payment_type(
                 ELSE 'Member'
             END
     """, params)
-
     overview_rows_with_type = overview_rows(db, f"""
         SELECT
             CASE
@@ -929,6 +979,7 @@ def overview_member_vs_guest_revenue_by_payment_type(
             COUNT(DISTINCT overview_member_number)                AS "uniqueAccounts"
         FROM overview_villa_bookings ovb
         WHERE 1=1
+          {overview_non_villa_filter_sql("ovb")}
           {overview_date_filter_sql("ovb")}
         GROUP BY
             CASE
@@ -937,18 +988,14 @@ def overview_member_vs_guest_revenue_by_payment_type(
             END,
             overview_payment_type
     """, params)
-
     overview_by_type: dict[str, list] = {}
     for row in overview_rows_with_type:
         key = row["villa_payment_type"]
         overview_by_type.setdefault(key, []).append(row)
-
     return {
         "overall": overview_overall_rows,
         "by_payment_type": overview_by_type,
     }
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/transaction-finance-summary
 #
@@ -973,6 +1020,9 @@ def overview_member_vs_guest_revenue_by_payment_type(
 #                             omit for both combined.
 #   year / month / date / start_date / end_date — standard date-range
 #                             filter (added 2026-06-26).
+#
+# [2026-07-31] Deliberately NOT filtered for ZZ Comp — this is a money
+# total, see OVERVIEW_NON_VILLA_ROOM_NAMES.
 # ─────────────────────────────────────────────────────────────────────────
 @router.get("/transaction-finance-summary")
 def overview_transaction_finance_summary(
@@ -1000,12 +1050,24 @@ def overview_transaction_finance_summary(
             :overview_line_status IS NULL
             OR otl.overview_line_status = :overview_line_status
           )
+          -- [2026-08-07] Statement-backed villa revenue: for VILLA lines
+          -- keep only rental-programme payouts (conf >= 9000000). This
+          -- endpoint was missed by the 2026-07-24 pass that added the same
+          -- rule to visits-summary-by-payment-type,
+          -- transaction-member-vs-guest-revenue,
+          -- transaction-member-vs-guest-revenue-by-category and
+          -- monthly-revenue-by-category. Without it, "Rev. per transaction"
+          -- on Finance at a glance ran on a different villa universe than
+          -- "Total revenue" directly above it on the same card.
+          AND (
+                otl.overview_line_category <> 'Villa'
+             OR (otl.overview_conf_code::text ~ '^[0-9]+$'
+                 AND otl.overview_conf_code::text::bigint >= 9000000)
+          )
           {overview_date_filter_sql("ovb")}
         GROUP BY otl.overview_line_category, otl.overview_line_status
         ORDER BY otl.overview_line_category, otl.overview_line_status
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/reversals-summary
 #
@@ -1045,8 +1107,6 @@ def overview_reversals_summary(
           AND otl.overview_net_amount > 0
           {overview_date_filter_sql("ovb")}
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/cash-advance-summary
 #
@@ -1081,8 +1141,6 @@ def overview_cash_advance_summary(
         WHERE otl.overview_line_status = 'CashAdvance'
           {overview_date_filter_sql("ovb")}
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/anomalies-summary
 #
@@ -1116,8 +1174,6 @@ def overview_anomalies_summary(
         WHERE otl.overview_line_status = 'Anomaly'
           {overview_date_filter_sql("ovb")}
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/tips-summary
 #
@@ -1147,8 +1203,6 @@ def overview_tips_summary(
         WHERE otl.overview_line_status = 'Tip'
           {overview_date_filter_sql("ovb")}
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/internal-transfers-summary
 #
@@ -1179,8 +1233,6 @@ def overview_internal_transfers_summary(
         WHERE otl.overview_line_status = 'InternalTransfer'
           {overview_date_filter_sql("ovb")}
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/payments-summary and /overview/payment-corrections-summary
 #
@@ -1226,9 +1278,7 @@ def overview_payments_summary(
               AND f.description IS NOT NULL
               AND TRIM(REGEXP_REPLACE(f.description, '^\\s*reversal\\s+of\\s*:?\\s*', '', 'i')) ILIKE '%payment%'
               {overview_date_filter_sql("ovb")}
-
             UNION ALL
-
             SELECT
                 COUNT(*)                        AS payments_count,
                 -- ABS(): statement payments post NEGATIVE (credits
@@ -1247,8 +1297,6 @@ def overview_payments_summary(
               {overview_date_filter_sql("sd", "transaction_date", "transaction_date")}
         ) all_payments
     """, params)
-
-
 @router.get("/payment-corrections-summary")
 def overview_payment_corrections_summary(
     year: int | None = Query(default=None),
@@ -1283,8 +1331,6 @@ def overview_payment_corrections_summary(
           )
           {overview_date_filter_sql("ovb")}
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/anomalies
 #
@@ -1317,8 +1363,6 @@ def overview_anomalies(
           {overview_date_filter_sql("ovb")}
         ORDER BY otl.overview_net_amount ASC
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/transaction-member-vs-guest-revenue
 #
@@ -1362,6 +1406,15 @@ def overview_transaction_member_vs_guest_revenue(
             :overview_line_status IS NULL
             OR otl.overview_line_status = :overview_line_status
           )
+          -- [2026-07-24] Statement-backed villa revenue: for VILLA
+          -- lines keep only rental-programme payouts (conf >= 9000000),
+          -- dropping Free owner/comp stays and direct Pinnacle rental.
+          -- Amenity/Membership untouched. -> villa $11,310,319.
+          AND (
+                otl.overview_line_category <> 'Villa'
+             OR (otl.overview_conf_code::text ~ '^[0-9]+$'
+                 AND otl.overview_conf_code::text::bigint >= 9000000)
+          )
           {overview_date_filter_sql("ovb")}
         GROUP BY
             CASE
@@ -1370,8 +1423,6 @@ def overview_transaction_member_vs_guest_revenue(
             END,
             otl.overview_line_status
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/transaction-member-vs-guest-revenue-by-category
 #
@@ -1438,6 +1489,15 @@ def overview_transaction_member_vs_guest_revenue_by_category(
             :overview_line_status IS NULL
             OR otl.overview_line_status = :overview_line_status
           )
+          -- [2026-07-24] Statement-backed villa revenue: for VILLA
+          -- lines keep only rental-programme payouts (conf >= 9000000),
+          -- dropping Free owner/comp stays and direct Pinnacle rental.
+          -- Amenity/Membership untouched. -> villa $11,310,319.
+          AND (
+                otl.overview_line_category <> 'Villa'
+             OR (otl.overview_conf_code::text ~ '^[0-9]+$'
+                 AND otl.overview_conf_code::text::bigint >= 9000000)
+          )
           {overview_date_filter_sql("ovb")}
         GROUP BY
             CASE
@@ -1447,8 +1507,6 @@ def overview_transaction_member_vs_guest_revenue_by_category(
             {card_category_case},
             otl.overview_line_status
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/villa-rack-rate-free
 #
@@ -1476,33 +1534,54 @@ def overview_villa_rack_rate_free(
 ):
     params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
     has_filter = any(v is not None for v in params.values())
-
     if not has_filter:
         # No date filter active — use the pre-built view as before (cheap,
         # and matches every prior behavior exactly).
-        return overview_rows(db, """
+        return overview_rows(db, f"""
             SELECT
                 overview_villa_name      AS villa_name,
                 overview_rack_rate_total AS rack_rate_total,
                 overview_free_bookings   AS free_bookings
             FROM overview_villa_rack_rate_free
+            WHERE 1=1
+              {overview_non_villa_filter_sql(alias=None, keep_null=False)}
             ORDER BY rack_rate_total DESC
         """)
-
+    # [2026-08-07] This branch previously matched only payment_type = 'Free',
+    # while the overview_villa_rack_rate_free VIEW (used by the unfiltered
+    # branch above) ALSO counts zero-charged Paid reservations as give-aways
+    # - rack listed, charge waived, e.g. the Karma Bay week. Selecting any
+    # date range therefore silently dropped those villas from the card. The
+    # zero_charged_paid CTE is deliberately NOT date-filtered: whether a
+    # reservation was charged $0 is a property of the whole reservation, so
+    # filtering it would reclassify a booking based on which of its nights
+    # happen to fall inside the window.
+    #
+    # Date mode is now "checkin" (the default), matching
+    # overview_villa_bookings' one-stay-one-period attribution, so a stay
+    # spanning a year boundary is no longer counted in both years.
     return overview_rows(db, f"""
+        WITH zero_charged_paid AS (
+            SELECT conf_code
+            FROM rate_details_with_discount
+            WHERE payment_type = 'Paid'
+              AND COALESCE(LOWER(reservation_status), '')
+                    NOT IN ('cancelled', 'canceled', 'no-show')
+            GROUP BY conf_code
+            HAVING COALESCE(SUM(total_amount), 0) = 0
+        )
         SELECT
             rd.villa_name                       AS villa_name,
             COALESCE(SUM(rd.rack_rate), 0)       AS rack_rate_total,
             COUNT(DISTINCT rd.conf_code)         AS free_bookings
         FROM rate_details_with_discount rd
-        WHERE rd.payment_type = 'Free'
-          AND rd.villa_name IS NOT NULL
-          {overview_date_filter_sql("rd", "check_in_date", "check_out_date", mode="overlap")}
+        WHERE (rd.payment_type = 'Free'
+               OR rd.conf_code IN (SELECT conf_code FROM zero_charged_paid))
+          {overview_non_villa_filter_sql("rd", "villa_name", keep_null=False)}
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
         GROUP BY rd.villa_name
         ORDER BY rack_rate_total DESC
     """, params)
-
-
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/summary
 #

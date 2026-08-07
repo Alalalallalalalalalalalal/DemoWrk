@@ -6,8 +6,9 @@ reservation popup for contact info), then Services and Statements
 before moving to the next member. Saves:
   - rooms CSV per member
   - services CSV per member (Members only)
-  - statements CSV per member (Members only — Homeowner receivable
-    type only, statement periods from 2025-01-01 onward)
+  - statements CSV per member (Members only — both the Homeowner and
+    House and Dues Charges receivable types; see RECEIVABLE_TYPES and
+    STATEMENT_MIN_DATE_BY_TYPE)
   - statement details CSV per member (itemized line items drilled from
     each kept statement period's detail page)
   - rate_details CSV per member (per-night Room Rates for each
@@ -30,8 +31,8 @@ from config import OUTPUT_FOLDER, BASE_URL
 from login import login, get_frame_by_url
 
 
-STATEMENT_MIN_DATE   = date(2025, 1, 1)
-RATE_DETAIL_MIN_DATE = date(2025, 1, 1)
+STATEMENT_MIN_DATE   = None
+RATE_DETAIL_MIN_DATE = None
 
 def parse_statement_date(val):
     """Parse the Due Date cell into a date. Returns None if unparseable."""
@@ -891,7 +892,7 @@ def scrape_reservation_rate_details(page, conf_code, reservation_id,
 
     # Skip stays that ended entirely before the window
     co = parse_statement_date(to_date)
-    if co is not None and co < RATE_DETAIL_MIN_DATE:
+    if RATE_DETAIL_MIN_DATE is not None and co is not None and co < RATE_DETAIL_MIN_DATE:
         return []
 
     villa_name = ""
@@ -1205,6 +1206,22 @@ def scrape_services(page, folder_name, prefix=""):
 #   - HOMEOWNER receivable type only (value=2). House and Dues Charges
 #     (value=1) is no longer pulled. The page defaults to Homeowner, so
 #     the dropdown is only touched if it isn't already on value=2.
+#
+# SUPERSEDED — House and Dues Charges (value=1) IS pulled again. It is a
+# separate AR account whose history often runs years either side of the
+# member's Homeowner history (4B: Homeowner from May 2021, House & Dues
+# Oct 2019 - Oct 2022). Where both cover the same statement MONTH the
+# portal repeats the charges, so Homeowner wins and the House & Dues
+# period is dropped before its detail page is ever opened — see the
+# overlap suppression block in scrape_statements(). House & Dues is
+# there to EXTEND the history, never to restate it.
+#
+# Two consequences worth knowing:
+#   - Ordering matters. Homeowner must stay first in RECEIVABLE_TYPES;
+#     a type can only defer to one already scraped.
+#   - Accounts with no receivable-type dropdown can only ever show the
+#     default type, so House & Dues is skipped there rather than
+#     scraped and mislabelled.
 #   - Only statement periods with Due Date >= 2025-01-01 are kept
 #     (STATEMENT_MIN_DATE). Rows with unparseable dates are kept rather
 #     than silently dropped.
@@ -1221,11 +1238,102 @@ def scrape_services(page, folder_name, prefix=""):
 
 EXPECTED_STATEMENTS_HEADERS = {"Statement Periods", "Due Date", "Amount Due"}
 
+# Homeowner FIRST: the statements page loads on it, so it costs no
+# dropdown interaction and the existing scrape path is unchanged. House
+# and Dues Charges (value 1) is a separate AR account with its own, often
+# much longer, history — for some members it predates Homeowner by years
+# (e.g. 4B: Homeowner from May 2021, House & Dues from Oct 2019).
 RECEIVABLE_TYPES = [
     ("2", "Homeowner"),
+    ("1", "House and Dues Charges"),
 ]
 
+# The value the statements page loads on with no dropdown interaction.
+# Accounts that render without the dropdown at all (e.g. 35A) show THIS
+# type — which is why any other type must be skipped on those pages
+# rather than scraped and mislabelled. See scrape_statements().
+DEFAULT_RECEIVABLE_VALUE = "2"
+
+# Per-type statement floor, falling back to STATEMENT_MIN_DATE. Two
+# receivable types means roughly twice the per-period detail page loads;
+# this bounds that. None = no floor.
+STATEMENT_MIN_DATE_BY_TYPE = {
+    "Homeowner":              STATEMENT_MIN_DATE,
+    "House and Dues Charges": None,
+}
+
+# Overlap resolution. A type listed as a key yields to the types in its
+# value: for any statement MONTH both cover, only the higher-priority one
+# is kept. House & Dues and Homeowner are separate AR accounts that
+# genuinely repeat the same charges where their histories overlap, so
+# without this the same fee is stored twice and every SUM double-counts.
+#
+# Homeowner wins because it is the account the dues tabs were built
+# against. House & Dues is pulled to EXTEND history either side of it,
+# not to restate it.
+#
+# Depends on RECEIVABLE_TYPES putting Homeowner first — a type can only
+# yield to one already scraped. Reordering that list disables this
+# silently, which is why the check below refuses to run when the type
+# being deferred to has not succeeded.
+RECEIVABLE_PRIORITY = {
+    "House and Dues Charges": ("Homeowner",),
+}
+
 EXPECTED_DETAIL_HEADER_WORDS = {"DATE", "DESCRIPTION", "AMOUNT", "CHARGE"}
+
+# ─────────────────────────────────────────────
+# STATEMENTS PAGE IDENTITY  [patch]
+# ─────────────────────────────────────────────
+# The receivable-type dropdown cannot answer "am I on the summary page?".
+# Dropdown-less accounts (35A) are legitimate, and a dead or navigated
+# frame looks identical to one — which is why drilling 62 periods made
+# the next receivable type report "no dropdown" when the dropdown was
+# there all along. Check for the summary grid itself instead.
+
+def on_statements_summary(frame):
+    """True only if `frame` is alive AND showing the statements summary."""
+    if frame is None:
+        return False
+    try:
+        if frame.query_selector('select[name="arAccountTypeId"]'):
+            return True
+        return bool(frame.evaluate(
+            "() => { const t = document.body ? document.body.innerText : '';"
+            "  return t.includes('Statement Period')"
+            "      || t.includes('Statement Periods')"
+            "      || t.includes('No matching records found'); }"
+        ))
+    except Exception:
+        return False        # dead frame — definitively not on the page
+
+
+def reopen_statements_tab(page, prefix=""):
+    """
+    Re-navigate to Billing > Statements and return a live landing frame on
+    the summary grid, or None. Called between receivable types, because
+    drilling leaves the page somewhere else entirely.
+    """
+    frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+    if on_statements_summary(frame):
+        return frame
+    shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+    if not shell:
+        print(f"    {prefix}Statements: shell frame lost — cannot reopen tab")
+        return None
+    open_member_dropdown(shell, page)
+    click_section(shell, page, "Billing")
+    if not click_subtab(shell, page, "memberStatements",
+                        TAB_HREF_FALLBACKS["statements"], prefix):
+        return None
+    deadline = time.time() + 6
+    while time.time() < deadline:
+        frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+        if on_statements_summary(frame):
+            return frame
+        page.wait_for_timeout(400)
+    return None
+
 
 def scrape_statement_detail_table(frame):
     """
@@ -1252,113 +1360,139 @@ def scrape_statement_detail_table(frame):
     return None
 
 
-def drill_statement_details(page, folder_name, label, summary_rows, prefix=""):
+def drill_statement_details(page, folder_name, label, summary_rows, prefix="",
+                            receivable_value=None):
     """
-    For each (already filtered) statement summary row, open its period
-    detail page, extract the itemized lines, and return them tagged the
-    way cleaner.py's load_statement_details() expects. Navigates back
-    to the summary page between periods; stops drilling if it can't
-    get back (summary rows already captured are unaffected).
+    Returns (detail_rows, completed).
+
+    completed=False means the drill stopped early — dead frame, lost
+    summary page, or an unexpected error. detail_rows still holds every
+    line collected up to that point; they are NOT discarded (they were,
+    before this patch: an exception here escaped to the caller's except
+    block and threw away the whole drill). The caller must treat
+    completed=False as a failed tab so the member is retried, rather
+    than banking a partial statement history as though it were whole.
     """
     detail_rows = []
+    completed = True
+    try:
+        for srow in summary_rows:
+            period = (strip_val(srow.get("Statement Periods", "")) or
+                      strip_val(srow.get("Statement Period", "")))
+            due_date = strip_val(srow.get("Due Date", ""))
+            if not period:
+                continue
 
-    for srow in summary_rows:
-        period   = (strip_val(srow.get("Statement Periods", "")) or
-                    strip_val(srow.get("Statement Period", "")))
-        due_date = strip_val(srow.get("Due Date", ""))
-        if not period:
-            continue
+            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not frame:
+                print(f"    {prefix}Details: landing frame lost before {period}")
+                completed = False
+                break
 
-        frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
-        if not frame:
-            print(f"    {prefix}Details: landing frame lost before period {period}")
-            break
-
-        # Find and click the period's link in the summary table
-        link = None
-        try:
-            for a in frame.query_selector_all("a"):
+            # Re-assert the receivable type before every period click:
+            # history.back() can land on a page reverted to the Homeowner
+            # default, and both types carry identically labelled periods
+            # where their histories overlap.
+            if receivable_value is not None:
                 try:
-                    if strip_val(a.inner_text()) == period:
-                        link = a
-                        break
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        if not link:
-            print(f"    {prefix}Details: no link found for period {period} — skipping")
-            continue
-
-        try:
-            link.click()
-        except Exception as e:
-            print(f"    {prefix}Details: click failed for {period}: {e}")
-            continue
-
-        # Wait for the detail page to render, then extract
-        frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
-        rows = None
-        deadline = time.time() + 6
-        while time.time() < deadline:
-            if frame:
-                rows = scrape_statement_detail_table(frame)
-                if rows is not None:
+                    dd = frame.query_selector('select[name="arAccountTypeId"]')
+                    if dd:
+                        current = (dd.evaluate("el => el.value") or "").strip()
+                        if current != receivable_value:
+                            dd.select_option(value=receivable_value)
+                            page.wait_for_timeout(1500)
+                            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+                            if not frame:
+                                print(f"    {prefix}Details: frame lost re-selecting {label}")
+                                completed = False
+                                break
+                except Exception as e:
+                    print(f"    {prefix}Details: could not re-select {label}: {e}")
+                    completed = False
                     break
-            page.wait_for_timeout(400)
-            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
 
-        if rows is None:
-            print(f"    {prefix}Details: no detail table for {period}")
-        else:
-            for r in rows:
-                r["_folder"]             = folder_name
-                r["_section"]            = "Billing"
-                r["_tab"]                = "StatementDetails"
-                r["_receivable_type"]    = label
-                r["_statement_period"]   = period
-                r["_statement_due_date"] = due_date
-                detail_rows.append(r)
-            print(f"    {prefix}Details ({period}): {len(rows)} line(s)")
-
-        # Navigate back to the summary page
-        try:
-            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
-            if frame:
-                frame.evaluate("history.back()")
-        except Exception:
-            pass
-
-        # Confirm we're back — the receivable-type dropdown marks the
-        # summary page
-        back_ok = False
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+            link = None
             try:
-                # [2026-07-18] The dropdown alone can't be the "we're
-                # back on the summary page" marker — dropdown-less
-                # pages (e.g. 35A) would stop drilling after the first
-                # period. Accept either the dropdown OR the summary
-                # table's header text.
-                if frame and frame.query_selector('select[name="arAccountTypeId"]'):
-                    back_ok = True
-                    break
-                if frame and frame.evaluate(
-                    "() => document.body && "
-                    "document.body.innerText.includes('Statement Period')"
-                ):
-                    back_ok = True
-                    break
+                for a in frame.query_selector_all("a"):
+                    try:
+                        if strip_val(a.inner_text()) == period:
+                            link = a
+                            break
+                    except Exception:
+                        continue
+            except Exception as e:
+                # Frame died mid-scan. Previously this fell through to
+                # "no link found for period X — skipping", which reads
+                # like a missing statement rather than a lost session.
+                print(f"    {prefix}Details: frame lost scanning for {period}: {e}")
+                completed = False
+                break
+
+            if not link:
+                print(f"    {prefix}Details: no link found for period {period} — skipping")
+                continue
+
+            try:
+                link.click()
+            except Exception as e:
+                print(f"    {prefix}Details: click failed for {period}: {e}")
+                continue
+
+            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+            rows = None
+            deadline = time.time() + 6
+            while time.time() < deadline:
+                if frame:
+                    try:
+                        rows = scrape_statement_detail_table(frame)
+                    except Exception:
+                        rows = None
+                    if rows is not None:
+                        break
+                page.wait_for_timeout(400)
+                frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+
+            if rows is None:
+                print(f"    {prefix}Details: no detail table for {period}")
+            else:
+                for r in rows:
+                    r["_folder"]             = folder_name
+                    r["_section"]            = "Billing"
+                    r["_tab"]                = "StatementDetails"
+                    r["_receivable_type"]    = label
+                    r["_statement_period"]   = period
+                    r["_statement_due_date"] = due_date
+                    detail_rows.append(r)
+                print(f"    {prefix}Details ({period}): {len(rows)} line(s)")
+
+            try:
+                frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+                if frame:
+                    frame.evaluate("history.back()")
             except Exception:
                 pass
-            page.wait_for_timeout(400)
-        if not back_ok:
-            print(f"    {prefix}Details: could not return to summary after {period} — stopping drill")
-            break
 
-    return detail_rows
+            back_ok = False
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+                if on_statements_summary(frame):
+                    back_ok = True
+                    break
+                page.wait_for_timeout(400)
+
+            if not back_ok:
+                print(f"    {prefix}Details: could not return to summary after "
+                      f"{period} — stopping drill")
+                completed = False
+                break
+
+    except Exception as e:
+        print(f"    {prefix}Details: drill aborted ({e}) — "
+              f"keeping {len(detail_rows)} line(s) already collected")
+        completed = False
+
+    return detail_rows, completed
 
 
 def scrape_statements(page, folder_name, prefix=""):
@@ -1383,8 +1517,24 @@ def scrape_statements(page, folder_name, prefix=""):
     all_rows        = []
     all_detail_rows = []
     any_type_succeeded = False
+    # [patch] False if any drill stopped early — returned as the
+    # success flag so a partial statement history fails the tab.
+    all_details_complete = True
+    # Types that produced a usable table this pass. Overlap suppression
+    # reads this to confirm the type it defers to actually loaded —
+    # an empty result and a failed page load must not look the same.
+    types_succeeded = set()
 
     for value, label in RECEIVABLE_TYPES:
+        # [patch] Drilling the previous type navigated away and can
+        # destroy this frame's execution context. Without this, the
+        # dropdown check below runs against a dead frame and reports
+        # "no dropdown" for an account that has one.
+        frame = reopen_statements_tab(page, prefix)
+        if frame is None:
+            print(f"    {prefix}Statements: could not return to the "
+                  f"summary page for {label} — skipping this type")
+            continue
         try:
             # Explicitly wait for the dropdown itself before touching it
             # — the generic "did content change" check in click_subtab()
@@ -1406,6 +1556,16 @@ def scrape_statements(page, folder_name, prefix=""):
                     if not frame:
                         print(f"    {prefix}Statements: landing frame lost after switching to {label}")
                         continue
+
+                    # Confirm the switch survived the reload. A page that
+                    # silently reverted to the default would otherwise be
+                    # scraped as though it were this type.
+                    check = frame.query_selector('select[name="arAccountTypeId"]')
+                    if check:
+                        now = (check.evaluate("el => el.value") or "").strip()
+                        if now != value:
+                            print(f"    {prefix}Statements: {label} did not stick (value is '{now}') — skipping this type")
+                            continue
                 # else: already on Homeowner (its default) — table is
                 # ready as-is, no reload needed
             else:
@@ -1413,10 +1573,27 @@ def scrape_statements(page, folder_name, prefix=""):
                 # statements pages render without it (e.g. 35A) and the
                 # page defaults to Homeowner anyway — proceed straight
                 # to the table instead of failing the whole tab.
+                #
+                # [House & Dues] That reasoning only holds for the type
+                # the page actually defaults to. For any other type there
+                # is no way to reach its table, and scraping the default
+                # one here would write Homeowner rows tagged as House and
+                # Dues Charges — indistinguishable from real data
+                # downstream. Skip this type; the other still runs.
+                if value != DEFAULT_RECEIVABLE_VALUE:
+                    print(f"    {prefix}Statements: no dropdown — cannot reach {label}, skipping this type")
+                    continue
                 print(f"    {prefix}Statements: no receivable-type dropdown — page defaults to {label}, proceeding")
 
             tables = frame.query_selector_all("table")
-            if not tables:
+            # [patch3] Zero tables is only a FAILURE if we are not on the
+            # statements summary page. Accounts exist whose Homeowner view
+            # renders with the receivable-type dropdown but no table at all
+            # — that is an empty type, not a broken page. Falling through
+            # with an empty list lets the loop below leave matched_rows as
+            # None, which patch 2 records as a confirmed-empty success, so
+            # the overlap guard stops blocking House and Dues Charges.
+            if not tables and not on_statements_summary(frame):
                 print(f"    {prefix}Statements: no tables found for {label}")
                 continue
 
@@ -1446,16 +1623,85 @@ def scrape_statements(page, folder_name, prefix=""):
                     continue
 
             if matched_rows is None:
-                print(f"    {prefix}Statements: no recognizable table found for {label}")
+                # [patch2] "Page loaded, nothing here" vs "page did not
+                # load" are different outcomes and were indistinguishable.
+                # An empty Homeowner page satisfies neither the header
+                # check nor the exact "no matching records found" cell, so
+                # it fell through as a failure — which made the overlap
+                # guard below refuse to run House and Dues Charges on
+                # accounts whose entire history lives in that type.
+                # on_statements_summary() confirms we are genuinely on the
+                # summary page, so no table means no periods.
+                if on_statements_summary(frame):
+                    print(f"    {prefix}Statements: {label} has no periods "
+                          f"(page loaded, empty)")
+                    matched_rows = []
+                else:
+                    print(f"    {prefix}Statements: no recognizable table found for {label}")
+                    continue
+
+            # [patch2] A header-matched table can still carry the empty-state
+            # placeholder as its only row. Left in, it counts as a kept
+            # period and gets drilled as though it were a real statement.
+            matched_rows = [
+                r for r in matched_rows
+                if "no matching records found" not in
+                   " ".join(str(v).lower() for v in r.values())
+            ]
+
+            # ── Overlap suppression ───────────────────────────────
+            # Statement months already claimed for THIS member by a
+            # higher-priority receivable type, taken from the rows just
+            # scraped off the live page.
+            #
+            # Deliberately not read from the database: in a full run the
+            # Homeowner rows for this member are being written by this
+            # same pass, so the DB is always a run behind. The in-memory
+            # rows are current by construction.
+            defers_to = RECEIVABLE_PRIORITY.get(label, ())
+            if defers_to and not all(t in types_succeeded for t in defers_to):
+                # Cannot tell what would overlap. Skipping is the safe
+                # failure: any_type_succeeded stays False if the primary
+                # type also failed, which fails the tab and lets the
+                # existing retry loop handle it, rather than banking a
+                # duplicate-laden result and marking the member done.
+                absent = [t for t in defers_to if t not in types_succeeded]
+                # This now means the deferred-to type genuinely FAILED —
+                # an empty one is recorded as succeeded above, so this no
+                # longer fires for accounts with no Homeowner history.
+                print(f"    {prefix}Statements: {label} skipped — "
+                      f"{', '.join(absent)} failed to load (not merely empty), "
+                      f"cannot identify overlap")
                 continue
 
+            # Built from KEPT rows, not from everything on the page: a
+            # month the higher-priority type dropped at its own floor is
+            # not in the output, so it is not an overlap and this type
+            # should supply it.
+            claimed = {
+                (d.year, d.month)
+                for r in all_rows
+                if r["_receivable_type"] in defers_to
+                for d in (parse_statement_date(r.get("Due Date", "")),)
+                if d is not None
+            }
+
             kept = 0
+            overlapped = 0
             for row in matched_rows:
                 due = parse_statement_date(row.get("Due Date", ""))
-                # Keep rows from STATEMENT_MIN_DATE onward; keep
+                # Keep rows from this type's floor onward; keep
                 # unparseable dates too rather than silently dropping
                 # data
-                if due is not None and due < STATEMENT_MIN_DATE:
+                min_date = STATEMENT_MIN_DATE_BY_TYPE.get(label, STATEMENT_MIN_DATE)
+                if min_date is not None and due is not None and due < min_date:
+                    continue
+                # Already covered by a higher-priority type. Skipped
+                # here, before the drill, so the duplicate never reaches
+                # the CSV AND its detail page is never opened — this is
+                # also where most of the added run time comes back.
+                if due is not None and (due.year, due.month) in claimed:
+                    overlapped += 1
                     continue
                 row["_folder"]          = folder_name
                 row["_section"]         = "Billing"
@@ -1464,14 +1710,24 @@ def scrape_statements(page, folder_name, prefix=""):
                 all_rows.append(row)
                 kept += 1
 
+            types_succeeded.add(label)
             any_type_succeeded = True
+            if overlapped:
+                print(f"    {prefix}Statements ({label}): {overlapped} period(s) "
+                      f"skipped, already covered by {', '.join(defers_to)}")
             print(f"    {prefix}Statements ({label}): {kept} row(s) kept (of {len(matched_rows)})")
 
             # ── Drill each kept period's detail page ────────────────
             if kept:
                 period_rows = [r for r in all_rows if r["_receivable_type"] == label]
-                details = drill_statement_details(page, folder_name, label, period_rows, prefix)
-                all_detail_rows.extend(details)
+                details, drill_ok = drill_statement_details(
+                    page, folder_name, label, period_rows, prefix,
+                    receivable_value=value)
+                all_detail_rows.extend(details)   # [patch] ALWAYS extend
+                if not drill_ok:
+                    all_details_complete = False
+                    print(f"    {prefix}Statements ({label}): drill incomplete "
+                          f"— {len(details)} line(s) kept, will retry")
 
         except Exception as e:
             print(f"    {prefix}Statements scrape error for {label}: {e}")
@@ -1479,8 +1735,10 @@ def scrape_statements(page, folder_name, prefix=""):
 
     if not any_type_succeeded:
         return False, [], []
-
-    return True, all_rows, all_detail_rows
+    # [patch] Rows are still returned and still written; returning
+    # False only leaves status['statements'] failed so the member is
+    # retried instead of frozen as a partial success.
+    return all_details_complete, all_rows, all_detail_rows
 
 
 # ─────────────────────────────────────────────

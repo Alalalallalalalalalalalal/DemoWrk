@@ -38,3 +38,11 @@ app.include_router(
     prefix="/overview",                                               
     tags=["Overview"]                                         
 )
+
+#For Historical Villa Fees Analytics
+from postgres.analytics_villa_fees import router as villa_fees_router  # Villa Fees test tab
+
+app.include_router(
+    villa_fees_router,
+    prefix="/analytics",   # same prefix as the other analytics routers
+)
