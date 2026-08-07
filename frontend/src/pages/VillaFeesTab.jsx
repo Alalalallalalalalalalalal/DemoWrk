@@ -1,16 +1,17 @@
 // frontend/src/pages/VillaFeesTab.jsx
 //
-// Annual Fees for Members — annual Maintenance Fee + Capital Expenditure
+// Annual Fees for Members - annual Maintenance Fee + Capital Expenditure
 // Contribution billed per villa, from statement_details.
 //
 // CapEx is billed both monthly and annually on statements; the annual
 // figure shown here is simply the SUM of every CapEx line in the year
 // (e.g. 700 monthly + 9,500 annual = 10,200), per spec.
 //
-// Villa mapping: statement_details has no villa column, so each member's
-// villa comes from their homeowner-source bookings in rate_details
-// (HO/HA/HB/HF/HD). Fee-billed members with no homeowner booking show
-// under "Unmapped" so the totals always reconcile with raw statements.
+// Villa mapping: statement_details has no villa column. Each member's villa
+// comes from villa_owner_map (see HISTORICAL_DUES_SYNOPSIS): manual override
+// first, then the villa named in the member record, then room_lookup, then
+// stays/bookings. Fee-billed members with no resolvable villa show under
+// "Unmapped" so the totals always reconcile with raw statements.
 //
 // Self-contained on purpose (own colors/export helpers) so it can be
 // dropped in and later deleted or merged without touching other tabs.
@@ -54,7 +55,7 @@ const C = {
 
 const money = (v, decimals = 2) =>
     v == null
-        ? "—"
+        ? "-"
         : `$${Number(v).toLocaleString(undefined, {
             minimumFractionDigits: decimals,
             maximumFractionDigits: decimals,
@@ -351,11 +352,24 @@ const HEADERS = [
     ["villa_name", "Villa"],
     ["bedroom_count", "Bedrooms"],
     ["owner_names", "Owner(s)"],
-    ["maintenance_annual", "Maintenance (annual)"],
-    ["capex_annual", "Capital Expenditure (annual)"],
-    ["family_annual", "Family Membership (annual)"],
-    ["total_annual", "Total annual billed"],
+    ["maintenance_annual", "Maintenance, annual ($USD)"],
+    ["capex_annual", "Capital Expenditure, annual ($USD)"],
+    ["family_annual", "Family Membership, annual ($USD)"],
+    ["total_annual", "Total annual billed ($USD)"],
 ];
+
+// Badge colours for the charge-level fee_type values the backend actually
+// emits. The previous inline ternary compared against "Maintenance", which
+// never matches 'Maintenance Fees', so every badge rendered in the CapEx
+// rust regardless of type.
+const FEE_BADGE_COLORS = {
+    "Maintenance Fees": { bg: "rgba(255,177,98,0.18)", fg: "#A65F00" },
+    "Capital Expenditure Fees": { bg: "rgba(224,123,90,0.16)", fg: C.rust },
+    "Annual Fees - Family Membership": { bg: "rgba(91,158,173,0.16)", fg: "#2F6B7A" },
+    "Annual Fees - Family Membership Deferred": { bg: "rgba(91,158,173,0.16)", fg: "#2F6B7A" },
+};
+const FEE_BADGE_FALLBACK = { bg: "rgba(120,120,120,0.14)", fg: C.muted };
+const feeBadge = (feeType) => FEE_BADGE_COLORS[feeType] ?? FEE_BADGE_FALLBACK;
 
 /* ─── main tab ──────────────────────────────────────────────────── */
 
@@ -478,32 +492,27 @@ export default function VillaFeesTab() {
                             Annual Fees for Members
                         </div>
                         <InfoButton
-                            title="About this page"
                             sections={[
                                 {
                                     label: "What this page shows",
-                                    body: "The annual fees billed to villa owners on their member statements: the Monthly Maintenance Fee, the Capital Expenditure Contribution, and Family Membership Dues (including mid-year adjustments), totaled per villa for the selected year. Each villa row expands to show the owner, contact details, and every charge name with its annual amount. GCT tax is tracked separately and not included in fee totals.",
+                                    body: "The annual fees billed to villa owners on their member statements: the Monthly Maintenance Fee, the Capital Expenditure Contribution and Family Membership Dues (including mid-year adjustments), totaled per villa for the selected year. Each villa row expands to show the owner, contact details, and every charge name with its annual amount. GCT tax is tracked separately and not included in fee totals.",
                                 },
                                 {
                                     label: "How Capital Expenditure is totaled",
-                                    body: "Capital Expenditure is billed both monthly and as an annual charge on statements. Both are added together into one annual figure — for example, $700 monthly charges plus a $9,500 annual charge count as one combined annual total.",
+                                    body: "Capital Expenditure is billed both monthly and as an annual charge on statements. Both are added together into one annual figure. For example, $700 monthly charges plus a $9,500 annual charge count as one combined annual total.",
                                 },
+                                // {
+                                //     label: "What counts as a Maintenance Fee",
+                                //     body: "Only the standard recurring charge (\"Monthly Maintenance Fee\" with its billing period) counts as Maintenance Fees. One-off maintenance work (contractor invoices, storm-damage repairs, additional work billed to an owner) is not a fee and is excluded from this page entirely.",
+                                // },
                                 {
-                                    label: "How villas and sizes are matched",
-                                    body: "Each member is matched to their villa using the villa named on their member record, with their bookings and stays as backup. Bedroom counts reflect the villa's full size. A small number of members without a recorded villa appear under \"Unmapped\" so the totals always add up.",
+                                    label: "Dues History Card",
+                                    body: "The Dues history card shows fees billed per year across all fee types. Its Total column includes GCT, so it reads higher than the fee totals at the top of this page, which exclude tax. The Dues history card is a multi-year view, while the table above is only for the selected year.",
                                 },
-                                {
-                                    label: "What counts as a Maintenance Fee",
-                                    body: "Only the standard recurring charge (\"Monthly Maintenance Fee\" with its billing period) counts as Maintenance Fees. One-off maintenance work — contractor invoices, storm-damage repairs, additional work billed to an owner — is not a fee and is excluded from this page entirely.",
-                                },
-                                {
-                                    label: "Dues history at the bottom",
-                                    body: "The Dues history card shows fees billed per year across all fee types, including Family Membership dues and GCT. Full statement coverage begins December 2024, so 2025 is the first complete year — earlier years reflect limited records.",
-                                },
-                                {
-                                    label: "Exporting",
-                                    body: "Export report downloads the full detail for the selected year (villa, bedrooms, owner, charge name, annual amount) as CSV, Excel, or PDF. Export history on the bottom card downloads the multi-year dataset by villa size.",
-                                },
+                                // {
+                                //     label: "Exporting",
+                                //     body: "Export report downloads the full detail for the selected year (villa, bedrooms, owner, charge name, annual amount) as CSV, Excel, or PDF. It covers the same four fee types as the table above, so it excludes GCT. Export history on the bottom card downloads the multi-year dataset by villa size, and does include GCT.",
+                                // },
                             ]}
                         />
                     </div>
@@ -565,28 +574,28 @@ export default function VillaFeesTab() {
             >
                 <KpiCard
                     icon={Wrench}
-                    label="Maintenance billed"
+                    label="Maintenance billed ($USD)"
                     value={loading ? "…" : money(summary?.maintenance_total)}
                     sub={`${year ?? ""} annual total`}
                     color={C.text}
                 />
                 <KpiCard
                     icon={Landmark}
-                    label="Capital Expenditure billed"
+                    label="Capital Expenditure billed ($USD)"
                     value={loading ? "…" : money(summary?.capex_total)}
                     sub="Monthly + annual charges summed"
                     color={C.text}
                 />
                 <KpiCard
                     icon={Users}
-                    label="Family Membership billed"
+                    label="Family Membership billed ($USD)"
                     value={loading ? "…" : money(summary?.family_total)}
                     sub="Base dues + deferred adjustment"
                     color={C.text}
                 />
                 <KpiCard
                     icon={Home}
-                    label="Combined annual billed"
+                    label="Combined annual billed ($USD)"
                     value={loading ? "…" : money(summary?.grand_total)}
                     sub="Maintenance + Capital Exp. + Family Membership"
                     color={C.rust}
@@ -594,7 +603,7 @@ export default function VillaFeesTab() {
                 <KpiCard
                     icon={Users}
                     label="Owners billed"
-                    value={loading ? "…" : (summary?.owners_billed ?? "—")}
+                    value={loading ? "…" : (summary?.owners_billed ?? "-")}
                     color={C.text}
                 />
             </div>
@@ -768,11 +777,11 @@ function FragmentRow({ row, isOpen, detail, onToggle }) {
                     {row.villa_name}
                     {isUnmapped && (
                         <div style={{ fontSize: 10, color: C.muted, fontWeight: 400 }}>
-                            Fee-billed members with no homeowner booking on file
+                            Fee-billed members with no villa on file
                         </div>
                     )}
                 </td>
-                <td style={cellNum}>{row.bedroom_count ?? "—"}</td>
+                <td style={cellNum}>{row.bedroom_count ?? "-"}</td>
                 <td
                     style={{
                         padding: "10px 14px",
@@ -785,11 +794,7 @@ function FragmentRow({ row, isOpen, detail, onToggle }) {
                     }}
                     title={`${row.owner_names ?? ""} (${row.member_numbers ?? ""})`}
                 >
-                    {row.owner_names ?? "—"}
-                    <span style={{ color: C.muted }}>
-                        {" "}
-                        · {row.member_numbers ?? ""}
-                    </span>
+                    {row.owner_names ?? "-"}
                 </td>
                 <td style={cellNum}>{money(row.maintenance_annual)}</td>
                 <td style={cellNum}>{money(row.capex_annual)}</td>
@@ -829,7 +834,7 @@ function FragmentRow({ row, isOpen, detail, onToggle }) {
                                             "Charge Name",
                                             "Fee Type",
                                             "Times Billed",
-                                            "Annual Amount",
+                                            "Annual Amount ($USD)",
                                         ].map((h, i) => (
                                             <th
                                                 key={h}
@@ -853,9 +858,9 @@ function FragmentRow({ row, isOpen, detail, onToggle }) {
                                     {detail.map((d, i) => (
                                         <tr key={`${d.member_number}-${d.charge_name}-${i}`}>
                                             <td style={detailCell}>{d.member_number}</td>
-                                            <td style={detailCell}>{d.member_name ?? "—"}</td>
+                                            <td style={detailCell}>{d.member_name ?? "-"}</td>
                                             <td style={{ ...detailCell, color: C.muted }}>
-                                                {d.email ?? "—"}
+                                                {d.email ?? "-"}
                                             </td>
                                             <td style={{ ...detailCell, fontWeight: 700 }}>
                                                 {d.charge_name}
@@ -867,12 +872,8 @@ function FragmentRow({ row, isOpen, detail, onToggle }) {
                                                         borderRadius: 999,
                                                         fontSize: 9,
                                                         fontWeight: 800,
-                                                        background:
-                                                            d.fee_type === "Maintenance"
-                                                                ? "rgba(255,177,98,0.18)"
-                                                                : "rgba(224,123,90,0.16)",
-                                                        color:
-                                                            d.fee_type === "Maintenance" ? "#A65F00" : C.rust,
+                                                        background: feeBadge(d.fee_type).bg,
+                                                        color: feeBadge(d.fee_type).fg,
                                                     }}
                                                 >
                                                     {d.fee_type}

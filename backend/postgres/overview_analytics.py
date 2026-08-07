@@ -743,6 +743,17 @@ def overview_member_dues_summary(
                  sd.description ILIKE 'Monthly Maintenance Fee%'
               OR sd.description ILIKE '%Family Membership Dues%'
               OR sd.description ILIKE '%Corporate Golf Membership%'
+                 -- [2026-08-07] Coded descriptions on older statements,
+                 -- matching the classification the Annual Fees page picked
+                 -- up on 2026-08-06 (see HISTORICAL_DUES_SYNOPSIS):
+                 --     MDUES / MDUE      = Monthly Maintenance Fee
+                 --     Family Memb. Dues = Family Membership Dues
+                 --     Fam. Mem. Dues    = Family Membership Dues
+                 -- Without these, pre-2024 statements contributed to the
+                 -- Annual Fees page but not to this figure. POSIX classes,
+                 -- no backslashes - this SQL lives in an f-string.
+              OR sd.description ~* '(^|[^a-z])mdues?([^a-z]|$)'
+              OR sd.description ~* 'fam(ily|[.])?[[:space:]]*mem'
                  -- CAPEX: Capital Expenditure Contribution is deliberately
                  -- EXCLUDED (~$489,271 for 2026). It funds a reserve for
                  -- future capital works — a balance-sheet item, not
@@ -846,7 +857,14 @@ def overview_rack_rate_summary(
           -- ADR and rack ADR cover the same nights
           AND rd.check_out_date < CURRENT_DATE
           {overview_non_villa_filter_sql("rd", "villa_name")}
-          {overview_date_filter_sql("rd", "check_in_date", "check_out_date", mode="overlap")}
+          -- [2026-08-07] Was mode="overlap" while every other stat on the
+          -- Bookings card uses check-in attribution ("one stay, one
+          -- period"). Under a year/month filter a boundary-crossing stay
+          -- landed in ADR for both periods but in Total bookings for only
+          -- one. overview_nights already attributes a stay's FULL length to
+          -- its check-in period, so check-in on this per-night table gives
+          -- ADR the same night set as the room-nights figure beside it.
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
     """, params)
     overview_rack_by_type = overview_rows(db, f"""
         SELECT
@@ -864,7 +882,7 @@ def overview_rack_rate_summary(
                   NOT IN ('cancelled', 'canceled', 'no-show')
           AND rd.check_out_date < CURRENT_DATE
           {overview_non_villa_filter_sql("rd", "villa_name")}
-          {overview_date_filter_sql("rd", "check_in_date", "check_out_date", mode="overlap")}
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
         GROUP BY COALESCE(NULLIF(TRIM(rd.payment_type), ''), 'Unknown')
     """, params)
     return {
@@ -1031,6 +1049,20 @@ def overview_transaction_finance_summary(
           AND (
             :overview_line_status IS NULL
             OR otl.overview_line_status = :overview_line_status
+          )
+          -- [2026-08-07] Statement-backed villa revenue: for VILLA lines
+          -- keep only rental-programme payouts (conf >= 9000000). This
+          -- endpoint was missed by the 2026-07-24 pass that added the same
+          -- rule to visits-summary-by-payment-type,
+          -- transaction-member-vs-guest-revenue,
+          -- transaction-member-vs-guest-revenue-by-category and
+          -- monthly-revenue-by-category. Without it, "Rev. per transaction"
+          -- on Finance at a glance ran on a different villa universe than
+          -- "Total revenue" directly above it on the same card.
+          AND (
+                otl.overview_line_category <> 'Villa'
+             OR (otl.overview_conf_code::text ~ '^[0-9]+$'
+                 AND otl.overview_conf_code::text::bigint >= 9000000)
           )
           {overview_date_filter_sql("ovb")}
         GROUP BY otl.overview_line_category, otl.overview_line_status
@@ -1515,15 +1547,38 @@ def overview_villa_rack_rate_free(
               {overview_non_villa_filter_sql(alias=None, keep_null=False)}
             ORDER BY rack_rate_total DESC
         """)
+    # [2026-08-07] This branch previously matched only payment_type = 'Free',
+    # while the overview_villa_rack_rate_free VIEW (used by the unfiltered
+    # branch above) ALSO counts zero-charged Paid reservations as give-aways
+    # - rack listed, charge waived, e.g. the Karma Bay week. Selecting any
+    # date range therefore silently dropped those villas from the card. The
+    # zero_charged_paid CTE is deliberately NOT date-filtered: whether a
+    # reservation was charged $0 is a property of the whole reservation, so
+    # filtering it would reclassify a booking based on which of its nights
+    # happen to fall inside the window.
+    #
+    # Date mode is now "checkin" (the default), matching
+    # overview_villa_bookings' one-stay-one-period attribution, so a stay
+    # spanning a year boundary is no longer counted in both years.
     return overview_rows(db, f"""
+        WITH zero_charged_paid AS (
+            SELECT conf_code
+            FROM rate_details_with_discount
+            WHERE payment_type = 'Paid'
+              AND COALESCE(LOWER(reservation_status), '')
+                    NOT IN ('cancelled', 'canceled', 'no-show')
+            GROUP BY conf_code
+            HAVING COALESCE(SUM(total_amount), 0) = 0
+        )
         SELECT
             rd.villa_name                       AS villa_name,
             COALESCE(SUM(rd.rack_rate), 0)       AS rack_rate_total,
             COUNT(DISTINCT rd.conf_code)         AS free_bookings
         FROM rate_details_with_discount rd
-        WHERE rd.payment_type = 'Free'
+        WHERE (rd.payment_type = 'Free'
+               OR rd.conf_code IN (SELECT conf_code FROM zero_charged_paid))
           {overview_non_villa_filter_sql("rd", "villa_name", keep_null=False)}
-          {overview_date_filter_sql("rd", "check_in_date", "check_out_date", mode="overlap")}
+          {overview_date_filter_sql("rd", "check_in_date", "check_out_date")}
         GROUP BY rd.villa_name
         ORDER BY rack_rate_total DESC
     """, params)

@@ -9,14 +9,18 @@ REQUIRES: the two database views created by HISTORICAL_DUES_SYNOPSIS.sql
                        (member_number -> villa_name, bedroom_count, basis)
                        (manual overrides > villa named in the member record >
                         stays/bookings; constant full-capacity bedrooms)
-  * villa_dues_lines_mv — materialised copy of villa_dues_lines:Are you 
+  * villa_dues_lines_mv — materialised copy of villa_dues_lines:
                        classified dues lines from statement_details
                        (Maintenance / Capital Expenditure / Family Membership
                         / GCT), reversals excluded
 
 Coverage note the frontend surfaces: broad multi-member statement history
-starts Dec 2024; 2025 is the only complete year; earlier years contain a
-single member (1A). The 20-year trend comes from the accounting GL.
+starts Dec 2024; 2025 is the only complete year. Pre-2024 coverage is
+UNVERIFIED - the old claim here that earlier years held only member 1A is
+wrong (member 306 has a Dec 2019 statement), and the 2026-08-06 coded-line
+fix may surface more. Run query 3 of HISTORICAL_DUES_SYNOPSIS and rewrite
+this note with what it actually returns. The 20-year trend comes from the
+accounting GL.
 READS THE MATERIALISED COPIES (*_mv), not the plain views. The plain
 villa_owner_map has 13 dependants (synthetic_villa_income_lines ->
 folios_unified -> the Overview tab) and is left alone; only this module
@@ -88,10 +92,17 @@ def villa_fees_by_villa(year: int = Query(...), db: Session = Depends(get_db)):
             MAX(om.bedroom_count)                       AS bedroom_count,
             COUNT(DISTINCT dl.member_number)::int       AS owner_count,
             STRING_AGG(DISTINCT dl.member_number, ', ') AS member_numbers,
+            -- [2026-08-07] Name and member number are built in ONE
+            -- aggregate. They used to be two independent
+            -- STRING_AGG(DISTINCT ...) calls, each sorted on its own, so a
+            -- villa with two owners could render name A against number B.
+            -- member_numbers below is kept because the frontend search
+            -- filter reads it.
             STRING_AGG(DISTINCT COALESCE(
                 NULLIF(TRIM(m.member_full_name), ''),
                 NULLIF(TRIM(m.member_name), ''),
-                dl.member_number), ', ')                AS owner_names,
+                dl.member_number) || ' (' || dl.member_number || ')', ', ')
+                                                        AS owner_names,
             ROUND(COALESCE(SUM(dl.billed_amount) FILTER (
                 WHERE dl.fee_type = 'Maintenance Fees'), 0)::numeric, 2)
                                                         AS maintenance_annual,
@@ -142,6 +153,16 @@ def villa_fees_report(year: int = Query(...), db: Session = Depends(get_db)):
         LEFT JOIN villa_owner_map_mv om ON om.member_number = dl.member_number
         LEFT JOIN members m          ON m.member_number  = dl.member_number
         WHERE dl.year = :year
+          -- [2026-08-07] Same fee_type filter as /villa-fees/by-villa.
+          -- Without it the expanded charge rows under a villa included GCT
+          -- lines that were not in that villa's "Total annual billed", so
+          -- the detail never summed to the row above it. GCT remains
+          -- visible (with tax) on the Dues history card, by design.
+          -- NOTE: this endpoint also drives "Export report", so GCT is now
+          -- out of that export too.
+          AND dl.fee_type IN ('Maintenance Fees', 'Capital Expenditure Fees',
+                              'Annual Fees - Family Membership',
+                              'Annual Fees - Family Membership Deferred')
         GROUP BY 1, 2, 3, 4, 5, 6, 7
         ORDER BY villa_name, dl.member_number, dl.fee_type, dl.charge_name
     """, {"year": year})
