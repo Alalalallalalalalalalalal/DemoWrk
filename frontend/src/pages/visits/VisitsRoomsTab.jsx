@@ -2,20 +2,30 @@
 //
 // Merged replacement for VisitsRoomsTab.jsx + VillaSourceBreakdown.jsx.
 //
-// Endpoints used (unchanged):
-//   /analytics/visits-rooms-dashboard      summary + villa_stats + bookings_by_bedroom
-//   /analytics/villa-source-breakdown      villa x source x paid/free  (aggregated here)
-//   /analytics/villa-source-bedroom-breakdown
-//   /analytics/villa-source-bookings       villa drill-down records
-//   /analytics/bedroom-bookings            bedroom drill-down records
-//   /analytics/villa-monthly               trend inside the villa panel
-//   /analytics/booked-people               member vs guest split
+// Endpoints used:
+//   /analytics/visits-rooms-dashboard   ONE call on page load. Returns
+//                                       summary, villa_stats,
+//                                       bookings_by_bedroom,
+//                                       villa_source_breakdown and
+//                                       villa_source_bedroom_breakdown.
+//   /analytics/villa-source-bookings    villa drill-down records (panel only)
+//   /analytics/bedroom-bookings         bedroom drill-down records (panel only)
+//   /analytics/villa-monthly            trend inside the villa panel
+//   /analytics/booked-people            member vs guest split (panel only)
 //
+// PERF NOTE (Aug 2026) — read before adding another fetch here:
+//   This page used to fire three requests on load: visits-rooms-dashboard,
+//   villa-source-breakdown and villa-source-bedroom-breakdown. Each one made
+//   the backend rebuild its entire booking base from rate_details, so a
+//   single page load cost seven full rebuilds and the page took forever.
+//   The two breakdown datasets now ride along inside the dashboard payload.
+//   If you need another dataset, add it to that payload rather than adding a
+//   fourth request.
 
 // REVENUE SOURCE — read before changing:
 //   The Overall total uses summary.villa_rental_revenue, which is Villa Income
 //   from statement_details.
-//   Paid and Comp tabs continue to use villa-source-breakdown.
+//   Paid and Comp tabs continue to use the villa source breakdown.
 //   rate_details.total_rental still drives per-booking values in the panels.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -97,6 +107,10 @@ const MONTHS = [
   "Dec",
 ];
 
+// Guest records fetched per villa drill-down. The panel prints "n of m", so a
+// cap reads honestly. Backend accepts up to 20000; omit to go unbounded.
+const DRILL_RECORD_LIMIT = 2000;
+
 const TIP_STYLE = {
   border: `1px solid ${T.line}`,
   borderRadius: 10,
@@ -137,6 +151,9 @@ const safeFilePart = (v) =>
     .replace(/[^a-z0-9]+/gi, "_")
     .replace(/^_+|_+$/g, "")
     .toLowerCase();
+
+/* Ignore AbortError — it only means a newer request superseded this one. */
+const isAbort = (err) => err?.name === "AbortError";
 
 /* Period: {mode:'all'} | {mode:'year',year} | {mode:'month',year,month} | {mode:'range',from,to} */
 
@@ -1173,22 +1190,31 @@ function DrillPanel({ selection, tab, params, period, onClose, onOpenVilla }) {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setSearch("");
 
     const load = isVilla
-      ? analyticsApi.villaSourceBookings(selKey, {
-          ...params,
-          ...(tab === "paid" ? { is_free: false } : {}),
-          ...(tab === "free" ? { is_free: true } : {}),
-        })
-      : analyticsApi.bedroomBookings(selKey, params);
+      ? analyticsApi.villaSourceBookings(
+          selKey,
+          {
+            ...params,
+            ...(tab === "paid" ? { is_free: false } : {}),
+            ...(tab === "free" ? { is_free: true } : {}),
+            limit: DRILL_RECORD_LIMIT,
+          },
+          { signal: controller.signal },
+        )
+      : analyticsApi.bedroomBookings(selKey, params, {
+          signal: controller.signal,
+        });
 
     load
       .then((data) => {
         if (!cancelled) setRecords(Array.isArray(data) ? data : []);
       })
       .catch((err) => {
+        if (isAbort(err)) return;
         console.error(err);
         if (!cancelled) setRecords([]);
       })
@@ -1198,6 +1224,7 @@ function DrillPanel({ selection, tab, params, period, onClose, onOpenVilla }) {
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [selKey, isVilla, tab, params]);
 
@@ -1207,18 +1234,25 @@ function DrillPanel({ selection, tab, params, period, onClose, onOpenVilla }) {
       return undefined;
     }
     let cancelled = false;
+    const controller = new AbortController();
     const trendParams = groupBy === "year" ? {} : params;
     analyticsApi
-      .villaMonthly(selKey, { group_by: groupBy, ...trendParams })
+      .villaMonthly(
+        selKey,
+        { group_by: groupBy, ...trendParams },
+        { signal: controller.signal },
+      )
       .then((data) => {
         if (!cancelled) setTrend(Array.isArray(data) ? data : []);
       })
       .catch((err) => {
+        if (isAbort(err)) return;
         console.error(err);
         if (!cancelled) setTrend([]);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [selKey, isVilla, groupBy, params]);
 
@@ -1774,6 +1808,12 @@ function DrillPanel({ selection, tab, params, period, onClose, onOpenVilla }) {
             </table>
           </ScrollShell>
         )}
+        {isVilla && records.length >= DRILL_RECORD_LIMIT && (
+          <p className="mt-2" style={{ fontSize: 12, color: "#B07B33" }}>
+            Showing the {n0(DRILL_RECORD_LIMIT)} most recent bookings. Narrow
+            the date period to see earlier stays.
+          </p>
+        )}
         {!isVilla && (
           <p className="mt-2" style={{ fontSize: 12, color: T.slate }}>
             Bedroom records come from /bedroom-bookings, which does not carry
@@ -1799,10 +1839,15 @@ function MemberGuestPanel({ params, period, onClose }) {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     Promise.allSettled([
-      analyticsApi.bookedPeople("members", params),
-      analyticsApi.bookedPeople("guests", params),
+      analyticsApi.bookedPeople("members", params, {
+        signal: controller.signal,
+      }),
+      analyticsApi.bookedPeople("guests", params, {
+        signal: controller.signal,
+      }),
     ])
       .then(([m, g]) => {
         if (cancelled) return;
@@ -1812,14 +1857,17 @@ function MemberGuestPanel({ params, period, onClose }) {
           guests:
             g.status === "fulfilled" && Array.isArray(g.value) ? g.value : [],
         });
-        if (m.status === "rejected") console.error(m.reason);
-        if (g.status === "rejected") console.error(g.reason);
+        if (m.status === "rejected" && !isAbort(m.reason))
+          console.error(m.reason);
+        if (g.status === "rejected" && !isAbort(g.reason))
+          console.error(g.reason);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [params]);
 
@@ -2145,50 +2193,64 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
   const [sourceRows, setSourceRows] = useState([]);
   const [bedroomSourceRows, setBedroomSourceRows] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   const params = useMemo(() => periodToParams(period), [period]);
 
+  // ── ONE request for the whole page ────────────────────────────────
+  // Debounced 400ms: clicking through years in the date picker used to fire a
+  // fresh request on every click with nothing cancelling the previous one, so
+  // several piled up in flight, each holding a DB connection until it
+  // finished. The AbortController kills whatever is still running when the
+  // filter changes again, and also stops a late response overwriting fresher
+  // data.
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
+    setLoadError(null);
+
     const timer = setTimeout(() => {
-      Promise.allSettled([
-        analyticsApi.visitsRoomsDashboard(params),
-        analyticsApi.villaSourceBreakdown(params),
-        analyticsApi.villaSourceBedroomBreakdown(params),
-      ])
-        .then(([dash, src, bedSrc]) => {
+      analyticsApi
+        .visitsRoomsDashboard(params, { signal: controller.signal })
+        .then((data) => {
           if (cancelled) return;
-          if (dash.status === "fulfilled") {
-            setSummary(dash.value?.summary ?? {});
-            setVillaStats(
-              Array.isArray(dash.value?.villa_stats)
-                ? dash.value.villa_stats
-                : [],
-            );
-            setBedroomStats(
-              Array.isArray(dash.value?.bookings_by_bedroom)
-                ? dash.value.bookings_by_bedroom
-                : [],
-            );
-          } else console.error(dash.reason);
-          if (src.status === "fulfilled")
-            setSourceRows(Array.isArray(src.value) ? src.value : []);
-          else console.error(src.reason);
-          if (bedSrc.status === "fulfilled")
-            setBedroomSourceRows(
-              Array.isArray(bedSrc.value) ? bedSrc.value : [],
-            );
-          else console.error(bedSrc.reason);
+          setSummary(data?.summary ?? {});
+          setVillaStats(
+            Array.isArray(data?.villa_stats) ? data.villa_stats : [],
+          );
+          setBedroomStats(
+            Array.isArray(data?.bookings_by_bedroom)
+              ? data.bookings_by_bedroom
+              : [],
+          );
+          // These two used to be separate round trips. They now ride along in
+          // the same payload — see the perf note at the top of this file.
+          setSourceRows(
+            Array.isArray(data?.villa_source_breakdown)
+              ? data.villa_source_breakdown
+              : [],
+          );
+          setBedroomSourceRows(
+            Array.isArray(data?.villa_source_bedroom_breakdown)
+              ? data.villa_source_bedroom_breakdown
+              : [],
+          );
+        })
+        .catch((err) => {
+          if (isAbort(err)) return;
+          console.error(err);
+          if (!cancelled) setLoadError(err?.message || "Request failed");
         })
         .finally(() => {
           if (!cancelled) setLoading(false);
         });
-    }, 250);
+    }, 400);
 
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      controller.abort();
     };
   }, [params]);
 
@@ -2471,6 +2533,21 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
           <DatePeriod period={period} onChange={setPeriod} years={years} />
         </div>
       </div>
+
+      {/* A failed load used to leave the page silently empty, which looked
+          identical to "no bookings in this period". Say which it is. */}
+      {loadError && (
+        <div
+          className="rounded-xl p-3 text-xs"
+          style={{
+            background: "#FFF4E6",
+            color: "#8A5A20",
+            border: "1px solid #F5DDBC",
+          }}
+        >
+          Could not load this period: {loadError}
+        </div>
+      )}
 
       {/* ── Revenue banner ─────────────────────────────────────────────── */}
       <div
