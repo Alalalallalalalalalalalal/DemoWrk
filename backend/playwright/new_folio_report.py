@@ -31,7 +31,7 @@ NAV_TIMEOUT        = 15000
 FRAME_TIMEOUT      = 8000
 FOLIO_TIMEOUT       = 12000
 
-SEARCH_TIMEOUT      = 300000   # 5 min
+SEARCH_TIMEOUT      = 600000   # 10 min
 # After switching the page-size dropdown to "All", the full table
 # can take up to ~2-3 min to finish
 # rendering.
