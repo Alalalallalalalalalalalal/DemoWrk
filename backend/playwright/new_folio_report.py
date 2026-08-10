@@ -1,12 +1,12 @@
 """
-folio_report.py — Phase 1: Login, search all folios, save folio_report.csv.
+new_folio_report.py — Phase 1: Login, search all folios, save folio_report.csv.
 
 Run this when you want a fresh listing. The output CSV is used by folio_scraper.py.
 
 Usage:
-    python folio_report.py                        # default: every year, current year back to Nov 2019
-    python folio_report.py --year 2025             # single year, Jan-Dec (or Jan-current month if it's the current year)
-    python folio_report.py --year 2025 --month 3   # single month only, merged into the existing master file
+    python new_folio_report.py                        # default: every year, current year back to Nov 2019
+    python new_folio_report.py --year 2025             # single year, Jan-Dec (or Jan-current month if it's the current year)
+    python new_folio_report.py --year 2025 --month 3   # single month only, merged into the existing master file
 """
 import os
 import csv
