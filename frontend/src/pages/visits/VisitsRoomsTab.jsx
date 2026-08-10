@@ -22,11 +22,15 @@
 //   If you need another dataset, add it to that payload rather than adding a
 //   fourth request.
 
-// REVENUE SOURCE — read before changing:
-//   The Overall total uses summary.villa_rental_revenue, which is Villa Income
-//   from statement_details.
-//   Paid and Comp tabs continue to use the villa source breakdown.
-//   rate_details.total_rental still drives per-booking values in the panels.
+// PER-VILLA FIGURES — read before changing:
+//   villa_paid_free_totals is the authoritative per-villa dataset returned by
+//   /analytics/visits-rooms-dashboard.
+//   Overall = Overview Villa net amount.
+//   Paid    = Overview paid Villa net amount.
+//   Free    = rack-rate value from rate_details_with_discount, including
+//             zero-charged Paid reservations.
+//   Source rows remain useful for source/nights/member drill-downs, but must
+//   not replace these authoritative villa totals.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -323,7 +327,7 @@ const INFO = {
   chart:
     "Bars count valid unique bookings, or nights / revenue when you switch the metric. Bar colour is the villa's smallest bedroom layout. Select a bar to open that villa's full record.",
   table:
-    "Rows aggregate the same bookings by villa or by bedroom count. Comp stays bill nothing, so their value is reported separately from paid revenue.",
+    "For villas, use the Overall / Paid / Free selector to choose the authoritative booking and value figures. Overall and Paid come from the Overview Villa ledger; Free is the rack-rate value of complimentary or zero-charged stays.",
   reconcile:
     "Statement Villa Income is the owner-payout total from statement_details. It is a separate reconciliation figure and will not equal booking-level folio revenue.",
   split:
@@ -1176,7 +1180,15 @@ function SidePanel({ eyebrow, title, subtitle, onClose, children }) {
    Drill-down panel — villa or bedroom count
    ═════════════════════════════════════════════════════════════════════════ */
 
-function DrillPanel({ selection, tab, params, period, onClose, onOpenVilla }) {
+function DrillPanel({
+  selection,
+  tab,
+  params,
+  period,
+  onClose,
+  onOpenVilla,
+  villaMetrics,
+}) {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(false);
   const [trend, setTrend] = useState([]);
@@ -1330,7 +1342,13 @@ function DrillPanel({ selection, tab, params, period, onClose, onOpenVilla }) {
     "Conf Code": r.conf_code ?? "",
   }));
 
-  const headValue = tab === "free" ? totals.compValue : totals.revenue;
+  const authoritativeVillaMetrics = isVilla ? villaMetrics : null;
+
+  const overviewValue = Number(
+    authoritativeVillaMetrics?.overall_total_rental ?? 0,
+  );
+  const paidValue = Number(authoritativeVillaMetrics?.paid_total_rental ?? 0);
+  const freeValue = Number(authoritativeVillaMetrics?.free_total_rental ?? 0);
 
   return (
     <SidePanel
@@ -1349,57 +1367,141 @@ function DrillPanel({ selection, tab, params, period, onClose, onOpenVilla }) {
       }`}
       onClose={onClose}
     >
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {[
-          [tab === "free" ? "Comp value" : "Revenue", money(headValue)],
-          ["Bookings", n0(totals.bookings)],
-          [
-            "Avg stay",
-            totals.avgStay == null ? "—" : `${n1(totals.avgStay)} n`,
-          ],
-          ["Avg party", totals.avgParty == null ? "—" : n1(totals.avgParty)],
-        ].map(([l, v]) => (
+      {isVilla ? (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {[
+              ["Overall revenue", money(overviewValue)],
+              ["Paid revenue", money(paidValue)],
+              ["Free value", money(freeValue)],
+              [
+                "Bookings",
+                n0(
+                  authoritativeVillaMetrics?.total_unique_bookings ??
+                    totals.bookings,
+                ),
+              ],
+              [
+                "Avg stay",
+                totals.avgStay == null ? "—" : `${n1(totals.avgStay)} n`,
+              ],
+              [
+                "Avg party",
+                totals.avgParty == null ? "—" : n1(totals.avgParty),
+              ],
+            ].map(([l, v]) => (
+              <div
+                key={l}
+                style={{
+                  background: T.card,
+                  border: `1px solid ${T.line}`,
+                  borderRadius: 12,
+                  padding: 14,
+                }}
+              >
+                <div
+                  className="text-xs font-bold uppercase"
+                  style={{
+                    letterSpacing: "0.08em",
+                    color: T.muted,
+                    fontSize: 10,
+                  }}
+                >
+                  {l}
+                </div>
+                <div
+                  style={{
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 24,
+                    color: l === "Free value" ? "#B07B33" : T.ink,
+                    marginTop: 4,
+                  }}
+                >
+                  {v}
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div
-            key={l}
+            className="mt-3 rounded-lg p-3 text-xs"
             style={{
-              background: T.card,
-              border: `1px solid ${T.line}`,
-              borderRadius: 12,
-              padding: 14,
+              background: "#FFF4E6",
+              color: "#8A5A20",
+              border: "1px solid #F5DDBC",
+              lineHeight: 1.5,
             }}
           >
+            <b>Free value</b> is not cash collected. It is the rack-rate value
+            of complimentary stays, including reservations marked Paid where the
+            complete charged total was zero.
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              [
+                tab === "free" ? "Comp value" : "Revenue",
+                money(tab === "free" ? totals.compValue : totals.revenue),
+              ],
+              ["Bookings", n0(totals.bookings)],
+              [
+                "Avg stay",
+                totals.avgStay == null ? "—" : `${n1(totals.avgStay)} n`,
+              ],
+              [
+                "Avg party",
+                totals.avgParty == null ? "—" : n1(totals.avgParty),
+              ],
+            ].map(([l, v]) => (
+              <div
+                key={l}
+                style={{
+                  background: T.card,
+                  border: `1px solid ${T.line}`,
+                  borderRadius: 12,
+                  padding: 14,
+                }}
+              >
+                <div
+                  className="text-xs font-bold uppercase"
+                  style={{
+                    letterSpacing: "0.08em",
+                    color: T.muted,
+                    fontSize: 10,
+                  }}
+                >
+                  {l}
+                </div>
+                <div
+                  style={{
+                    fontFamily: FONT_DISPLAY,
+                    fontSize: 24,
+                    color: T.ink,
+                    marginTop: 4,
+                  }}
+                >
+                  {v}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {tab === "free" && (
             <div
-              className="text-xs font-bold uppercase"
-              style={{ letterSpacing: "0.08em", color: T.muted, fontSize: 10 }}
-            >
-              {l}
-            </div>
-            <div
+              className="mt-3 rounded-lg p-3 text-xs"
               style={{
-                fontFamily: FONT_DISPLAY,
-                fontSize: 24,
-                color: T.ink,
-                marginTop: 4,
+                background: "#FFF4E6",
+                color: "#8A5A20",
+                border: "1px solid #F5DDBC",
               }}
             >
-              {v}
+              Comp stays bill nothing. The figure above is the rack value of{" "}
+              {n0(totals.nights)} room nights given away.
             </div>
-          </div>
-        ))}
-      </div>
-
-      {tab === "free" && (
-        <div
-          className="mt-3 rounded-lg p-3 text-xs"
-          style={{
-            background: "#FFF4E6",
-            color: "#8A5A20",
-            border: "1px solid #F5DDBC",
-          }}
-        >
-          Comp stays bill nothing. The figure above is the rack value of{" "}
-          {n0(totals.nights)} room nights given away.
-        </div>
+          )}
+        </>
       )}
 
       {breakdown.length > 0 && (
@@ -2181,6 +2283,7 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
   const [chartLimit, setChartLimit] = useState(30);
 
   const [tableDim, setTableDim] = useState("villa");
+  const [tableFigureMode, setTableFigureMode] = useState("overall");
   const [tableSort, setTableSort] = useState({ col: "value", dir: "desc" });
   const [query, setQuery] = useState("");
 
@@ -2189,6 +2292,7 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
 
   const [summary, setSummary] = useState({});
   const [villaStats, setVillaStats] = useState([]);
+  const [villaPaidFreeTotals, setVillaPaidFreeTotals] = useState([]);
   const [bedroomStats, setBedroomStats] = useState([]);
   const [sourceRows, setSourceRows] = useState([]);
   const [bedroomSourceRows, setBedroomSourceRows] = useState([]);
@@ -2218,6 +2322,11 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
           setSummary(data?.summary ?? {});
           setVillaStats(
             Array.isArray(data?.villa_stats) ? data.villa_stats : [],
+          );
+          setVillaPaidFreeTotals(
+            Array.isArray(data?.villa_paid_free_totals)
+              ? data.villa_paid_free_totals
+              : [],
           );
           setBedroomStats(
             Array.isArray(data?.bookings_by_bedroom)
@@ -2265,7 +2374,12 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
       const e = map.get(r.villa_name);
       if (r.bedroom_count != null && !e.configs.includes(r.bedroom_count))
         e.configs.push(r.bedroom_count);
-      const b = Number(r.bookings || 0);
+      // villa_stats can repeat whole-villa authoritative booking totals across
+      // bedroom-layout rows. Weight avg stay using operational row counts when
+      // available so we do not multiply the villa booking count.
+      const b = Number(
+        (r.rate_detail_rows ?? r.rate_booking_count ?? r.bookings) || 0,
+      );
       e.bookings += b;
       e.stayWeight += Number(r.avg_stay || 0) * b;
     });
@@ -2275,6 +2389,25 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
     });
     return map;
   }, [villaStats]);
+
+  const villaMetricsMap = useMemo(() => {
+    const map = new Map();
+    villaPaidFreeTotals.forEach((r) => {
+      if (!r?.villa_name) return;
+      map.set(String(r.villa_name).trim().toLowerCase(), r);
+    });
+    return map;
+  }, [villaPaidFreeTotals]);
+
+  const getVillaMetrics = useCallback(
+    (villaName) =>
+      villaMetricsMap.get(
+        String(villaName || "")
+          .trim()
+          .toLowerCase(),
+      ) ?? null,
+    [villaMetricsMap],
+  );
 
   const keepRow = (r) =>
     tab === "overall" || (tab === "paid" ? !r.is_free : r.is_free);
@@ -2310,14 +2443,118 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
     });
     return [...map.values()].map((e) => {
       const meta = villaMeta.get(e.name);
+      const metrics = getVillaMetrics(e.name);
+
+      const overallBookings = Number(
+        metrics?.total_unique_bookings ?? e.bookings,
+      );
+      const paidBookings = Number(metrics?.paid_unique_bookings ?? e.paid);
+      const freeBookings = Number(metrics?.free_unique_bookings ?? e.comp);
+
+      const overallValue = Number(metrics?.overall_total_rental ?? e.revenue);
+      const paidValue = Number(metrics?.paid_total_rental ?? e.revenue);
+      const freeValue = Number(metrics?.free_total_rental ?? e.compValue);
+
       return {
         ...e,
+        metrics,
+        overallBookings,
+        paidBookings,
+        freeBookings,
+        overallValue,
+        paidValue,
+        freeValue,
         configs: meta?.configs ?? [],
         avgStay: meta?.avgStay ?? (e.bookings ? e.nights / e.bookings : null),
-        value: tab === "free" ? e.compValue : e.revenue,
+        value:
+          tab === "free"
+            ? freeValue
+            : tab === "paid"
+              ? paidValue
+              : overallValue,
       };
     });
-  }, [sourceRows, tab, villaMeta]);
+  }, [sourceRows, tab, villaMeta, getVillaMetrics]);
+
+  // Performance-by-villa has its own Overall / Paid / Free selector.
+  // Build this from ALL source rows so changing the page-level tab does not
+  // hide villas or alter the figures shown in the performance table.
+  const performanceVillaRows = useMemo(() => {
+    const map = new Map();
+
+    sourceRows.forEach((r) => {
+      const key = r.villa_name || "Unknown villa";
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          name: key,
+          nights: 0,
+          members: 0,
+          sourcePaidBookings: 0,
+          sourceFreeBookings: 0,
+        });
+      }
+
+      const e = map.get(key);
+      const b = Number(r.bookings || 0);
+
+      e.nights += Number(r.total_nights || 0);
+      e.members += Number(r.unique_members || 0);
+
+      if (r.is_free) e.sourceFreeBookings += b;
+      else e.sourcePaidBookings += b;
+    });
+
+    // Also include any villa that exists in the authoritative metrics even if
+    // it has no source-breakdown row for the selected period.
+    villaPaidFreeTotals.forEach((m) => {
+      const key = m?.villa_name || "Unknown villa";
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          name: key,
+          nights: 0,
+          members: 0,
+          sourcePaidBookings: 0,
+          sourceFreeBookings: 0,
+        });
+      }
+    });
+
+    return [...map.values()].map((e) => {
+      const metrics = getVillaMetrics(e.name);
+      const meta = villaMeta.get(e.name);
+
+      const overallBookings = Number(
+        metrics?.total_unique_bookings ??
+          e.sourcePaidBookings + e.sourceFreeBookings,
+      );
+      const paidBookings = Number(
+        metrics?.paid_unique_bookings ?? e.sourcePaidBookings,
+      );
+      const freeBookings = Number(
+        metrics?.free_unique_bookings ?? e.sourceFreeBookings,
+      );
+
+      return {
+        ...e,
+        metrics,
+        configs: meta?.configs ?? [],
+        avgStay:
+          meta?.avgStay ??
+          (overallBookings ? e.nights / overallBookings : null),
+        overallBookings,
+        paidBookings,
+        freeBookings,
+        overallValue: Number(metrics?.overall_total_rental ?? 0),
+        paidValue: Number(metrics?.paid_total_rental ?? 0),
+        freeValue: Number(metrics?.free_total_rental ?? 0),
+        paid: paidBookings,
+        comp: freeBookings,
+      };
+    });
+  }, [sourceRows, villaPaidFreeTotals, villaMeta, getVillaMetrics]);
 
   const bedroomRows = useMemo(() => {
     const stayByBed = new Map(
@@ -2361,85 +2598,226 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
     }));
   }, [bedroomSourceRows, bedroomStats, tab]);
 
-  const totals = useMemo(() => {
-    const t = villaRows.reduce(
-      (a, r) => ({
-        bookings: a.bookings + r.bookings,
-        nights: a.nights + r.nights,
-        revenue: a.revenue + r.revenue,
-        compValue: a.compValue + r.compValue,
-        paid: a.paid + r.paid,
-        comp: a.comp + r.comp,
-      }),
-      { bookings: 0, nights: 0, revenue: 0, compValue: 0, paid: 0, comp: 0 },
+  // Authoritative villa figures for the currently selected page tab.
+  //
+  // Booking counts and dollar values come from villa_paid_free_totals.
+  // Operational measures such as nights/members still come from the source
+  // breakdown so existing drill-down behaviour remains unchanged.
+  const activeVillaRows = useMemo(() => {
+    const operationalByVilla = new Map(
+      villaRows.map((r) => [
+        String(r.name || "")
+          .trim()
+          .toLowerCase(),
+        r,
+      ]),
     );
-    const unsplit = tab === "overall"; // averages are only published unsplit
+
+    return performanceVillaRows.map((r) => {
+      const operational =
+        operationalByVilla.get(
+          String(r.name || "")
+            .trim()
+            .toLowerCase(),
+        ) ?? null;
+
+      const bookings =
+        tab === "paid"
+          ? Number(r.paidBookings || 0)
+          : tab === "free"
+            ? Number(r.freeBookings || 0)
+            : Number(r.overallBookings || 0);
+
+      const value =
+        tab === "paid"
+          ? Number(r.paidValue || 0)
+          : tab === "free"
+            ? Number(r.freeValue || 0)
+            : Number(r.overallValue || 0);
+
+      const nights = Number(operational?.nights ?? 0);
+
+      return {
+        ...r,
+        bookings,
+        value,
+        nights,
+        members: Number(operational?.members ?? r.members ?? 0),
+        avgStay: operational?.avgStay ?? (bookings ? nights / bookings : null),
+      };
+    });
+  }, [performanceVillaRows, villaRows, tab]);
+
+  const totals = useMemo(() => {
+    const authoritative = activeVillaRows.reduce(
+      (a, r) => ({
+        bookings: a.bookings + Number(r.bookings || 0),
+        value: a.value + Number(r.value || 0),
+      }),
+      { bookings: 0, value: 0 },
+    );
+
+    const operational = villaRows.reduce(
+      (a, r) => ({
+        nights: a.nights + Number(r.nights || 0),
+        revenue: a.revenue + Number(r.revenue || 0),
+        compValue: a.compValue + Number(r.compValue || 0),
+      }),
+      {
+        nights: 0,
+        revenue: 0,
+        compValue: 0,
+      },
+    );
+
+    const paid = performanceVillaRows.reduce(
+      (s, r) => s + Number(r.paidBookings || 0),
+      0,
+    );
+
+    const comp = performanceVillaRows.reduce(
+      (s, r) => s + Number(r.freeBookings || 0),
+      0,
+    );
+
+    const unsplit = tab === "overall";
+
     return {
-      ...t,
-      value: tab === "free" ? t.compValue : t.revenue,
+      ...operational,
+      bookings: authoritative.bookings,
+      value: authoritative.value,
+      paid,
+      comp,
       avgStay: unsplit
         ? (summary?.avg_length_of_stay ?? null)
-        : t.bookings
-          ? t.nights / t.bookings
+        : authoritative.bookings
+          ? operational.nights / authoritative.bookings
           : null,
       avgParty: unsplit ? (summary?.avg_party_size ?? null) : null,
       avgStayDerived: !unsplit,
     };
-  }, [villaRows, tab, summary]);
+  }, [activeVillaRows, performanceVillaRows, villaRows, tab, summary]);
 
   const leaders = useMemo(() => {
-    const withBookings = villaRows.filter((r) => r.bookings > 0);
-    const withValue = villaRows.filter((r) => r.value > 0);
-    const byBookings = [...withBookings].sort(
-      (a, b) => b.bookings - a.bookings,
+    const withBookings = activeVillaRows.filter(
+      (r) => Number(r.bookings || 0) > 0,
     );
-    const byValue = [...withValue].sort((a, b) => b.value - a.value);
+
+    const withValue = activeVillaRows.filter((r) => Number(r.value || 0) > 0);
+
+    const byBookings = [...withBookings].sort(
+      (a, b) => Number(b.bookings) - Number(a.bookings),
+    );
+
+    const byValue = [...withValue].sort(
+      (a, b) => Number(b.value) - Number(a.value),
+    );
+
     return {
       mostBooked: byBookings[0],
       leastBooked: byBookings[byBookings.length - 1],
       mostValue: byValue[0],
       leastValue: byValue[byValue.length - 1],
     };
-  }, [villaRows]);
+  }, [activeVillaRows]);
 
   const chartAll = useMemo(() => {
-    const rows = chartDim === "villa" ? villaRows : bedroomRows;
+    const rows = chartDim === "villa" ? activeVillaRows : bedroomRows;
+
     const metricKey = chartMetric === "revenue" ? "value" : chartMetric;
+
     const arr = rows.map((r) => ({
       ...r,
       label: chartDim === "villa" ? r.name : `${r.key} bed`,
     }));
+
     arr.sort((a, b) =>
       chartSort === "name"
         ? String(a.label).localeCompare(String(b.label))
         : chartSort === "asc"
-          ? a[metricKey] - b[metricKey]
-          : b[metricKey] - a[metricKey],
+          ? Number(a[metricKey] || 0) - Number(b[metricKey] || 0)
+          : Number(b[metricKey] || 0) - Number(a[metricKey] || 0),
     );
+
     return arr;
-  }, [villaRows, bedroomRows, chartDim, chartMetric, chartSort]);
+  }, [activeVillaRows, bedroomRows, chartDim, chartMetric, chartSort]);
 
   const chartData =
     chartDim === "bedroom" || chartLimit === "all"
       ? chartAll
       : chartAll.slice(0, chartLimit);
+
   const chartKey = chartMetric === "revenue" ? "value" : chartMetric;
 
+  const valueLabel =
+    tab === "free"
+      ? "Free value"
+      : tab === "paid"
+        ? "Paid revenue"
+        : "Overall revenue";
+
   const tableRows = useMemo(() => {
-    const rows = tableDim === "villa" ? villaRows : bedroomRows;
+    let rows;
+
+    if (tableDim === "villa") {
+      rows = performanceVillaRows.map((r) => {
+        const value =
+          tableFigureMode === "paid"
+            ? r.paidValue
+            : tableFigureMode === "free"
+              ? r.freeValue
+              : r.overallValue;
+
+        const bookings =
+          tableFigureMode === "paid"
+            ? r.paidBookings
+            : tableFigureMode === "free"
+              ? r.freeBookings
+              : r.overallBookings;
+
+        return {
+          ...r,
+          value,
+          bookings,
+        };
+      });
+    } else {
+      rows = bedroomRows;
+    }
+
     const searched = query.trim()
       ? rows.filter((r) =>
           String(r.name).toLowerCase().includes(query.trim().toLowerCase()),
         )
       : rows;
+
     return sortRows(searched, tableSort.col, tableSort.dir);
-  }, [villaRows, bedroomRows, tableDim, query, tableSort]);
+  }, [
+    performanceVillaRows,
+    bedroomRows,
+    tableDim,
+    tableFigureMode,
+    query,
+    tableSort,
+  ]);
+
+  const performanceValueLabel =
+    tableDim === "villa"
+      ? tableFigureMode === "paid"
+        ? "Paid revenue"
+        : tableFigureMode === "free"
+          ? "Free value"
+          : "Overall revenue"
+      : valueLabel;
 
   const tableExport = tableRows.map((r) => ({
     [tableDim === "villa" ? "Villa" : "Bedrooms"]: r.name,
     Bedrooms: r.configs?.join(" / ") ?? "",
-    Revenue: r.revenue,
-    "Comp Value": r.compValue,
+    "Displayed Figure": tableDim === "villa" ? tableFigureMode : tab,
+    "Displayed Value": r.value,
+    "Overall Revenue": tableDim === "villa" ? r.overallValue : "",
+    "Paid Revenue": tableDim === "villa" ? r.paidValue : r.revenue,
+    "Free Value": tableDim === "villa" ? r.freeValue : r.compValue,
     Bookings: r.bookings,
     Paid: r.paid,
     Comp: r.comp,
@@ -2473,7 +2851,6 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
 
   const barWidth = chartDim === "villa" ? 48 : 96;
   const plotWidth = Math.max(720, chartData.length * barWidth);
-  const valueLabel = tab === "free" ? "Comp value" : "Revenue";
 
   return (
     <div className="dashboard-section visits-page">
@@ -2514,7 +2891,7 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
           <p className="mt-1" style={{ fontSize: 12, color: T.slate }}>
             {loading
               ? "Updating…"
-              : `${n0(villaRows.length)} villas in this period`}
+              : `${n0(performanceVillaRows.length)} villas in this period`}
           </p>
         </div>
         <div className="visits-toolbar">
@@ -2674,7 +3051,13 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
           }
         />
         <LeaderCard
-          label={tab === "free" ? "Most comp value" : "Most revenue"}
+          label={
+            tab === "free"
+              ? "Most free value"
+              : tab === "paid"
+                ? "Most paid revenue"
+                : "Most overall revenue"
+          }
           tone={T.flame}
           icon={ArrowUpRight}
           name={leaders.mostValue?.name}
@@ -2687,7 +3070,13 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
           onOpen={() => leaders.mostValue && openVilla(leaders.mostValue.name)}
         />
         <LeaderCard
-          label={tab === "free" ? "Least comp value" : "Least revenue"}
+          label={
+            tab === "free"
+              ? "Least free value"
+              : tab === "paid"
+                ? "Least paid revenue"
+                : "Least overall revenue"
+          }
           tone="#85AEC7"
           icon={ArrowDownRight}
           name={leaders.leastValue?.name}
@@ -2723,7 +3112,12 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
                 margin: 0,
               }}
             >
-              Bookings by {chartDim === "villa" ? "villa" : "bedroom count"}
+              {chartMetric === "bookings"
+                ? "Bookings"
+                : chartMetric === "revenue"
+                  ? valueLabel
+                  : "Nights"}{" "}
+              by {chartDim === "villa" ? "villa" : "bedroom count"}
             </h2>
             <p className="mt-0.5" style={{ fontSize: 12, color: T.slate }}>
               Select a bar to open its full record. Scroll sideways for the
@@ -2929,6 +3323,20 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
                 { value: "bedroom", label: "Bedrooms" },
               ]}
             />
+
+            {tableDim === "villa" && (
+              <Segmented
+                size="sm"
+                value={tableFigureMode}
+                onChange={setTableFigureMode}
+                options={[
+                  { value: "overall", label: "Overall" },
+                  { value: "paid", label: "Paid" },
+                  { value: "free", label: "Free" },
+                ]}
+              />
+            )}
+
             <ExportMenu
               rows={tableExport}
               filenameBase={`villa_performance_${tableDim}_${safeFilePart(periodFilePart(period))}`}
@@ -2953,7 +3361,7 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
             value={tableSort.col}
             onChange={(col) => setTableSort((s) => ({ ...s, col }))}
             options={[
-              ["value", valueLabel],
+              ["value", performanceValueLabel],
               ["bookings", "Bookings"],
               ["nights", "Nights spent"],
               ["avgStay", "Avg stay"],
@@ -3017,7 +3425,7 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
                       "name",
                       "left",
                     ],
-                    [valueLabel, "value", "right"],
+                    [performanceValueLabel, "value", "right"],
                     ["Bookings", "bookings", "right"],
                     ["Nights spent", "nights", "right"],
                     ["Avg stay", "avgStay", "right"],
@@ -3087,7 +3495,10 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
                         textAlign: "right",
                         fontFamily: FONT_NUM,
                         fontSize: 13,
-                        color: tab === "free" ? "#B07B33" : T.deep,
+                        color:
+                          tableDim === "villa" && tableFigureMode === "free"
+                            ? "#B07B33"
+                            : T.deep,
                       }}
                     >
                       {money(r.value)}
@@ -3102,11 +3513,13 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
                       }}
                     >
                       {n0(r.bookings)}
-                      {tab === "overall" && (
-                        <div style={{ fontSize: 10, color: T.slate }}>
-                          {n0(r.paid)} paid · {n0(r.comp)} comp
-                        </div>
-                      )}
+                      {tableDim === "villa" &&
+                        tableFigureMode === "overall" && (
+                          <div style={{ fontSize: 10, color: T.slate }}>
+                            {n0(r.paidBookings)} paid · {n0(r.freeBookings)}{" "}
+                            free
+                          </div>
+                        )}
                     </td>
                     <td
                       style={{
@@ -3152,7 +3565,11 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
           className="mt-3 flex items-center gap-1"
           style={{ fontSize: 12, color: T.slate }}
         >
-          Money is the netted Overview ledger, so this page ties out to Finance.
+          {tableDim === "villa"
+            ? tableFigureMode === "free"
+              ? "Free value is rack-rate economic value, not cash collected."
+              : "Overall and Paid revenue use the Overview Villa net ledger."
+            : "Money is the netted Overview ledger, so this page ties out to Finance."}
           <InfoTip id="reconcile" />
         </p>
       </div>
@@ -3166,6 +3583,9 @@ export default function VisitsRoomsTab({ selectedVillaName, onVillaSelect }) {
           period={period}
           onClose={() => setSelection(null)}
           onOpenVilla={openVilla}
+          villaMetrics={
+            selection.kind === "villa" ? getVillaMetrics(selection.key) : null
+          }
         />
       )}
 
