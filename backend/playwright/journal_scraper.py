@@ -64,7 +64,7 @@ DEFAULT_WORKERS = 10
 
 # Timeouts (ms)
 NAV_TIMEOUT     = 6000
-TAB_TIMEOUT     = 4000
+TAB_TIMEOUT     = 40000
 FRAME_TIMEOUT   = 4000
 CLICK_TIMEOUT   = 2000
 POPUP_TIMEOUT   = 8000
@@ -444,33 +444,103 @@ def dismiss_popup(page):
     except Exception:
         pass
 
-def close_reservation_popup(page, prefix=""):
-    try:
-        for frame in page.frames:
-            try:
-                btn = frame.query_selector(
-                    "#closeButtonId_0, "
-                    "button[onclick='closeJQueryDialog()'], "
-                    "button[data-dismiss='modal']"
-                )
-                if btn:
-                    btn.click()
-                    page.wait_for_timeout(600)
-                    return True
-            except Exception:
-                continue
+def reservation_dialog_open(page):
+    for frame in page.frames:
         try:
-            page.evaluate("closeJQueryDialog()")
-            page.wait_for_timeout(600)
-            return True
+            if frame.name == "DialogWindowFrame_0":
+                _ = frame.url          # raises if detached
+                return True
         except Exception:
-            pass
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(400)
+            continue
+    return False
+ 
+ 
+def _wait_dialog_gone(page, timeout_ms=2500):
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        if not reservation_dialog_open(page):
+            return True
+        page.wait_for_timeout(200)
+    return not reservation_dialog_open(page)
+ 
+ 
+def close_reservation_popup(page, prefix=""):
+    """
+    Close the reservation dialog and CONFIRM it closed.
+ 
+    Tries each strategy in turn and verifies after every one, instead of
+    clicking the first selector that matches anywhere and assuming.
+    Returns True only when the dialog is actually gone.
+    """
+    if not reservation_dialog_open(page):
         return True
-    except Exception as e:
-        print(f"    {prefix}Popup close error: {e}")
-        return False
+ 
+    # 1. A VISIBLE close button. The visibility check is the whole point:
+    #    hidden closeButtonId_ elements exist in other frames and the old
+    #    code kept clicking those.
+    for frame in page.frames:
+        try:
+            for sel in ("[id^='closeButtonId_']",
+                        "button[onclick='closeJQueryDialog()']",
+                        "button[data-dismiss='modal']",
+                        ".ui-dialog-titlebar-close"):
+                for btn in frame.query_selector_all(sel):
+                    try:
+                        if not btn.is_visible():
+                            continue
+                        btn.click(timeout=CLICK_TIMEOUT)
+                        if _wait_dialog_gone(page, 2000):
+                            return True
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+ 
+    # 2. The app's own close function, invoked in whichever frame defines
+    #    it. The old code only tried this on the top-level page, where it
+    #    is usually undefined.
+    for frame in page.frames:
+        try:
+            frame.evaluate(
+                "() => { if (typeof closeJQueryDialog === 'function') "
+                "closeJQueryDialog(); }"
+            )
+            if _wait_dialog_gone(page, 1500):
+                return True
+        except Exception:
+            continue
+ 
+    # 3. jQuery UI directly.
+    for frame in page.frames:
+        try:
+            frame.evaluate("""
+                () => {
+                    if (window.jQuery) {
+                        jQuery('.ui-dialog-content').each(function () {
+                            try { jQuery(this).dialog('close'); } catch (e) {}
+                        });
+                    }
+                }
+            """)
+            if _wait_dialog_gone(page, 1500):
+                return True
+        except Exception:
+            continue
+ 
+    # 4. Escape.
+    try:
+        page.keyboard.press("Escape")
+        if _wait_dialog_gone(page, 1500):
+            return True
+    except Exception:
+        pass
+ 
+    # Say so out loud. Silence here is what made this look like a click
+    # problem for so long.
+    print(f"    {prefix}WARNING: reservation dialog would not close — "
+          f"remaining rows for this member will fail")
+    take_screenshot(page, "dialog_stuck_open")
+    return False
 
 # ─────────────────────────────────────────────
 # NAVIGATION
