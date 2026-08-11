@@ -1757,11 +1757,7 @@ LOADERS = {
     "profile":            load_profile,
     "dependents":         load_dependents,
     "rooms":              load_rooms,
-    "rate_details":       load_member_rate_details,
     "recent_activity":    load_recent_activity,
-    "statements":         load_statements,
-    "statement_details":  load_statement_details,
-    "services":           load_services,
     "interests":          load_interests,
 }
 
