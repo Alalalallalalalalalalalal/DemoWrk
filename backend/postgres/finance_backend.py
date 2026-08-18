@@ -1320,38 +1320,71 @@ def finance_member_vs_guest(
     # Villa/Amenity charges in the same SUM. Guests came out to $28,447
     # revenue across 152,740 transactions (18 cents/txn) — the same
     # payments-and-reversals-contaminate-the-sum bug already documented
-    # and fixed in finance_overview()'s section_sql above (see that
-    # function's comment on the ~-$3M Services figure it used to
-    # produce). Scoped the same way: collected-bucket only.
+    # and fixed in finance_overview()'s section_sql above. That first fix
+    # scoped this to folios' collected bucket (correct for Amenities/
+    # Services), but left Villa folios-sourced too — which double-
+    # diverged from every other Villa figure on this page (the
+    # $109,979,584 rental-programme basis _villa_statement_net_revenue()
+    # and everywhere else here uses), the same way Overview's OWN
+    # member-vs-guest card already avoided by sourcing Villa through the
+    # unified ledger. See overview_analytics.py's
+    # overview_transaction_member_vs_guest_revenue() — this mirrors that
+    # scoping exactly (line_status='Paid', conf_code >= 9000000) so
+    # Finance's card is built the same way Overview's already-correct one
+    # is, just reusing _villa_bookings_date_filter_sql() (defined above,
+    # previously unused) instead of duplicating its overlap logic.
     #
-    # NOTE: like finance_overview()'s amenitiesRevenue/servicesRevenue,
-    # this is folios-sourced, so it does NOT include the rental-programme
-    # Villa income that only exists in statement_details (villasRevenue's
-    # $109,979,584) — this table's total will not match the page's Total
-    # Revenue figure for the same reason those two already use different
-    # sources. Flagging rather than silently leaving a new mismatch.
+    # unique_accounts is computed from ONE combined DISTINCT count over
+    # both sources (not two separate COUNT(DISTINCT) added together) —
+    # summing two independent distinct counts would double-count anyone
+    # who both stayed (Villa) and spent on-property (Amenities/Services)
+    # in the period.
     sql = text(f"""
-        SELECT
-            CASE
-                WHEN m.member_or_guest = 'Guest' THEN 'Guests'
-                ELSE 'Member'
-            END                      AS customer_type,
-            SUM(f.amount)            AS revenue,
-            COUNT(*)                 AS transactions,
-            COUNT(DISTINCT
+        WITH combined AS (
+            SELECT
+                CASE
+                    WHEN ovb.overview_member_or_guest = 'Guest' THEN 'Guests'
+                    ELSE 'Member'
+                END AS customer_type,
+                otl.overview_net_amount AS amount,
+                COALESCE(ovb.overview_member_number, '') AS account_key
+            FROM overview_transaction_lines otl
+            JOIN overview_booking_meta ovb
+              ON ovb.overview_conf_code = otl.overview_conf_code
+            WHERE otl.overview_line_category = 'Villa'
+              AND otl.overview_line_status = 'Paid'
+              AND otl.overview_conf_code::text ~ '^[0-9]+$'
+              AND otl.overview_conf_code::text::bigint >= 9000000
+              {_villa_bookings_date_filter_sql()}
+
+            UNION ALL
+
+            SELECT
+                CASE
+                    WHEN m.member_or_guest = 'Guest' THEN 'Guests'
+                    ELSE 'Member'
+                END AS customer_type,
+                f.amount,
                 CASE WHEN (m.member_or_guest IS NULL OR m.member_or_guest != 'Guest')
-                     THEN f.member_number
-                     ELSE f.guest_name
-                END
-            )                        AS unique_accounts
-        FROM folios f
-        LEFT JOIN business_source bs ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
-        LEFT JOIN members m
-            ON m.member_number = f.member_number
-        WHERE f.transaction_category IS NOT NULL
-          AND f.transaction_category <> 'Laundry'
-          AND ({_bucket_case_sql()}) = 'collected'
-        {date_sql}
+                     THEN COALESCE(f.member_number, '')
+                     ELSE COALESCE(f.guest_name, '')
+                END AS account_key
+            FROM folios f
+            LEFT JOIN business_source bs ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
+            LEFT JOIN members m
+                ON m.member_number = f.member_number
+            WHERE f.transaction_category IS NOT NULL
+              AND f.transaction_category <> 'Laundry'
+              AND f.transaction_category <> 'Villa'
+              AND ({_bucket_case_sql()}) = 'collected'
+            {date_sql}
+        )
+        SELECT
+            customer_type,
+            ROUND(SUM(amount)::numeric, 2)          AS revenue,
+            COUNT(*)                                AS transactions,
+            COUNT(DISTINCT NULLIF(account_key, '')) AS unique_accounts
+        FROM combined
         GROUP BY customer_type
         ORDER BY revenue DESC
     """)
