@@ -35,6 +35,15 @@ paid amount:
     WHERE overview_line_category = 'Villa'
       AND overview_line_status = 'Paid'
       AND overview_booking_meta.overview_payment_type = 'Paid'
+      AND overview_transaction_lines.overview_conf_code >= 9000000   -- [2026-08-13]
+
+    [2026-08-13] Scoped to rental-programme payout lines only (synthetic
+    conf_code >= 9,000,000), matching Overview's hero tile
+    (overview_analytics.py, overview_total_villa_revenue) and Finance's
+    headline figure (finance_backend.py, _villa_statement_net_revenue) —
+    product decision: "Villa Revenue" excludes direct/non-programme paid
+    villa bookings. All three now agree at $109,979,584 all-time. See
+    villa_paid_free_metrics_cte()'s paid_villa_amounts CTE below.
 
 free value:
     SUM(rate_details_with_discount.rack_rate)
@@ -47,7 +56,10 @@ value rule.
 IMPORTANT:
 overall_amount is a net Overview-ledger amount while free_amount is an economic
 rack-rate value. Therefore overall_amount is NOT forced to equal
-paid_amount + free_amount.
+paid_amount + free_amount. As of 2026-08-13 this is even more deliberately
+true: overall_amount stays unscoped (all Villa-category ledger activity, any
+status), while paid_amount is now scoped to rental-programme payouts only —
+do not "fix" a future overall != paid + free report by forcing this equality.
 
 PERFORMANCE
 ===========
@@ -888,6 +900,13 @@ def villa_paid_free_metrics_cte(
         GROUP BY NULLIF(TRIM(b.villa_name), '')
     ),
 
+    -- [2026-08-13] Deliberately NOT scoped to conf_code >= 9000000 or
+    -- overview_line_status = 'Paid' below — this is the broad "all
+    -- Villa-category ledger activity" figure (direct + programme, any
+    -- status), distinct on purpose from paid_amount in paid_villa_amounts
+    -- below (now scoped to the rental-programme-payout basis Overview's
+    -- hero tile and Finance's headline figure use). Do not "fix" this to
+    -- equal paid_amount + free_amount — see the module docstring above.
     overall_villa_amounts AS (
         SELECT
             NULLIF(TRIM(otl.overview_villa_name), '') AS villa_name,
@@ -933,6 +952,17 @@ def villa_paid_free_metrics_cte(
 
         WHERE otl.overview_line_category = 'Villa'
           AND otl.overview_line_status = 'Paid'
+          -- [2026-08-13] Rental-programme payouts only (synthetic
+          -- conf_code >= 9,000,000) — matches Overview's hero tile
+          -- (overview_analytics.py, overview_total_villa_revenue) and
+          -- Finance's headline figure (finance_backend.py,
+          -- _villa_statement_net_revenue). Product decision: "Villa
+          -- Revenue" excludes direct/non-programme paid villa bookings.
+          -- The obm.overview_payment_type = 'paid' filter just below is
+          -- now redundant with this floor (synthetic payout rows are
+          -- always 'Paid') but left in place as defense-in-depth.
+          AND otl.overview_conf_code::text ~ '^[0-9]+$'
+          AND otl.overview_conf_code::text::bigint >= 9000000
           AND LOWER(TRIM(COALESCE(
                 obm.overview_payment_type,
                 ''

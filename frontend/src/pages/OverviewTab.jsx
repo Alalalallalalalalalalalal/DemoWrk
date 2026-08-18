@@ -524,13 +524,10 @@ export default function OverviewTab({
     directoryMembers = [], // No longer populated by dashboard.jsx (was always []); "With email on file" now uses emailOnFile below instead. `checkedIn` further down still reads this but is dead/unrendered.
     emailOnFile = null,
     memberDuesSummary = null,
-    outstandingBalanceSummary = null,
-    memberVsGuestRevenue = [], // DEPRECATED — no longer read; superseded by transactionMemberVsGuestRevenue. Safe to stop passing this from dashboard.jsx.
     villaStats = [],
     visitsTabSummary = null,
     bedroomBookings = [],
     villaRevenue = [], // DEPRECATED — no longer read; superseded by villaAmenityRevenue. Safe to stop passing this from dashboard.jsx.
-    monthlyRevenue = [], // DEPRECATED — no longer read; superseded by monthlyRevenueByCategory. Safe to stop passing this from dashboard.jsx.
     transactionFinanceSummary = [],
     transactionMemberVsGuestRevenue = [],
     transactionMemberVsGuestRevenueByCategory = [],

@@ -97,173 +97,192 @@ REFRESH_STATEMENTS = [
 # ═════════════════════════════════════════════════════════════════════
 # SQL BLOCK 1 — FOLIO CLASSIFICATION            (unchanged)
 # ═════════════════════════════════════════════════════════════════════
+
 CLASSIFICATION_SQL = r"""
 -- ============================================================
--- FOLIO CLASSIFICATION
--- Adds and populates 3 columns on folios:
+-- FOLIO CLASSIFICATION  (single-pass, 2026-08-13)
+-- Populates 3 columns on folios:
 --   villa_payment_type   -> was the STAY free or paid?
 --   transaction_category -> what TYPE of spend is this?
 --   transaction_flow     -> Charge / Payment / Reversal / Comp
--- Idempotent — run via overview_sql.py after every cleaner.py load
--- (new folios rows arrive with these columns NULL). Verification
--- output is printed by overview_sql.py.
+--
+-- Rewritten from five UPDATEs to one. The old version rewrote every
+-- row three times per run with no WHERE clause, generating ~150 MB of
+-- dead tuples each time and eventually filling the instance.
+--
+-- Idempotent AND cheap: the IS DISTINCT FROM guard at the bottom means
+-- a re-run with no new folios rows updates zero rows.
+--
+-- To pick up a NEW pattern added to the CASE below, null the affected
+-- rows first (targeted, never the whole table):
+--     UPDATE folios SET transaction_category = NULL
+--     WHERE description ILIKE '%your new pattern%';
 -- ============================================================
-
--- STEP 1: columns
+ 
+-- STEP 1: columns. Metadata-only in PG11+, costs nothing.
 ALTER TABLE folios
     ADD COLUMN IF NOT EXISTS villa_payment_type   VARCHAR(20),
     ADD COLUMN IF NOT EXISTS transaction_category VARCHAR(100),
     ADD COLUMN IF NOT EXISTS transaction_flow     VARCHAR(20);
+ 
+-- STEP 2: everything else, in one pass.
+--
+-- [2026-08-13] RESTRUCTURED — the original version of this rewrite used
+-- `UPDATE folios f ... FROM pay_map p, LATERAL (...) c, LATERAL (...) fl`
+-- with the LATERAL subqueries referencing f.description / f.amount. That
+-- fails: "invalid reference to FROM-clause entry for table f" — the
+-- UPDATE target is not visible inside a LATERAL subquery in its own FROM
+-- list, only in the top-level SET/WHERE. Fixed by computing cat/flow in
+-- CTEs over an independently-aliased read of folios (`src`), then joining
+-- the real UPDATE target back to that by folio_key (verified unique and
+-- NOT NULL across all 162k rows). Same logic, same branch order, same
+-- IS DISTINCT FROM guard — only the join mechanics changed.
+WITH pay_map AS (
+    -- Reservation-level: any "Complimentary Rental" / "HO Reservation"
+    -- line makes the whole stay Free. Rows with no conf_code stay
+    -- 'Paid', matching what the old correlated EXISTS returned.
+    SELECT
+        COALESCE(conf_code, '__NULL__') AS ck,
+        CASE
+            WHEN COALESCE(conf_code, '__NULL__') <> '__NULL__'
+             AND bool_or(
+                     description ILIKE 'Complimentary Rental%'
+                  OR description ILIKE 'HO Reservation%'
+                 )
+            THEN 'Free'
+            ELSE 'Paid'
+        END AS pay
+    FROM folios
+    GROUP BY COALESCE(conf_code, '__NULL__')
+),
+classified AS (
+    SELECT
+        src.folio_key,
+        src.description,
+        src.amount,
+        pm.pay,
+        CASE
+            -- ---- main classification, first match wins ----
+            WHEN src.description ILIKE 'Reversal of%'
+              OR src.description ILIKE 'Reversal of :%'
+                THEN 'Reversal'
+            WHEN src.description ILIKE 'Villa Rental%'
+              OR src.description ILIKE 'Complimentary Rental%'
+              OR src.description ILIKE 'HO Reservation%'
+                THEN 'Villa'
+            WHEN src.description ILIKE '%- Rooms payment'
+              OR src.description ILIKE 'Paid by%payment'
+              OR src.description ILIKE 'Cash - Rooms payment'
+              OR src.description ILIKE 'Check - Rooms payment'
+              OR src.description ILIKE 'Member Charge - Rooms payment'
+              OR src.description ILIKE 'Paid by SECURITY DEPOSIT%'
+              OR src.description ILIKE 'Paid by Villa Advance Deposit%'
+              OR src.description ILIKE 'Admin Fee- Adjustment payment'
+              OR src.description ILIKE 'Adj Misc. - Rooms payment'
+                THEN 'Payment'
+            WHEN src.description ILIKE '%Spa at Tryall%'
+              OR src.description ILIKE 'Beauty Salon%'
+                THEN 'Spa & Beauty'
+            WHEN src.description ILIKE '%-Golf Shop%'
+              OR src.description ILIKE '%-Beverage Cart%'
+                THEN 'Golf'
+            WHEN src.description ILIKE '%-Tennis Shop%'
+                THEN 'Tennis'
+            WHEN src.description ILIKE '%-Grill Bar%'
+              OR src.description ILIKE '%-GH Bar%'
+              OR src.description ILIKE '%-9H Bar%'
+              OR src.description ILIKE '%-Beach Bar%'
+              OR src.description ILIKE '%-Beach Resturant%'
+              OR src.description ILIKE '%-Beach Restaurant%'
+              OR src.description ILIKE '%-Beach Night Functions%'
+              OR src.description ILIKE '%-Ooshan Restaurant%'
+              OR src.description ILIKE '%-Ooshan Bar%'
+              OR src.description ILIKE 'Commissary Charge%'
+              OR src.description ILIKE 'Villa Wine Sales%'
+                THEN 'F&B'
+            WHEN src.description ILIKE '%-Tryall Boutique%'
+                THEN 'Boutique'
+            WHEN src.description ILIKE 'Transportation Guest%'
+                THEN 'Transport'
+            WHEN src.description ILIKE 'Cash Advance%'
+                THEN 'Cash Advance'
+            WHEN src.description ILIKE 'Cribs & Beds Rentals%'
+              OR src.description ILIKE 'Dive Shop%'
+              OR src.description ILIKE 'Dive Shope%'
+                THEN 'Equipment'
+            WHEN src.description ILIKE 'Temp Membership Fee%'
+                THEN 'Membership'
+            WHEN src.description ILIKE 'Miscellaneous Charge%'
+              OR src.description ILIKE 'Adj Miscellaneous Charge%'
+                THEN 'Adjustment'
 
--- STEP 2: villa_payment_type — reservation-level (conf_code):
--- any "Complimentary Rental" / "HO Reservation" line makes the
--- whole stay Free, otherwise Paid.
+            -- ---- was PATCH 1: found in 'Other' review ----
+            WHEN src.description ILIKE 'RSL Boutique sales%'
+                THEN 'Boutique'
+            WHEN src.description ILIKE 'RSL Dive Shope Charge%'
+              OR src.description ILIKE 'RSL Dive Shop Charge%'
+              OR src.description ILIKE 'Island Routes Charge Guest%'
+                THEN 'Water Sports'
+            WHEN src.description ILIKE 'Transportation Cart Rental%'
+                THEN 'Cart Rental'
+            WHEN src.description ILIKE '%-GH Restaurant%'
+              OR src.description ILIKE '%-Beach Grill%'
+                THEN 'F&B'
+            WHEN src.description ILIKE '%-Events-%'
+                THEN 'Events'
+            WHEN src.description ILIKE 'Laundry Charge%'
+                THEN 'Laundry'
+
+            -- ---- was PATCH 2: final stragglers ----
+            WHEN src.description ILIKE 'Paidout%'
+                THEN 'Cash Advance'
+            WHEN src.description ILIKE '%-Banquet%'
+                THEN 'Events'
+            WHEN src.description ILIKE 'Deposit from Old System%'
+                THEN 'Payment'
+
+            ELSE 'Other'
+        END AS cat
+    FROM folios src
+    JOIN pay_map pm ON COALESCE(src.conf_code, '__NULL__') = pm.ck
+),
+flowed AS (
+    SELECT
+        cl.folio_key,
+        cl.pay,
+        cl.cat,
+        -- Arm order is load-bearing: 'Payment' must be tested before
+        -- 'amount < 0', or refunds against payment lines become 'Comp'.
+        CASE
+            WHEN cl.description ILIKE 'Reversal of%'
+                THEN 'Reversal'
+            WHEN cl.cat = 'Payment'
+                THEN 'Payment'
+            WHEN cl.cat = 'Villa'
+             AND (
+                 cl.amount = 0
+              OR cl.description ILIKE 'Complimentary Rental%'
+              OR cl.description ILIKE 'HO Reservation%'
+             )
+                THEN 'Comp'
+            WHEN cl.amount < 0
+             AND cl.cat <> 'Payment'
+                THEN 'Comp'
+            ELSE 'Charge'
+        END AS flow
+    FROM classified cl
+)
 UPDATE folios f
-SET villa_payment_type = CASE
-    WHEN EXISTS (
-        SELECT 1
-        FROM folios f2
-        WHERE f2.conf_code = f.conf_code
-          AND (
-              f2.description ILIKE 'Complimentary Rental%'
-           OR f2.description ILIKE 'HO Reservation%'
-          )
-    ) THEN 'Free'
-    ELSE 'Paid'
-END;
-
--- STEP 3: transaction_category — first match wins
-UPDATE folios
-SET transaction_category = CASE
-    WHEN description ILIKE 'Reversal of%'
-      OR description ILIKE 'Reversal of :%'
-      THEN 'Reversal'
-    WHEN description ILIKE 'Villa Rental%'
-      OR description ILIKE 'Complimentary Rental%'
-      OR description ILIKE 'HO Reservation%'
-      THEN 'Villa'
-    WHEN description ILIKE '%- Rooms payment'
-      OR description ILIKE 'Paid by%payment'
-      OR description ILIKE 'Cash - Rooms payment'
-      OR description ILIKE 'Check - Rooms payment'
-      OR description ILIKE 'Member Charge - Rooms payment'
-      OR description ILIKE 'Paid by SECURITY DEPOSIT%'
-      OR description ILIKE 'Paid by Villa Advance Deposit%'
-      OR description ILIKE 'Admin Fee- Adjustment payment'
-      OR description ILIKE 'Adj Misc. - Rooms payment'
-      THEN 'Payment'
-    WHEN description ILIKE '%Spa at Tryall%'
-      OR description ILIKE 'Beauty Salon%'
-      THEN 'Spa & Beauty'
-    WHEN description ILIKE '%-Golf Shop%'
-      OR description ILIKE '%-Beverage Cart%'
-      THEN 'Golf'
-    WHEN description ILIKE '%-Tennis Shop%'
-      THEN 'Tennis'
-    WHEN description ILIKE '%-Grill Bar%'
-      OR description ILIKE '%-GH Bar%'
-      OR description ILIKE '%-9H Bar%'
-      OR description ILIKE '%-Beach Bar%'
-      OR description ILIKE '%-Beach Resturant%'
-      OR description ILIKE '%-Beach Restaurant%'
-      OR description ILIKE '%-Beach Night Functions%'
-      OR description ILIKE '%-Ooshan Restaurant%'
-      OR description ILIKE '%-Ooshan Bar%'
-      OR description ILIKE 'Commissary Charge%'
-      OR description ILIKE 'Villa Wine Sales%'
-      THEN 'F&B'
-    WHEN description ILIKE '%-Tryall Boutique%'
-      THEN 'Boutique'
-    WHEN description ILIKE 'Transportation Guest%'
-      THEN 'Transport'
-    WHEN description ILIKE 'Cash Advance%'
-      THEN 'Cash Advance'
-    WHEN description ILIKE 'Cribs & Beds Rentals%'
-      OR description ILIKE 'Dive Shop%'
-      OR description ILIKE 'Dive Shope%'
-      THEN 'Equipment'
-    WHEN description ILIKE 'Temp Membership Fee%'
-      THEN 'Membership'
-    WHEN description ILIKE 'Miscellaneous Charge%'
-      OR description ILIKE 'Adj Miscellaneous Charge%'
-      THEN 'Adjustment'
-    ELSE 'Other'
-END;
-
--- STEP 4: transaction_flow
-UPDATE folios
-SET transaction_flow = CASE
-    WHEN description ILIKE 'Reversal of%'
-      THEN 'Reversal'
-    WHEN transaction_category = 'Payment'
-      THEN 'Payment'
-    WHEN transaction_category = 'Villa'
-     AND (
-         amount = 0
-      OR description ILIKE 'Complimentary Rental%'
-      OR description ILIKE 'HO Reservation%'
-     )
-      THEN 'Comp'
-    WHEN amount < 0
-     AND transaction_category != 'Payment'
-      THEN 'Comp'
-    ELSE 'Charge'
-END;
-
--- ============================================================
--- PATCH 1: categories discovered from 'Other' review
--- ============================================================
-UPDATE folios
-SET
-    transaction_category = CASE
-        WHEN description ILIKE 'RSL Boutique sales%'
-            THEN 'Boutique'
-        WHEN description ILIKE 'RSL Dive Shope Charge%'
-          OR description ILIKE 'RSL Dive Shop Charge%'
-          OR description ILIKE 'Island Routes Charge Guest%'
-            THEN 'Water Sports'
-        WHEN description ILIKE 'Transportation Cart Rental%'
-            THEN 'Cart Rental'
-        WHEN description ILIKE '%-GH Restaurant%'
-          OR description ILIKE '%-Beach Grill%'
-            THEN 'F&B'
-        WHEN description ILIKE '%-Events-%'
-            THEN 'Events'
-        WHEN description ILIKE 'Laundry Charge%'
-            THEN 'Laundry'
-        ELSE transaction_category
-    END,
-    transaction_flow = CASE
-        WHEN description ILIKE 'Reversal of%'
-            THEN 'Reversal'
-        WHEN amount < 0
-         AND transaction_category != 'Payment'
-            THEN 'Comp'
-        ELSE transaction_flow
-    END
-WHERE transaction_category = 'Other';
-
--- ============================================================
--- PATCH 2: final stragglers
--- ============================================================
-UPDATE folios
-SET
-    transaction_category = CASE
-        WHEN description ILIKE 'Paidout%'
-            THEN 'Cash Advance'
-        WHEN description ILIKE '%-Banquet%'
-            THEN 'Events'
-        WHEN description ILIKE 'Deposit from Old System%'
-            THEN 'Payment'
-        ELSE transaction_category
-    END,
-    transaction_flow = CASE
-        WHEN description ILIKE 'Deposit from Old System%'
-            THEN 'Payment'
-        ELSE transaction_flow
-    END
-WHERE transaction_category = 'Other';
-
+SET villa_payment_type   = fl.pay,
+    transaction_category = fl.cat,
+    transaction_flow     = fl.flow
+FROM flowed fl
+WHERE f.folio_key = fl.folio_key
+  AND (
+        f.villa_payment_type   IS DISTINCT FROM fl.pay
+     OR f.transaction_category IS DISTINCT FROM fl.cat
+     OR f.transaction_flow     IS DISTINCT FROM fl.flow
+  );
 """
 
 # ═════════════════════════════════════════════════════════════════════

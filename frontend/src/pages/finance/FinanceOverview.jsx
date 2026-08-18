@@ -93,9 +93,24 @@ function InfoNote({ title, children }) {
 }
 
 function OverviewCard({ icon: Icon, label, tooltip, value, accent, onClick }) {
+  // [2026-08-13] Was a <button> wrapping InfoNote's own <button> (the "i"
+  // icon) — invalid HTML (button-in-button), which React flagged as a
+  // hydration-nesting warning and which browsers render/interact with
+  // inconsistently (hover/focus states on the outer control can glitch
+  // when the pointer is over the nested one). role="button" + keyboard
+  // handling keeps this div just as clickable/accessible as a real
+  // button, without nesting one inside another.
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick?.(e);
+        }
+      }}
       style={{
         flex: "1 1 160px",
         minWidth: 150,
@@ -139,7 +154,7 @@ function OverviewCard({ icon: Icon, label, tooltip, value, accent, onClick }) {
       >
         {value}
       </div>
-    </button>
+    </div>
   );
 }
 

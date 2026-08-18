@@ -51,6 +51,19 @@
 # GET /finance/villa-revenue-reconciliation adds Net Revenue (from
 # statement_details via villa_owner_map) and gross-vs-net comparison,
 # additively — it does not change any existing response shape.
+#
+# [2026-08-13] CORRECTION: /finance/overview's `villasRevenue` JSON field
+# (see finance_overview() below) is sourced from
+# _villa_statement_net_revenue() — statement_details "Villa Income",
+# matching Overview's hero tile and analytics_villas.py's
+# paid_villa_amounts CTE ($109,979,584 all-time as of this date). The
+# rate_details-based figure described in the paragraph above
+# (_villa_gross_revenue_cte_sql) remains the source for
+# /finance/category-comp-breakdown's Villa "collected" bucket and
+# /finance/villa-revenue-reconciliation's "gross" column ONLY — an
+# intentionally different gross/net reconciliation view (~$96.10M
+# all-time), not the headline Villa Revenue figure. Don't expect these
+# to match; see _villa_collected_revenue_row() below.
 # ─────────────────────────────────────────────────────────────────
 
 from fastapi import APIRouter, Query
@@ -528,11 +541,21 @@ def _villa_collected_revenue_row(params: dict, villa: Optional[str] = None) -> d
 
     Uses the SAME date semantics as Gross Revenue elsewhere
     (_villa_revenue_date_filter_sql — check_in_date bucketing, not
-    stay-overlap) so this figure always equals what /overview's
-    villasRevenue card and /villa-revenue's total show for the same
-    filters — they're now literally the same query, just wrapped
-    differently. If those ever need to diverge, don't just edit this
-    function in isolation, since they're meant to be identical.
+    stay-overlap), so this figure matches /villa-revenue's per-villa
+    gross total and /finance/villa-revenue-reconciliation's "gross"
+    column for the same filters — those three ARE the same query,
+    wrapped differently, and should be kept in sync if any of them
+    changes.
+
+    [2026-08-13] This is NOT the same figure as /finance/overview's
+    `villasRevenue` field, Overview's hero tile, or analytics_villas.py's
+    Villa tab Paid $ total — those three are intentionally scoped to
+    rental-programme payouts only (statement_details "Villa Income",
+    ~$109.98M all-time). This `collected` bucket uses a different,
+    smaller-scope definition (reservation-deduped rate_details,
+    payment_type='Paid' AND status='Posted', ~$96.10M all-time) that is
+    legitimately not expected to reconcile with the headline number.
+    Do not "fix" a mismatch here.
 
     Returns grossRevenue, reservationCount, uniqueAccounts (distinct
     member_number over the deduped rows).
@@ -1291,6 +1314,22 @@ def finance_member_vs_guest(
     )
     date_sql = date_filter_sql()
 
+    # [2026-08-13] Was `WHERE f.amount IS NOT NULL` only — summing every
+    # folio line with no category/bucket scope, so large negative
+    # Payment settlement lines and Reversals netted directly against
+    # Villa/Amenity charges in the same SUM. Guests came out to $28,447
+    # revenue across 152,740 transactions (18 cents/txn) — the same
+    # payments-and-reversals-contaminate-the-sum bug already documented
+    # and fixed in finance_overview()'s section_sql above (see that
+    # function's comment on the ~-$3M Services figure it used to
+    # produce). Scoped the same way: collected-bucket only.
+    #
+    # NOTE: like finance_overview()'s amenitiesRevenue/servicesRevenue,
+    # this is folios-sourced, so it does NOT include the rental-programme
+    # Villa income that only exists in statement_details (villasRevenue's
+    # $109,979,584) — this table's total will not match the page's Total
+    # Revenue figure for the same reason those two already use different
+    # sources. Flagging rather than silently leaving a new mismatch.
     sql = text(f"""
         SELECT
             CASE
@@ -1306,9 +1345,12 @@ def finance_member_vs_guest(
                 END
             )                        AS unique_accounts
         FROM folios f
+        LEFT JOIN business_source bs ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
         LEFT JOIN members m
             ON m.member_number = f.member_number
-        WHERE f.amount IS NOT NULL
+        WHERE f.transaction_category IS NOT NULL
+          AND f.transaction_category <> 'Laundry'
+          AND ({_bucket_case_sql()}) = 'collected'
         {date_sql}
         GROUP BY customer_type
         ORDER BY revenue DESC
@@ -1565,19 +1607,39 @@ def finance_amenity_revenue(
     has_filter = any(v is not None for v in params.values())
 
     if not has_filter:
-        sql = text("""
-            SELECT
-                amenity,
-                SUM(total_spend)       AS revenue,
-                SUM(transaction_count) AS transactions,
-                COUNT(DISTINCT season) AS season_count
-            FROM amenity_season_spend
-            WHERE amenity IS NOT NULL
-            GROUP BY amenity
-            ORDER BY revenue DESC
-        """)
-        with engine.connect() as conn:
-            rows = _rows_to_dicts(conn.execute(sql))
+        # [2026-08-13] amenity_season_spend is populated by a separate ML
+        # pipeline (backend/machinelearning/ml_amenity_seasons.py), which
+        # itself depends on `seasons`/`season_groups` tables defining the
+        # business's actual season date ranges. Neither exists in this
+        # database yet (confirmed: `relation "seasons" does not exist` —
+        # this isn't a dropped view, the season date ranges were never
+        # configured at all, which needs business input, not a code fix).
+        # Without this try/except, that turned into an unhandled 500 here
+        # — which the browser then reported as a CORS failure (FastAPI's
+        # CORSMiddleware doesn't reliably attach CORS headers to a
+        # response that errored before the route returned), so this
+        # looked like a network/CORS bug instead of the missing-table
+        # issue it actually was. Falls through to the folios-based query
+        # below (same one the date-filtered branch already uses) so the
+        # page shows real amenity revenue now; season breakdowns stay
+        # empty until the seasons tables + ML pipeline are built.
+        rows = None
+        try:
+            sql = text("""
+                SELECT
+                    amenity,
+                    SUM(total_spend)       AS revenue,
+                    SUM(transaction_count) AS transactions,
+                    COUNT(DISTINCT season) AS season_count
+                FROM amenity_season_spend
+                WHERE amenity IS NOT NULL
+                GROUP BY amenity
+                ORDER BY revenue DESC
+            """)
+            with engine.connect() as conn:
+                rows = _rows_to_dicts(conn.execute(sql))
+        except Exception:
+            rows = None
 
         if rows:
             sql_seasons = text("""
@@ -1613,15 +1675,32 @@ def finance_amenity_revenue(
             ]
 
     # Date-filtered (or summary table empty) path
+    #
+    # [2026-08-13] Scoped to genuine amenity-category, collected revenue
+    # only — same AMENITY_CATS / _bucket_case_sql() basis the rest of
+    # this file already trusts (see finance_overview()'s section_sql).
+    # The original version had no such scope (`WHERE f.amount IS NOT
+    # NULL` only), so every row _amenity_case_sql()'s keyword CASE didn't
+    # recognize — Villa charges, Payments, Reversals, Membership dues,
+    # Adjustments — fell into its 'Other' catch-all, producing an "Other"
+    # amenity showing -$15.9M across 65,957 transactions the one time
+    # this path actually ran. _amenity_case_sql() is still used here for
+    # its finer Spa/Golf/Restaurant/Bar/etc. sub-categories (a nicer
+    # breakdown than the coarse AMENITY_CATS tuple gives), just scoped
+    # down first to rows that are actually amenity revenue.
     amenity_sql = _amenity_case_sql()
     date_sql = date_filter_sql()
+    params["amenity_cats"] = list(AMENITY_CATS)
     sql2 = text(f"""
         SELECT
             {amenity_sql} AS amenity,
             SUM(f.amount)  AS revenue,
             COUNT(*)       AS transactions
         FROM folios f
+        LEFT JOIN business_source bs ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
         WHERE f.amount IS NOT NULL
+          AND f.transaction_category = ANY(:amenity_cats)
+          AND ({_bucket_case_sql()}) = 'collected'
         {date_sql}
         GROUP BY amenity
         ORDER BY revenue DESC
