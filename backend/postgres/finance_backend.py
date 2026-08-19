@@ -74,7 +74,7 @@ import math
 from .database import engine   # same engine your analytics.py uses
 from .analytics_shared import date_filter_sql, filter_params
 
-router = APIRouter(tags=["finance"])
+router = APIRouter()
 
 # ── amenity keyword map (folio description → amenity category) ────
 AMENITY_KEYWORDS = {
