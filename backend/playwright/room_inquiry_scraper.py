@@ -30,7 +30,7 @@ import time
 import argparse
 from datetime import datetime
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from config import OUTPUT_FOLDER, BASE_URL
+from config import OUTPUT_FOLDER, BASE_URL, HEADLESS
 from login import login
 
 # ─────────────────────────────────────────────
@@ -523,7 +523,7 @@ def main():
     print("=" * 60)
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
+        browser = pw.chromium.launch(headless=HEADLESS)
         page    = browser.new_page()
         try:
             pr("Logging in...")

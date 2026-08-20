@@ -27,7 +27,7 @@ from datetime import datetime, date
 from multiprocessing import Pool
 import sys
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from config import OUTPUT_FOLDER, BASE_URL
+from config import OUTPUT_FOLDER, BASE_URL, HEADLESS
 from login import login, get_frame_by_url
 
 
@@ -2152,8 +2152,7 @@ def scrape_chunk(args):
     done_set = load_done_set()
 
     with sync_playwright() as p:
-        headless = os.environ.get("HEADFUL", "").lower() not in ("1", "true", "yes")
-        browser  = p.chromium.launch(headless=headless)
+        browser  = p.chromium.launch(headless=HEADLESS)
         page     = browser.new_page()
         try:
             print(f"  {prefix}Logging in...")

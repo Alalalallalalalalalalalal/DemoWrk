@@ -22,7 +22,7 @@ from datetime import datetime
 import sys
 from playwright.sync_api import sync_playwright
 
-from config import OUTPUT_FOLDER, BASE_URL
+from config import OUTPUT_FOLDER, BASE_URL, HEADLESS
 from login import login, get_frame_by_url
 
 # ─────────────────────────────────────────────
@@ -252,7 +252,7 @@ def main():
     all_members = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=HEADLESS)
         page = browser.new_page()
 
         try:

@@ -71,8 +71,8 @@ from typing import Optional
 from datetime import date
 from sqlalchemy import text
 import math
-from .database import engine   # same engine your analytics.py uses
-from .analytics_shared import date_filter_sql, filter_params
+from ..database import engine   # same engine your analytics.py uses
+from ..analytics_shared import date_filter_sql, filter_params
 
 router = APIRouter()
 

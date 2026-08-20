@@ -3,8 +3,8 @@ import logging
 from pathlib import Path
 import sys
 
-#This is a SKELETON for the pipeline. It is very much subject to change as playwright is fixed.
-# Some steps in the pipeline may be added, removed, or modified as needed. Full run takes up to 1 hour
+# Stage order matches backend/playwright/playwright-README.md's documented full run.
+# Full run takes up to 1 hour.
 
 logging.basicConfig(
     filename="pipeline.log",
@@ -17,15 +17,23 @@ PIPELINE = [
     {
         "name": "member_scraper",
         "command": [
-            sys.executable, 
+            sys.executable,
             "playwright/member_scraper.py"]
     },
     #stage for member_updates
     {
         "name": "new_member_updater",
         "command": [
-            sys.executable, 
+            sys.executable,
             "playwright/new_member_updater.py"]
+    },
+    #stage for building journal profiles
+    {
+        "name": "build_journal_profiles",
+        "command": [
+            sys.executable,
+            "playwright/build_journal_profiles.py"
+        ]
     },
     #stage for building folio reports
     {
@@ -35,12 +43,28 @@ PIPELINE = [
             "playwright/folio_report.py"
         ]
     },
+    #stage for room inquiry / business source reports
+    {
+        "name": "room_inquiry_scraper",
+        "command": [
+            sys.executable,
+            "playwright/room_inquiry_scraper.py"
+        ]
+    },
     #stage for folio scrapper
     {
         "name": "folio_scraper",
         "command": [
             sys.executable,
-            "playwright/folio_scraper.py "
+            "playwright/folio_scraper.py"
+        ]
+    },
+    #stage for rate/revenue scraping
+    {
+        "name": "scrape_rate_revenue",
+        "command": [
+            sys.executable,
+            "playwright/scrape_rate_revenue.py"
         ]
     },
     #stage for building member map, with skip logic to avoid unnecessary runs
@@ -51,14 +75,6 @@ PIPELINE = [
             "playwright/build_member_map.py",
         ],
         "skip_if_exists": "playwright/member_id_map.csv" # skip this stage if the output file already exists
-    },
-    #stage for building journal profiles
-    {
-        "name": "build_journal_profiles",
-        "command": [
-            sys.executable,
-            "playwright/build_journal_profiles.py"
-        ]
     },
     #stage for journal updates
     {
@@ -77,12 +93,45 @@ PIPELINE = [
             "playwright/cleaner.py"
         ]
     },
-    #run ml insights here
+    #stage for enriching member gender/marital status
     {
-        "name": "ml_insights",
+        "name": "member_enricher",
         "command": [
             sys.executable,
-            "playwright/ml_insights.py"
+            "playwright/member_enricher.py",
+            "--apply"
+        ]
+    },
+    #stage for pushing scraped data into Postgres
+    {
+        "name": "overview_sql",
+        "command": [
+            sys.executable,
+            "playwright/overview_sql.py"
+        ]
+    },
+    #stage for amenity/season ML tables
+    {
+        "name": "ml_amenity_seasons",
+        "command": [
+            sys.executable,
+            "machinelearning/ml_amenity_seasons.py"
+        ]
+    },
+    #stage for season summary tables
+    {
+        "name": "season_tables",
+        "command": [
+            sys.executable,
+            "machinelearning/season_tables.py"
+        ]
+    },
+    #stage for member segmentation
+    {
+        "name": "segmentation",
+        "command": [
+            sys.executable,
+            "machinelearning/segmentation.py"
         ]
     }
 ]
@@ -136,3 +185,7 @@ def run_pipeline():
         
     logging.info("All stages completed successfully.")
     return True
+
+
+if __name__ == "__main__":
+    run_pipeline()

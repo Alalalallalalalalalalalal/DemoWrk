@@ -40,7 +40,7 @@ from multiprocessing import Pool
 
 from playwright.sync_api import sync_playwright
 
-from config import OUTPUT_FOLDER
+from config import OUTPUT_FOLDER, HEADLESS
 from login import login, get_frame_by_url
 
 import journal_scraper as js
@@ -175,8 +175,7 @@ def scrape_chunk(args):
     done_set = load_done_set()
 
     with sync_playwright() as p:
-        headless = os.environ.get("HEADFUL", "").lower() not in ("1", "true", "yes")
-        browser = p.chromium.launch(headless=headless)
+        browser = p.chromium.launch(headless=HEADLESS)
         page = browser.new_page()
         try:
             print(f"  {prefix}Logging in...")

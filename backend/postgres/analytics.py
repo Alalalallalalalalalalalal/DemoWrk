@@ -7,8 +7,8 @@ route; it's now split into focused modules:
   analytics_seasons.py       season groups/seasons CRUD, /season-summary, /seasons/{id}/members
   analytics_tables.py        /tables, /table/{table_name}, /table/{table_name}/search (report builder)
   analytics_ml_insights.py   /ml/amenity-season-insights, /ml/member-segments, /ml/segment-config
-  analytics_villas.py        villa/room/bedroom stats, booked-people, visits-rooms-dashboard, source breakdowns
-  analytics_demographics.py  /demographics-summary, state/category/dimension drilldowns, new-vs-repeat visitor details
+  villas/routes.py           villa/room/bedroom stats, booked-people, visits-rooms-dashboard, source breakdowns
+  demographics/routes.py     /demographics-summary, state/category/dimension drilldowns, new-vs-repeat visitor details
   analytics_shared.py        shared get_db / rows / one / SQL-fragment helpers (no routes)
 
 This file just re-exports a single combined `router` so existing code doing
@@ -23,8 +23,8 @@ from .analytics_dashboard import router as dashboard_router
 from .analytics_seasons import router as seasons_router
 from .analytics_tables import router as tables_router
 from .analytics_ml_insights import router as ml_insights_router
-from .analytics_villas import router as villas_router
-from .analytics_demographics import router as demographics_router
+from .villas.routes import router as villas_router
+from .demographics.routes import router as demographics_router
 from .analytics_marketing import router as marketing_router
 
 router = APIRouter()

@@ -54,7 +54,7 @@ except ImportError:
 from playwright.sync_api import sync_playwright
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-from config import BASE_URL
+from config import BASE_URL, HEADLESS
 
 FOLIO_CSV            = Path(__file__).parent / "reports" / "folio_report.csv"
 REPORTS_DIR          = Path(__file__).parent / "reports"
@@ -78,7 +78,7 @@ if not ROOM_LOOKUP_CSV.exists():
 USERNAME = None   # set to string or leave None to import from login module
 PASSWORD = None
 
-def get_session_cookies(headless=True):
+def get_session_cookies(headless=HEADLESS):
     """
     Launch Playwright, log in, return cookies as a dict for requests.
     Tries to import your existing login.py; falls back to manual login.
@@ -118,6 +118,7 @@ def get_session_cookies(headless=True):
             else:
                 print("  No credentials — opening browser for manual login.")
                 print("  Log in, then press Enter here to continue...")
+                # Always visible: a human has to complete this login by hand.
                 browser2 = pw.chromium.launch(headless=False)
                 page2    = browser2.new_page()
                 page2.goto(f"{BASE_URL}/PMS/login.do", timeout=15000)
@@ -582,7 +583,7 @@ def main():
         return
 
     # Get session cookies via Playwright login
-    cookies = get_session_cookies(headless=not args.headed)
+    cookies = get_session_cookies(headless=HEADLESS and not args.headed)
     if not cookies:
         print("ERROR: Could not get session cookies.")
         sys.exit(1)

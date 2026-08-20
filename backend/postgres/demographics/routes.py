@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import date, timedelta
 
-from .analytics_shared import (
+from ..analytics_shared import (
     get_db,
     rows,
     one,

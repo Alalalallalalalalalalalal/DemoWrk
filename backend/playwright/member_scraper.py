@@ -22,7 +22,7 @@ from datetime import datetime
 import sys
 from playwright.sync_api import sync_playwright
 
-from config import OUTPUT_FOLDER, REPORTS_FOLDER
+from config import OUTPUT_FOLDER, REPORTS_FOLDER, HEADLESS
 from login import login, open_reporting_menu
 from report_utils import navigate_to_search_reports
 import report_member_demographics
@@ -46,7 +46,7 @@ def main():
     results = {}
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=HEADLESS)
         page = browser.new_page()
 
         try:

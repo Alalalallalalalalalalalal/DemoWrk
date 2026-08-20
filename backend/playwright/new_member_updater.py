@@ -15,7 +15,7 @@ import glob
 import sys
 from playwright.sync_api import sync_playwright
 
-from config import REPORTS_FOLDER, OUTPUT_FOLDER
+from config import REPORTS_FOLDER, OUTPUT_FOLDER, HEADLESS
 from login import login
 from build_member_map import navigate_to_list_members
 
@@ -219,7 +219,7 @@ def main():
 
     with sync_playwright() as p:
 
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=HEADLESS)
 
         page = browser.new_page()
 

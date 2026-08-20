@@ -1,5 +1,5 @@
 from sqlalchemy import text
-from database import engine
+from postgres.database import engine
 
 sql = """
 EXPLAIN (ANALYZE, BUFFERS, VERBOSE)

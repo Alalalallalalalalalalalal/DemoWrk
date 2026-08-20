@@ -39,7 +39,7 @@ from datetime import datetime
 from multiprocessing import Pool
 import sys
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from config import OUTPUT_FOLDER, BASE_URL
+from config import OUTPUT_FOLDER, BASE_URL, HEADLESS
 from login import login
 from room_inquiry_scraper import get_payment_type
 # ─────────────────────────────────────────────
@@ -881,7 +881,7 @@ def scrape_chunk(args):
     results  = {"success": [], "failed": [], "skipped": [], "summary": {}}
     done_set = load_done_set()
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
+        browser = pw.chromium.launch(headless=HEADLESS)
         page    = browser.new_page()
         try:
             pr(prefix, "Logging in...")

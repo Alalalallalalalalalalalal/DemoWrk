@@ -16,7 +16,7 @@ import calendar
 import argparse
 from datetime import datetime, date
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from config import OUTPUT_FOLDER, BASE_URL
+from config import OUTPUT_FOLDER, BASE_URL, HEADLESS
 from login import login, get_frame_by_url
 
 # ─────────────────────────────────────────────
@@ -918,7 +918,7 @@ def main():
     all_rows  = []
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
+        browser = pw.chromium.launch(headless=HEADLESS)
         page    = browser.new_page()
         try:
             login(page)

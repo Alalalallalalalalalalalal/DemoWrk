@@ -28,6 +28,10 @@ if _missing:
 
 OUTPUT_FOLDER = os.path.dirname(os.path.abspath(__file__))
 
+# Browsers run headless by default; set HEADFUL=1 to watch a scraper run.
+HEADFUL = os.getenv("HEADFUL", "").lower() in ("1", "true", "yes")
+HEADLESS = not HEADFUL
+
 # ─────────────────────────────────────────────
 # DERIVED URLS
 # ─────────────────────────────────────────────

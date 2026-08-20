@@ -31,7 +31,7 @@ or this tab serves stale dues with no error.
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from .analytics_shared import get_db, rows, one
+from ..analytics_shared import get_db, rows, one
 
 router = APIRouter()
 

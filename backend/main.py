@@ -2,8 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from postgres.analytics import router as analytics_router
-from postgres.finance_backend import router as finance_router
-from postgres.overview_analytics import router as overview_router #For overview analytics
+from postgres.finance.routes import router as finance_router
+from postgres.overview.routes import router as overview_router #For overview analytics
 
 app = FastAPI()
 
@@ -40,7 +40,7 @@ app.include_router(
 )
 
 #For Historical Villa Fees Analytics
-from postgres.analytics_villa_fees import router as villa_fees_router  # Villa Fees test tab
+from postgres.villas.fees import router as villa_fees_router  # Villa Fees test tab
 
 app.include_router(
     villa_fees_router,

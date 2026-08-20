@@ -81,7 +81,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from .analytics_shared import get_db, rows, one
+from ..analytics_shared import get_db, rows, one
 
 router = APIRouter()
 
