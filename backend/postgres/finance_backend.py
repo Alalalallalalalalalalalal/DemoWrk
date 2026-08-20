@@ -76,16 +76,37 @@ from .analytics_shared import date_filter_sql, filter_params
 
 router = APIRouter()
 
-# ── amenity keyword map (folio description → amenity category) ────
-AMENITY_KEYWORDS = {
-    "Spa":         ["spa", "massage", "facial", "treatment"],
-    "Golf":        ["golf", "caddie", "driving range", "green fee"],
-    "Restaurant":  ["restaurant", "dining", "dinner", "lunch", "brunch", "breakfast"],
-    "Bar":         ["bar", "cocktail", "beverage", "drinks", "wine", "beer"],
-    "Grill":       ["grill", "bbq", "barbecue"],
-    "Tennis":      ["tennis", "court"],
-    "Boutique":    ["boutique", "shop", "retail", "gift"],
-    "Commissary":  ["commissary", "grocery", "provision", "market"],
+# ── fine-grained amenity breakdown (Amenity Revenue & Season Breakdown
+# table + its /drilldown filter) ────────────────────────────────────
+# [2026-08-20] Replaces the old free-standing AMENITY_KEYWORDS
+# description-keyword map, which covered only 8 of the 10 AMENITY_CATS
+# categories — rows classified Water Sports/Equipment/Cart Rental/Events
+# (and any F&B row not matching a Grill/Bar/Restaurant keyword) had no
+# matching WHEN and fell into "Other" in the summary table, and silently
+# matched nothing at all when drilled into (amenity in AMENITY_KEYWORDS
+# was False, so the filter clause was just skipped). Now built from
+# transaction_category directly — the same authoritative column
+# CLASSIFICATION_SQL (overview_sql.py) already assigns every row, so
+# every AMENITY_CATS row lands in exactly one named bucket, never
+# "Other". Mirrors ml_amenity_seasons.py's classify_amenity() exactly.
+_FNB_SUB_PATTERNS = {
+    "Grill":      r"\ygrill\y",
+    "Bar":        r"\ybar\y",
+    "Restaurant": r"\y(restaurant|dinner|lunch|breakfast)\y",
+}
+# label -> transaction_category, for every AMENITY_CATS category other
+# than F&B (F&B splits into Grill/Bar/Restaurant/plain-F&B above instead
+# of mapping 1:1).
+AMENITY_DIRECT_LABELS = {
+    "Commissary":   "Commissary",
+    "Golf":         "Golf",
+    "Spa":          "Spa & Beauty",
+    "Tennis":       "Tennis",
+    "Boutique":     "Boutique",
+    "Water Sports": "Water Sports",
+    "Equipment":    "Equipment",
+    "Cart Rental":  "Cart Rental",
+    "Events":       "Events",
 }
 
 # Top-level Finance sections (Villa / Amenities / Services). A folio's
@@ -94,8 +115,15 @@ AMENITY_KEYWORDS = {
 # /drilldown's `section` filter — see _section_case_sql(). This used
 # to be defined locally inside category_comp_breakdown(); it now lives
 # here so every consumer uses the exact same list.
+# [2026-08-13] Added 'Commissary' — CLASSIFICATION_SQL (overview_sql.py)
+# now splits it out of 'F&B' into its own transaction_category, matching
+# how the statement_details side (statement_amenity_lines) already
+# classified it as a standalone amenity_category. Without it here,
+# Commissary's dollars would silently fall out of Amenities Revenue and
+# into Services instead of just moving to a different line within
+# Amenities.
 AMENITY_CATS = (
-    "F&B", "Golf", "Spa & Beauty", "Tennis", "Boutique",
+    "F&B", "Commissary", "Golf", "Spa & Beauty", "Tennis", "Boutique",
     "Water Sports", "Equipment", "Cart Rental", "Events",
 )
 
@@ -115,13 +143,28 @@ def _rows_to_dicts(result):
 
 
 def _amenity_case_sql() -> str:
-    cases = []
-    for amenity, kws in AMENITY_KEYWORDS.items():
-        like_parts = " OR ".join(
-            f"LOWER(f.description) LIKE '%{kw}%'" for kw in kws
-        )
-        cases.append(f"WHEN ({like_parts}) THEN '{amenity}'")
-    return "CASE\n  " + "\n  ".join(cases) + "\n  ELSE 'Other'\nEND"
+    """
+    Requires the caller to have already scoped
+    WHERE f.transaction_category = ANY(:amenity_cats) (see AMENITY_CATS)
+    — under that scope every row matches one of the WHENs below, so the
+    ELSE is unreachable in practice, kept only as a defensive fallback.
+    """
+    fnb_whens = "\n            ".join(
+        f"WHEN f.transaction_category = 'F&B' AND f.description ~* '{pat}' THEN '{label}'"
+        for label, pat in _FNB_SUB_PATTERNS.items()
+    )
+    direct_whens = "\n            ".join(
+        f"WHEN f.transaction_category = '{cat}' THEN '{label}'"
+        for label, cat in AMENITY_DIRECT_LABELS.items()
+    )
+    return f"""
+        CASE
+            {fnb_whens}
+            WHEN f.transaction_category = 'F&B' THEN 'F&B'
+            {direct_whens}
+            ELSE 'Other'
+        END
+    """
 
 
 def _section_case_sql() -> str:
@@ -193,51 +236,39 @@ def _bucket_case_sql() -> str:
 
 def _villa_bookings_date_filter_sql() -> str:
     """
-    ⚠️ DEPRECATED / CURRENTLY UNUSED as of the rate_details Villa
-    Revenue migration: /overview and /villa-revenue no longer read
-    overview_villa_bookings — see _villa_gross_revenue_cte_sql() and
-    _villa_revenue_date_filter_sql(). Left in place (not deleted) since
-    removing dead code wasn't part of this change and something outside
-    this file may still reference overview_villa_bookings directly.
-    Safe to delete in a follow-up cleanup once confirmed unused
-    project-wide.
+    Check-in-year/period attribution filter for overview_booking_meta
+    (alias `ovb`) — the SAME rule date_filter_sql() and
+    overview_date_filter_sql()'s "checkin" mode use, just written
+    against overview_check_in_date instead of folios.check_in_date,
+    since date_filter_sql() is hard-wired to the `f`/folios alias (per
+    the module docstring above).
 
-    Date-range overlap filter for overview_villa_bookings (alias `ovb`),
-    intended to match the semantics of analytics_shared.date_filter_sql()
-    — "does this booking's stay overlap the requested period" — but
-    written against overview_check_in_date / overview_check_out_date
-    instead of folios' check_in_date / check_out_date, since
-    date_filter_sql() is hard-wired to the `f` alias and folios' column
-    names (per the module docstring above).
+    [2026-08-20] Was a stay-OVERLAP filter (check_in <= end AND
+    check_out >= start) — double-counts a boundary-crossing stay across
+    adjacent period filters, the same issue date_filter_sql() had. Now a
+    straight check-in-containment port of
+    overview_date_filter_sql()'s "checkin" branch, so every consumer of
+    this function (finance_member_vs_guest()'s Villa portion,
+    finance_villa_revenue() as of 2026-08-20) attributes a stay to its
+    check-in period exactly like Overview does.
 
     Expects the same bind params filter_params() already produces:
     :year, :month, :date, :start_date, :end_date.
-
-    ⚠️ REVIEW NOTE: analytics_shared.py wasn't available to me, so this
-    re-derives the overlap logic from the comments documented elsewhere
-    in this file rather than calling date_filter_sql() directly — please
-    sanity-check it against the real implementation. If date_filter_sql()
-    can be generalized to accept a custom alias + start/end column pair
-    (e.g. date_filter_sql(alias="ovb", column="overview_check_in_date",
-    end_column="overview_check_out_date")), delete this function and call
-    that instead, so there's only one date-overlap implementation in the
-    codebase rather than two that could drift apart.
     """
     return """
         AND (
             CASE
                 WHEN :start_date IS NOT NULL OR :end_date IS NOT NULL THEN
-                    ovb.overview_check_in_date  <= COALESCE(:end_date, ovb.overview_check_in_date)
-                    AND ovb.overview_check_out_date >= COALESCE(:start_date, ovb.overview_check_out_date)
+                    ovb.overview_check_in_date >= COALESCE(:start_date, ovb.overview_check_in_date)
+                    AND ovb.overview_check_in_date <= COALESCE(:end_date, ovb.overview_check_in_date)
                 WHEN :date IS NOT NULL THEN
-                    ovb.overview_check_in_date  <= :date
-                    AND ovb.overview_check_out_date >= :date
+                    ovb.overview_check_in_date = :date
                 WHEN :year IS NOT NULL AND :month IS NOT NULL THEN
-                    ovb.overview_check_in_date  <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::date
-                    AND ovb.overview_check_out_date >= MAKE_DATE(:year, :month, 1)
+                    ovb.overview_check_in_date >= MAKE_DATE(:year, :month, 1)
+                    AND ovb.overview_check_in_date <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::date
                 WHEN :year IS NOT NULL THEN
-                    ovb.overview_check_in_date  <= MAKE_DATE(:year, 12, 31)
-                    AND ovb.overview_check_out_date >= MAKE_DATE(:year, 1, 1)
+                    ovb.overview_check_in_date >= MAKE_DATE(:year, 1, 1)
+                    AND ovb.overview_check_in_date <= MAKE_DATE(:year, 12, 31)
                 ELSE TRUE
             END
         )
@@ -717,11 +748,17 @@ def _apply_common_filters(
     elif payment == "paid":
         where_clauses.append("AND bs.payment_type = 'Paid'")
 
-    if amenity and amenity in AMENITY_KEYWORDS:
-        like_clauses = " OR ".join(
-            f"LOWER(f.description) LIKE '%{kw}%'" for kw in AMENITY_KEYWORDS[amenity]
+    if amenity in _FNB_SUB_PATTERNS:
+        where_clauses.append(
+            f"AND f.transaction_category = 'F&B' AND f.description ~* '{_FNB_SUB_PATTERNS[amenity]}'"
         )
-        where_clauses.append(f"AND ({like_clauses})")
+    elif amenity == "F&B":
+        not_patterns = " AND ".join(
+            f"f.description !~* '{pat}'" for pat in _FNB_SUB_PATTERNS.values()
+        )
+        where_clauses.append(f"AND f.transaction_category = 'F&B' AND ({not_patterns})")
+    elif amenity in AMENITY_DIRECT_LABELS:
+        where_clauses.append(f"AND f.transaction_category = '{AMENITY_DIRECT_LABELS[amenity]}'")
 
     if category:
         where_clauses.append("AND f.transaction_category = :flt_category")
@@ -1405,38 +1442,38 @@ def finance_member_vs_guest(
 # ══════════════════════════════════════════════════════════════════
 # 4. VILLA REVENUE (breakdown table, by villa name)
 #
-# SOURCE OF TRUTH CHANGE: was overview_villa_bookings.overview_villa_revenue,
-# now rate_details via _villa_gross_revenue_cte_sql() — same
-# reservation-deduped source as /overview's villasRevenue card, so
-# this table's rows still always sum to that card's total (same
-# invariant the prior overview_villa_bookings migration established,
-# just on the new source). See _villa_gross_revenue_cte_sql()'s
-# docstring for why the dedup is required.
+# [2026-08-20 SOURCE OF TRUTH CHANGE] Was rate_details gross booking
+# value via _villa_gross_revenue_cte_sql() (~$96.1M all-time) — this
+# endpoint's own prior comment claimed that source "still always sums
+# to" /overview's villasRevenue card total, which stopped being true
+# the moment that card moved to the statement-based $109,979,584
+# rental-programme-payout basis (2026-08-13 correction, see the
+# top-of-file note) without this endpoint following along. Per explicit
+# direction that Finance and Overview must match, this now reads
+# revenue from overview_transaction_lines the same way Overview's own
+# "Top villas by revenue" card does (overview_analytics.py's
+# overview_villa_stats(): Villa category, Paid status, conf_code
+# >= 9,000,000 — see that function's comment for why rental-programme
+# payouts and real guest bookings are two disjoint conf_code universes,
+# joined only by villa name, never by conf_code).
 #
-# total_bookings = COUNT(*) over the deduped villa_reservations CTE —
-# already one row per reservation, so no DISTINCT needed here (unlike
-# the old overview_conf_code defensive DISTINCT).
+# Booking counts / room nights / avg stay / member-vs-guest split still
+# come from real guest stays (overview_villa_bookings — payouts aren't
+# bookings), same shape as before, just via the unified ledger instead
+# of rate_details. A villa with payout revenue in the period but no
+# recorded stays in overview_villa_bookings won't appear here (LEFT
+# JOIN direction matches overview_villa_stats()); in practice every
+# paying villa has stays.
 #
-# roomNights / avgStay are now derived from check_out_date -
-# check_in_date per deduped reservation (rate_details carries both),
-# rather than a pre-computed overview_nights column.
-#
-# memberBookings / guestBookings now come from a LEFT JOIN to members
-# on rate_details.member_number (rate_details itself has no
-# member_or_guest column). A reservation whose member_number has no
-# match in `members` (e.g. a walk-in guest with no member record) is
-# counted as a guest booking, mirroring the member-vs-guest default
-# used elsewhere in this file (member_or_guest IS NULL -> Member is
-# the default ONLY when there's a members row at all; no members row
-# means there's no member to attribute it to).
-#
-# NOTE: this table has no payment-type (paid/free) breakdown — same
-# as before, rate_details' 'Free' rows are out of scope for gross
-# revenue by design. For a payment-aware per-villa breakdown, use
+# NOTE: this table has no payment-type (paid/free) breakdown, same as
+# before — rental-programme payouts are effectively always "Paid" by
+# construction. For a payment-aware per-villa breakdown, use
 # GET /finance/drilldown-breakdown?group_by=villa&payment=free
 # (folios-sourced, unaffected by this change). For Villa Net Revenue
-# and gross/net reconciliation, see the new
-# GET /finance/villa-revenue-reconciliation endpoint below.
+# and gross/net reconciliation against the rate_details gross figure,
+# see GET /finance/villa-revenue-reconciliation below — that endpoint's
+# "gross" column is the one still intentionally on the rate_details
+# basis.
 # ══════════════════════════════════════════════════════════════════
 @router.get("/villa-revenue")
 def finance_villa_revenue(
@@ -1452,25 +1489,47 @@ def finance_villa_revenue(
     )
 
     sql = text(f"""
-        {_villa_gross_revenue_cte_sql()}
+        WITH villa_bookings AS (
+            SELECT
+                ovb.overview_villa_name                             AS villa_name,
+                COUNT(*)                                             AS total_bookings,
+                COALESCE(SUM(ovb.overview_nights), 0)                AS room_nights,
+                COALESCE(ROUND(AVG(ovb.overview_nights)::numeric, 1), 0) AS avg_stay,
+                COUNT(*) FILTER (
+                    WHERE ovb.overview_member_or_guest = 'Guest' OR ovb.overview_member_number IS NULL
+                )                                                     AS guest_bookings,
+                COUNT(*) FILTER (
+                    WHERE ovb.overview_member_number IS NOT NULL
+                      AND (ovb.overview_member_or_guest IS NULL OR ovb.overview_member_or_guest != 'Guest')
+                )                                                     AS member_bookings
+            FROM overview_villa_bookings ovb
+            WHERE 1=1
+            {_villa_bookings_date_filter_sql()}
+            GROUP BY ovb.overview_villa_name
+        ),
+        villa_revenue AS (
+            SELECT
+                otl.overview_villa_name  AS villa_name,
+                SUM(otl.overview_net_amount) AS revenue
+            FROM overview_transaction_lines otl
+            JOIN overview_booking_meta ovb ON ovb.overview_conf_code = otl.overview_conf_code
+            WHERE otl.overview_line_category = 'Villa'
+              AND otl.overview_line_status   = 'Paid'
+              AND otl.overview_conf_code::text ~ '^[0-9]+$'
+              AND otl.overview_conf_code::text::bigint >= 9000000
+            {_villa_bookings_date_filter_sql()}
+            GROUP BY otl.overview_villa_name
+        )
         SELECT
-            vr.villa_name                                                AS villa_name,
-            COALESCE(SUM(vr.total_rental), 0)                            AS revenue,
-            COUNT(*)                                                     AS total_bookings,
-            COALESCE(SUM(vr.check_out_date - vr.check_in_date), 0)       AS room_nights,
-            COALESCE(ROUND(AVG(vr.check_out_date - vr.check_in_date)::numeric, 1), 0) AS avg_stay,
-            COUNT(*) FILTER (
-                WHERE m.member_or_guest = 'Guest' OR m.member_number IS NULL
-            )                                                             AS guest_bookings,
-            COUNT(*) FILTER (
-                WHERE m.member_number IS NOT NULL
-                  AND (m.member_or_guest IS NULL OR m.member_or_guest != 'Guest')
-            )                                                             AS member_bookings
-        FROM villa_reservations vr
-        LEFT JOIN members m ON m.member_number = vr.member_number
-        WHERE 1=1
-        {_villa_revenue_date_filter_sql(alias="vr")}
-        GROUP BY vr.villa_name
+            vb.villa_name,
+            COALESCE(vr.revenue, 0) AS revenue,
+            vb.total_bookings,
+            vb.room_nights,
+            vb.avg_stay,
+            vb.guest_bookings,
+            vb.member_bookings
+        FROM villa_bookings vb
+        LEFT JOIN villa_revenue vr ON vr.villa_name = vb.villa_name
         ORDER BY revenue DESC NULLS LAST
     """)
 
@@ -1656,14 +1715,23 @@ def finance_amenity_revenue(
         # below (same one the date-filtered branch already uses) so the
         # page shows real amenity revenue now; season breakdowns stay
         # empty until the seasons tables + ML pipeline are built.
+        # [2026-08-13, redone 2026-08-19 after an uncommitted-changes
+        # discard] Was `SUM(total_spend) AS revenue` — a leftover from
+        # before amenity_season_spend had a real revenue/free_value split
+        # (ml_amenity_seasons.py's rewrite, see that file's docstring).
+        # total_spend = revenue + free_value (collected + comp/free
+        # combined), so this was overstating "revenue" by the comp/free
+        # portion — $28,715,808.57 shown against the headline Amenities
+        # Revenue card's $26,732,340.12. Now reads the real collected-only
+        # revenue column, which reconciles with that card exactly.
         rows = None
         try:
             sql = text("""
                 SELECT
                     amenity,
-                    SUM(total_spend)       AS revenue,
-                    SUM(transaction_count) AS transactions,
-                    COUNT(DISTINCT season) AS season_count
+                    SUM(revenue)            AS revenue,
+                    SUM(transaction_count)  AS transactions,
+                    COUNT(DISTINCT season)  AS season_count
                 FROM amenity_season_spend
                 WHERE amenity IS NOT NULL
                 GROUP BY amenity
@@ -1679,7 +1747,7 @@ def finance_amenity_revenue(
                 SELECT
                     amenity,
                     season,
-                    total_spend        AS revenue,
+                    revenue,
                     transaction_count  AS transactions
                 FROM amenity_season_spend
                 WHERE amenity IS NOT NULL

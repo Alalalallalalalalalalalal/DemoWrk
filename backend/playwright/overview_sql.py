@@ -197,9 +197,19 @@ classified AS (
               OR src.description ILIKE '%-Beach Night Functions%'
               OR src.description ILIKE '%-Ooshan Restaurant%'
               OR src.description ILIKE '%-Ooshan Bar%'
-              OR src.description ILIKE 'Commissary Charge%'
               OR src.description ILIKE 'Villa Wine Sales%'
                 THEN 'F&B'
+            -- [2026-08-13] Split out of F&B into its own top-level
+            -- category — matches how STATEMENT_SPEND_SQL's
+            -- statement_amenity_lines already classifies commissary/
+            -- grocery spend on the homeowner-statement side (its own
+            -- 'Commissary' amenity_category, a peer of 'F&B', not
+            -- nested under it). The folios side had never been updated
+            -- to match. See finance_backend.py's AMENITY_CATS, which
+            -- must include 'Commissary' or this reclassification would
+            -- silently move it from Amenities into Services.
+            WHEN src.description ILIKE 'Commissary Charge%'
+                THEN 'Commissary'
             WHEN src.description ILIKE '%-Tryall Boutique%'
                 THEN 'Boutique'
             WHEN src.description ILIKE 'Transportation Guest%'
@@ -1058,6 +1068,9 @@ WITH overview_stripped_lines AS (
         f.villa_name                                  AS overview_villa_name,
         COALESCE(f.payment_type, 'Unknown')           AS overview_booking_payment_type,
         f.transaction_category                        AS overview_transaction_category,
+        f.transaction_flow                             AS overview_transaction_flow,
+        f.payment_type                                 AS overview_payment_type,
+        bs.payment_type                                AS overview_source_payment_type,
         f.description                                 AS overview_raw_description,
         TRIM(
             REGEXP_REPLACE(f.description, '^\s*reversal\s+of\s*:?\s*', '', 'i')
@@ -1068,12 +1081,33 @@ WITH overview_stripped_lines AS (
         f.folio_source                                 AS overview_folio_source,
         -- [2026-07-17] room_number carried through purely for the
         -- number-based programme-villa match in the dedup CTE below.
-        -- Dropped at the netting stage; not exposed in the matview.
+        -- Dropped before the final SELECT; not exposed in the matview.
         f.room_number                                  AS overview_room_number
     FROM folios_unified_display f                      -- [UNIFIED+reclass 2026-07-18]
+    LEFT JOIN business_source bs
+      ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
     WHERE f.conf_code IS NOT NULL
       AND f.description IS NOT NULL
       AND f.line_status = 'Posted'                     -- [UNIFIED] future rate lines excluded
+      -- [2026-08-20] EXCLUDE synthetic_statement: this is the
+      -- statement_details/member_statement_spend gap-fill for
+      -- Amenity/Membership/Service spend not yet present in folios
+      -- (folios is still a partial load — see CLASSIFICATION_SQL's
+      -- header). Finance's Amenity/Services revenue (finance_backend.py)
+      -- has always summed raw `folios` only and never saw this layer.
+      -- Live check: real-folios-only Amenity/Paid = $26,731,876.37 /
+      -- 85,416 rows, matching Finance's own $26,732,340.12 / 85,417 rows
+      -- almost to the dollar; WITH synthetic_statement included it was
+      -- $29,557,127.62 / 105,589 — the $2.83M / 20,173-row difference is
+      -- entirely this gap-fill layer. Per explicit direction ("overview
+      -- needs to behave like the finance side... I need the numbers to
+      -- match"), dropped from the revenue pipeline so both tabs agree.
+      -- Villa is unaffected: its synthetic sources are folio_source
+      -- 'synthetic_rate' / 'synthetic_villa_income', not this one — that
+      -- money genuinely doesn't exist in folios at all (rack-rate
+      -- estimates, programme payouts), unlike this gap-fill, which
+      -- exists to stand in for real folios rows once they load.
+      AND f.folio_source <> 'synthetic_statement'
       -- [2026-07-18] COMPLETED-STAY CUTOFF: revenue is recognized only
       -- once the stay has fully checked out (strictly before the
       -- refresh date). In-progress stays' folios are still open and
@@ -1091,6 +1125,25 @@ WITH overview_stripped_lines AS (
       AND (f.check_out_date IS NULL OR f.check_out_date < CURRENT_DATE)
 ),
 overview_charge_lines AS (
+    -- [2026-08-20 REARCHITECTED] Category and revenue-bucket now read
+    -- directly off folios.transaction_category / transaction_flow /
+    -- payment_type — set once, authoritatively, by CLASSIFICATION_SQL
+    -- above — instead of re-guessing them from description keywords.
+    -- This mirrors finance_backend.py's _section_case_sql() /
+    -- _bucket_case_sql() exactly, so Overview's Villa/Amenity/Service
+    -- split and Paid/Free/Reversed status now agree with Finance by
+    -- construction, not by two keyword lists happening to match. The
+    -- keyword CASE this replaces predated reliable folios
+    -- classification (back when folios was barely loaded); now that
+    -- every row is classified up front, keeping a second, narrower
+    -- keyword list here was both redundant and a source of drift (see
+    -- the TMD/Commissary carve-outs this removes — both already
+    -- handled by CLASSIFICATION_SQL's own category CASE).
+    --
+    -- AMENITY_CATS below MUST be kept identical to finance_backend.py's
+    -- AMENITY_CATS tuple — this script runs standalone via psycopg2
+    -- (no shared param binding with the FastAPI app), so the list is
+    -- duplicated here rather than imported.
     SELECT
         overview_conf_code,
         overview_villa_name,
@@ -1098,50 +1151,28 @@ overview_charge_lines AS (
         overview_transaction_category,
         overview_stripped_description                  AS overview_line_description,
         CASE
-            WHEN overview_stripped_description ILIKE 'Temp Membership Fee%'
-            THEN 'Membership'
-            -- [2026-07-19] Prepaid-TMD transfers and refunds are worded
-            -- "Miscellaneous Charge - ... Prepaid TMD - Debit Folio 5",
-            -- so they fell through to the Amenity catch-all, where they
-            -- netted -$1,671.59 against amenity revenue. TMD is temp
-            -- membership fee: these belong in Membership so debits,
-            -- credits and refunds net against the fee they relate to.
-            WHEN overview_stripped_description ~* '(^|[^a-z])tmd([^a-z]|$)'
-            THEN 'Membership'
-            WHEN overview_stripped_description ILIKE 'Villa Rental -%'
-              OR overview_stripped_description ILIKE '%room rate%'
-              OR overview_stripped_description ILIKE '%room portion%'
-              OR overview_stripped_description ILIKE '%accommodation%'
-              OR overview_stripped_description ILIKE 'Complimentary Rental%'
-              OR overview_stripped_description ILIKE 'HO Reservation%'
-              -- [UNIFIED] synthetic lines arrive pre-categorized: rate
-              -- lines' rate_name and villa-income descriptions don't
-              -- match the keyword patterns above, so trust the source
-              -- category for them.
-              OR overview_transaction_category = 'Villa'
-            THEN 'Villa'
-            ELSE 'Amenity'
+            WHEN overview_transaction_category = 'Villa' THEN 'Villa'
+            WHEN overview_transaction_category IN (
+                'F&B', 'Commissary', 'Golf', 'Spa & Beauty', 'Tennis',
+                'Boutique', 'Water Sports', 'Equipment', 'Cart Rental', 'Events'
+            ) THEN 'Amenity'
+            ELSE 'Service'
         END                                              AS overview_line_category,
+        CASE
+            WHEN overview_transaction_flow = 'Reversal' THEN 'reversed'
+            WHEN overview_transaction_flow <> 'Charge' THEN 'other'
+            WHEN LOWER(
+                COALESCE(NULLIF(TRIM(overview_payment_type), ''), NULLIF(TRIM(overview_source_payment_type), ''), '')
+            ) ~ '(comp|free|complimentary|gratis|no charge)'
+                THEN 'forgone_revenue'
+            ELSE 'collected'
+        END                                              AS overview_bucket,
         overview_amount,
         overview_check_in_date,
         overview_folio_source,
         overview_room_number
     FROM overview_stripped_lines
-    WHERE overview_stripped_description NOT ILIKE '%payment%'
-      AND NOT (
-        overview_stripped_description ILIKE '%rooms%'
-        AND (
-             overview_stripped_description ILIKE '%visa%'
-          OR overview_stripped_description ILIKE '%mastercard%'
-          OR overview_stripped_description ILIKE '%amex%'
-          OR overview_stripped_description ILIKE '%discover%'
-          OR overview_stripped_description ILIKE '%check%'
-          OR overview_stripped_description ILIKE '%cash%'
-          OR overview_stripped_description ILIKE '%bns%'
-          OR overview_stripped_description ILIKE '%ncb%'
-          OR overview_stripped_description ILIKE '%member charge%'
-        )
-      )
+    WHERE overview_transaction_flow <> 'Payment'
       AND COALESCE(LOWER(overview_reservation_status), '') NOT IN ('cancelled', 'canceled', 'no-show')
 ),
 overview_programme_keys AS MATERIALIZED (
@@ -1214,91 +1245,75 @@ overview_deduped_charge_lines AS (
         )
     )
 ),
-overview_netted_lines AS (
+-- [2026-08-20 REARCHITECTED] No more netting-by-description or
+-- amount-magnitude reversal pairing: overview_bucket (from
+-- overview_charge_lines above) already tells us per row, authoritatively,
+-- whether it's collected/forgone/reversed/other — the old netting step
+-- existed only to make the coincidental-magnitude pairing heuristic work,
+-- and that heuristic is gone. This is one row per folio line now, not one
+-- row per (conf_code, description) group; SUM()s at the summary-view level
+-- are unaffected (summing per-row vs. summing pre-grouped subtotals gives
+-- the same total), but per-status transaction COUNTS are now the true
+-- line-item counts instead of a netted group count.
+overview_status_lines AS (
     SELECT
-        overview_conf_code,
-        MAX(overview_villa_name)                       AS overview_villa_name,
-        MAX(overview_booking_payment_type)              AS overview_booking_payment_type,
-        bool_or(overview_transaction_category = 'Cash Advance') AS overview_is_cash_advance_category,
-        overview_line_description,
-        MAX(overview_line_category)                     AS overview_line_category,
-        SUM(COALESCE(overview_amount, 0))               AS overview_net_amount,
-        SUM(CASE WHEN overview_amount > 0 THEN overview_amount ELSE 0 END) AS overview_gross_charged_amount
-    FROM overview_deduped_charge_lines
-    GROUP BY overview_conf_code, overview_line_description
-),
-overview_amount_counts AS (
-    SELECT
-        overview_conf_code,
-        ROUND(overview_net_amount::numeric, 2) AS overview_rounded_amount,
-        COUNT(*) AS overview_amount_count
-    FROM overview_netted_lines
-    GROUP BY overview_conf_code, ROUND(overview_net_amount::numeric, 2)
-),
-overview_reversal_pairs AS (
-    SELECT
-        neg.overview_conf_code,
-        neg.overview_line_description AS overview_negative_desc,
-        pos.overview_line_description AS overview_positive_desc
-    FROM overview_netted_lines neg
-    JOIN overview_amount_counts neg_match
-      ON neg_match.overview_conf_code = neg.overview_conf_code
-     AND neg_match.overview_rounded_amount = ROUND(-1 * neg.overview_net_amount::numeric, 2)
-     AND neg_match.overview_amount_count = 1
-    JOIN overview_netted_lines pos
-      ON pos.overview_conf_code = neg.overview_conf_code
-     AND ROUND(pos.overview_net_amount::numeric, 2) = ROUND(-1 * neg.overview_net_amount::numeric, 2)
-    JOIN overview_amount_counts pos_match
-      ON pos_match.overview_conf_code = pos.overview_conf_code
-     AND pos_match.overview_rounded_amount = ROUND(-1 * pos.overview_net_amount::numeric, 2)
-     AND pos_match.overview_amount_count = 1
-    WHERE neg.overview_net_amount < 0
-),
-overview_reversed_descriptions AS (
-    SELECT overview_conf_code, overview_negative_desc AS overview_line_description
-    FROM overview_reversal_pairs
-    UNION
-    SELECT overview_conf_code, overview_positive_desc AS overview_line_description
-    FROM overview_reversal_pairs
+        ocl.*,
+        CASE
+            WHEN ocl.overview_transaction_category = 'Cash Advance' THEN 'CashAdvance'
+            WHEN ocl.overview_line_description ILIKE '%staff tip%'
+              OR ocl.overview_line_description ~* 'villa[ _]tips'
+            THEN 'Tip'
+            WHEN ocl.overview_line_description ILIKE '%folio%'
+              OR ocl.overview_line_description ~* 'from v[0-9]+|to v[0-9]+'
+            THEN 'InternalTransfer'
+            WHEN ocl.overview_bucket = 'reversed' THEN 'Reversed'
+            -- [2026-07-19, carried forward] Rental-programme income
+            -- CORRECTIONS. The club occasionally reverses previously-paid
+            -- Villa Income (owner 15, June 2026: -$16,316.24). These are
+            -- synthetic_villa_income lines with a negative amount
+            -- (transaction_flow='Credit', not 'Reversal' — they're not
+            -- worded as reversals, just a negative payout adjustment) —
+            -- without this, they'd fall to Anomaly, overstating villa
+            -- revenue by the correction and inflating "Unexplained
+            -- reversals" with an entirely explainable adjustment. They
+            -- belong in Paid, where they net against the payout they
+            -- correct.
+            WHEN ocl.overview_folio_source = 'synthetic_villa_income'
+             AND ocl.overview_amount < 0
+            THEN 'Paid'
+            WHEN ocl.overview_bucket = 'collected' THEN 'Paid'
+            WHEN ocl.overview_bucket = 'forgone_revenue' THEN 'Free'
+            WHEN ocl.overview_amount = 0 THEN 'Free'
+            WHEN ocl.overview_amount < 0 THEN 'Anomaly'
+            ELSE 'Paid'
+        END AS overview_line_status
+    FROM overview_deduped_charge_lines ocl
 )
 SELECT
-    nl.overview_conf_code,
-    nl.overview_villa_name,
-    nl.overview_booking_payment_type,
-    nl.overview_line_description,
-    nl.overview_line_category,
-    nl.overview_net_amount,
+    overview_conf_code,
+    overview_villa_name,
+    overview_booking_payment_type,
+    overview_line_description,
+    overview_line_category,
+    overview_transaction_category,
+    -- [2026-08-20] Revenue-recognized amount: $0 for Free (a Free line's
+    -- raw amount may still carry the waived face value — see
+    -- overview_gross_charged_amount below for that), the row's real
+    -- amount for every other status (negative for Reversed/Anomaly,
+    -- matching what "Reversed charges" / "Unexplained anomalies" have
+    -- always shown).
+    CASE WHEN overview_line_status = 'Free' THEN 0 ELSE overview_amount END
+                                                     AS overview_net_amount,
+    overview_line_status,
+    -- [2026-08-20] "Value given away" / "amount reversed" display figure:
+    -- for Reversed, the positive magnitude of the (negative) reversal
+    -- amount; for everything else, whatever positive face value the row
+    -- carried (0 for negative/zero rows that aren't a reversal).
     CASE
-        WHEN nl.overview_line_description ILIKE '%cash advance%'
-          OR nl.overview_is_cash_advance_category
-        THEN 'CashAdvance'
-        WHEN nl.overview_line_description ILIKE '%staff tip%'
-          OR nl.overview_line_description ~* 'villa[ _]tips'
-        THEN 'Tip'
-        WHEN nl.overview_line_description ILIKE '%folio%'
-          OR nl.overview_line_description ~* 'from v[0-9]+|to v[0-9]+'
-        THEN 'InternalTransfer'
-        WHEN rd.overview_line_description IS NOT NULL THEN 'Reversed'
-        WHEN nl.overview_net_amount = 0 AND nl.overview_gross_charged_amount > 0 THEN 'Reversed'
-        WHEN nl.overview_net_amount > 0 THEN 'Paid'
-        WHEN nl.overview_net_amount = 0 THEN 'Free'
-        -- [2026-07-19] Rental-programme income CORRECTIONS. The club
-        -- occasionally reverses previously-paid Villa Income (owner 15,
-        -- June 2026: -$16,316.24). The payout being corrected was
-        -- recorded in a different month, so there is no matching charge
-        -- to pair with and these fell through to Anomaly — held outside
-        -- revenue, leaving villa revenue overstated by the correction
-        -- and "Unexplained reversals" inflated by an entirely
-        -- explainable adjustment. They belong in Paid, where they net
-        -- against the payouts they correct.
-        WHEN nl.overview_line_description ILIKE '%villa income%' THEN 'Paid'
-        ELSE 'Anomaly'
-    END AS overview_line_status,
-    nl.overview_gross_charged_amount
-FROM overview_netted_lines nl
-LEFT JOIN overview_reversed_descriptions rd
-  ON rd.overview_conf_code = nl.overview_conf_code
- AND rd.overview_line_description = nl.overview_line_description;
+        WHEN overview_line_status = 'Reversed' THEN ABS(LEAST(overview_amount, 0))
+        ELSE GREATEST(overview_amount, 0)
+    END                                              AS overview_gross_charged_amount
+FROM overview_status_lines;
 
 CREATE INDEX overview_transaction_lines_conf_code_idx
     ON overview_transaction_lines (overview_conf_code, overview_line_description);

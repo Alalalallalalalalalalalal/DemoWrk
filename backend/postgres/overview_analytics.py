@@ -1349,13 +1349,24 @@ def overview_transaction_member_vs_guest_revenue(
 #
 # line_category here is a 3-way split (Villa / Amenity / Membership),
 # NOT the same thing as overview_line_category on overview_transaction_lines
-# (which only ever has Villa / Amenity). 'Membership' is carved out of
-# what would otherwise be 'Amenity' specifically for this card — any line
-# whose description starts with "Temp Membership Fee" (the per-stay fee
-# charged to non-member guests for temporary club access during their
-# visit; first surfaced during the amenity-categorization audit on
-# 2026-06-25: 111 charges, $65,299). Added 2026-06-26 per request,
-# deliberately scoped to ONLY this endpoint/card — overview_line_category
+# (which as of the 2026-08-20 rearchitecture is Villa / Amenity / Service —
+# Membership lives inside 'Service' there, alongside Adjustment/Transport/
+# etc.). 'Membership' is carved out of 'Service' specifically for this
+# card, using the authoritative overview_transaction_category column
+# (also exposed on overview_transaction_lines since 2026-08-20) rather
+# than description-matching.
+#
+# [2026-08-13, superseded 2026-08-20] Originally matched only
+# `description ILIKE 'Temp Membership Fee%'`, missing TMD-worded
+# transfers/refunds ("Miscellaneous Charge - ... Prepaid TMD - Debit
+# Folio 5") that CLASSIFICATION_SQL's own category CASE already folds
+# into 'Membership' — those rows leaked into 'Amenity' on this card only,
+# a ~$41K gap versus Finance at a glance's Amenity figure on the same
+# page. Reading overview_transaction_category directly closes that gap
+# by construction: this card and every other Overview/Finance consumer
+# now agree because they read the same column, not two keyword lists.
+#
+# Deliberately scoped to ONLY this endpoint/card — overview_line_category
 # itself, and every other card that reads it (Top villas by revenue,
 # Finance at a glance, Revenue by month, etc.), is unchanged, so this
 # doesn't shift any other number on the page.
@@ -1380,11 +1391,21 @@ def overview_transaction_member_vs_guest_revenue_by_category(
 ):
     params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
     params["overview_line_status"] = overview_line_status
+    # [2026-08-20] Was 3-way (Villa/Amenity/Membership), with everything
+    # non-Villa/non-Membership falling into 'Amenity' — that included
+    # overview_line_category='Service' rows (Adjustment/Transport/
+    # Laundry/etc, everything outside Finance's AMENITY_CATS), inflating
+    # this card's Amenity figure well past Finance's Amenities Revenue
+    # (reported live: $30,522,287 here vs Finance's ~$26.7M). Now a
+    # genuine 4-way split matching overview_line_category's own
+    # Villa/Amenity/Service buckets, with Membership carved out of
+    # Service specifically for this card (as before).
     card_category_case = """
         CASE
             WHEN otl.overview_line_category = 'Villa' THEN 'Villa'
-            WHEN otl.overview_line_description ILIKE 'Temp Membership Fee%' THEN 'Membership'
-            ELSE 'Amenity'
+            WHEN otl.overview_transaction_category = 'Membership' THEN 'Membership'
+            WHEN otl.overview_line_category = 'Amenity' THEN 'Amenity'
+            ELSE 'Service'
         END
     """
     return overview_rows(db, f"""
