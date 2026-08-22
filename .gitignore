@@ -24,8 +24,14 @@ frontend/.vite/
 test-results/
 playwright-report/
 blob-report/
-playwright/.auth/
+scraping/.auth/
 .local-browsers/
+
+# apscheduler pipeline state (rotated logs, cross-process lock, failure-alert markers)
+backend/apscheduler/*.log.*
+backend/apscheduler/pipeline.lock
+backend/apscheduler/ALERT_*.txt
+backend/apscheduler/.*_failcount
 
 # Scraping data outputs
 data/
@@ -290,3 +296,10 @@ reports/
 screenshots/
 member_id_map.csv
 explore_structure.json
+
+# The bare "reports/" patterns above target backend/scraping output dirs
+# and unintentionally also match frontend/src/pages/reports/ (ReportsTab.jsx)
+# since gitignore directory patterns with no leading slash match at any
+# depth. Un-ignore the frontend one.
+!frontend/src/pages/reports/
+!frontend/src/pages/reports/**

@@ -10,8 +10,11 @@ Run AFTER the scrapers have produced their outputs:
   4. folio_report.py / folio_scraper.py -> reports/folio_report.csv + journal folio CSVs
   5. scrape_rate_revenue.py   -> reports/rate_details_free.csv, rate_details_paid.csv
   (+ reports/business_source.csv for the Source -> Payment Type mapping)
+  (+ room_lookup.csv, if present, for the room_lookup bedroom-count reference table)
 
 What the default run loads (python cleaner.py):
+  room_lookup.csv (if found) -> room_lookup (always created, even empty, so
+                                 downstream backfill SQL can reference it safely)
   Per member folder in journal/ (one transaction per member):
     _profile.csv            -> members, member_addresses, member_phones
     _dependents.csv         -> dependents, dependent_addresses, dependent_phones
@@ -69,17 +72,25 @@ load_dotenv()
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# cleaner.py is already inside backend/playwright
-PLAYWRIGHT_FOLDER = BASE_DIR
+# cleaner.py now lives in backend/scraping/builders — BASE_DIR is
+# wrapped in an extra dirname() so it still resolves to backend/scraping
+SCRAPING_FOLDER = BASE_DIR
 
-JOURNAL_FOLDER = os.path.join(PLAYWRIGHT_FOLDER, "journal")
-FOLIO_REPORT_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "folio_report.csv")
-BUSINESS_SOURCE_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "business_source.csv")
-FREE_RATE_DETAILS_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "rate_details_free.csv")
-PAID_RATE_DETAILS_FILE = os.path.join(PLAYWRIGHT_FOLDER, "reports", "rate_details_paid.csv")
-CLEANER_DONE_LOG       = os.path.join(PLAYWRIGHT_FOLDER, "cleaner_done.txt")
+JOURNAL_FOLDER = os.path.join(SCRAPING_FOLDER, "journal")
+FOLIO_REPORT_FILE = os.path.join(SCRAPING_FOLDER, "reports", "folio_report.csv")
+BUSINESS_SOURCE_FILE = os.path.join(SCRAPING_FOLDER, "reports", "business_source.csv")
+FREE_RATE_DETAILS_FILE = os.path.join(SCRAPING_FOLDER, "reports", "rate_details_free.csv")
+PAID_RATE_DETAILS_FILE = os.path.join(SCRAPING_FOLDER, "reports", "rate_details_paid.csv")
+CLEANER_DONE_LOG       = os.path.join(SCRAPING_FOLDER, "cleaner_done.txt")
+
+# Searched in order — first hit wins
+ROOM_LOOKUP_CANDIDATES = [
+    os.path.join(SCRAPING_FOLDER, "room_lookup.csv"),
+    os.path.join(SCRAPING_FOLDER, "reports", "room_lookup.csv"),
+    os.path.join(os.path.dirname(SCRAPING_FOLDER), "room_lookup.csv"),
+]
 
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST"),
@@ -949,6 +960,57 @@ def upsert_multi(conn, table, rows, conflict_cols, dry_run=False):
 # LOADERS
 # ─────────────────────────────────────────────
 
+def load_room_lookup(conn):
+    """Load room_lookup.csv into a room_lookup table. The table is ALWAYS
+    created (even empty) so downstream backfill SQL can reference it safely."""
+    csv_path = next((p for p in ROOM_LOOKUP_CANDIDATES if os.path.exists(p)), None)
+
+    rows = []
+    if csv_path:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            rows = [r for r in csv.DictReader(f) if r.get("room_number")]
+    else:
+        log.warning("room_lookup.csv not found — bedroom backfill will rely "
+                    "on the other sources only. Searched: %s",
+                    ", ".join(ROOM_LOOKUP_CANDIDATES))
+
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS room_lookup (
+                room_number   VARCHAR(50) PRIMARY KEY,
+                villa_name    VARCHAR(255),
+                display_name  VARCHAR(255),
+                max_persons   INTEGER,
+                bedroom_count INTEGER,
+                room_id       VARCHAR(50),
+                room_type_id  VARCHAR(50)
+            )
+        """)
+        for r in rows:
+            cur.execute("""
+                INSERT INTO room_lookup
+                    (room_number, villa_name, display_name, max_persons,
+                     bedroom_count, room_id, room_type_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (room_number) DO UPDATE SET
+                    villa_name = EXCLUDED.villa_name,
+                    display_name = EXCLUDED.display_name,
+                    max_persons = EXCLUDED.max_persons,
+                    bedroom_count = EXCLUDED.bedroom_count,
+                    room_id = EXCLUDED.room_id,
+                    room_type_id = EXCLUDED.room_type_id
+            """, (
+                r.get("room_number"), r.get("villa_name"),
+                r.get("display_name"),
+                int(r["max_persons"]) if r.get("max_persons") else None,
+                int(r["bedroom_count"]) if r.get("bedroom_count") else None,
+                r.get("room_id"), r.get("room_type_id"),
+            ))
+    conn.commit()
+    if rows:
+        log.info(f"room_lookup: {len(rows)} rooms loaded from {csv_path}")
+
+
 def load_profile(conn, member_number, filepath, dry_run=False):
     """
     Load _profile.csv into members, member_addresses, member_phones.
@@ -1498,7 +1560,7 @@ def load_reservation_guests(conn, main_member_number, filepath, dry_run=False):
 
 
 def load_journal_folios(conn, journal_folder=JOURNAL_FOLDER, dry_run=False):
-    """Scan backend/playwright/journal/{person}/ for folio CSVs and guest tables."""
+    """Scan backend/scraping/journal/{person}/ for folio CSVs and guest tables."""
     if not os.path.isdir(journal_folder):
         log.warning(f"Journal folder not found: {journal_folder}")
         return 0
@@ -1528,7 +1590,7 @@ def load_journal_folios(conn, journal_folder=JOURNAL_FOLDER, dry_run=False):
 
 def load_business_source(conn, filepath=BUSINESS_SOURCE_FILE, dry_run=False):
     """
-    Load playwright/reports/business_source.csv and update folios.payment_type
+    Load scraping/reports/business_source.csv and update folios.payment_type
     for existing folio rows whose folios.source matches Source Name.
 
     Expected columns:
@@ -1606,8 +1668,8 @@ def load_business_source(conn, filepath=BUSINESS_SOURCE_FILE, dry_run=False):
 
 def load_folios(conn, filepath=FOLIO_REPORT_FILE, dry_run=False):
     """
-    Load folios. Preferred source is backend/playwright/journal/{person}/ folio CSVs.
-    Falls back to backend/playwright/reports/folio_report.csv for legacy exports.
+    Load folios. Preferred source is backend/scraping/journal/{person}/ folio CSVs.
+    Falls back to backend/scraping/reports/folio_report.csv for legacy exports.
     """
     total = load_journal_folios(conn, JOURNAL_FOLDER, dry_run)
     if total:
@@ -1911,6 +1973,7 @@ def main():
         log.info("cleaner_done.txt cleared (tables being recreated).")
 
     create_tables(conn, recreate=args.recreate_tables)
+    load_room_lookup(conn)
 
     if args.business_source_only:
         log.info("Skipping member/profile/folio transaction load because --business-source-only was used.")

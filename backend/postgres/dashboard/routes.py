@@ -1,4 +1,4 @@
-# backend/postgres/analytics_dashboard.py
+# backend/postgres/dashboard/routes.py
 """
 Legacy all-in-one dashboard endpoint.
 
@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from .analytics_shared import get_db
+from ..analytics_shared import get_db
 
 router = APIRouter()
 

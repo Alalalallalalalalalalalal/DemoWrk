@@ -1,10 +1,10 @@
-// frontend/src/pages/DuesHistorySection.jsx
+// frontend/src/pages/annual-fees/DuesHistorySection.jsx
 //
 // "Dues history" card for the Annual Fees for Members tab: dues billed per year per fee
 // type (pivot table), villas billed per year, and an export of the full
 // year × fee type × villa-size dataset.
 //
-// Wire-up (2 lines in VillaFeesTab.jsx):
+// Wire-up (2 lines in AnnualFeesTab.jsx):
 //   import DuesHistorySection from "./DuesHistorySection";
 //   ...and render <DuesHistorySection /> at the bottom of the tab.
 
@@ -13,7 +13,7 @@ import { Download, ChevronDown } from "lucide-react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { villaFeesApi } from "../api/villaFeesApi";
+import { annualFeesApi } from "../../api/annualFeesApi";
 
 const serif = "'Cormorant Garamond', serif";
 
@@ -165,9 +165,9 @@ export default function DuesHistorySection() {
 
   useEffect(() => {
     Promise.all([
-      villaFeesApi.historyByYear(),
-      villaFeesApi.historyBySize(),
-      villaFeesApi.historyVillasPerYear(),
+      annualFeesApi.historyByYear(),
+      annualFeesApi.historyBySize(),
+      annualFeesApi.historyVillasPerYear(),
     ])
       .then(([y, s, v]) => {
         setByYear(y ?? []);

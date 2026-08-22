@@ -38,3 +38,5 @@ HEADLESS = not HEADFUL
 SEARCH_REPORT_URL = f"{BASE_URL}/tabs.jsp?g=27&m=Inquiry&s=search"
 
 REPORTS_FOLDER = os.path.join(OUTPUT_FOLDER, "reports")
+STATE_FOLDER = os.path.join(OUTPUT_FOLDER, "state")
+DATA_FOLDER = os.path.join(OUTPUT_FOLDER, "data")

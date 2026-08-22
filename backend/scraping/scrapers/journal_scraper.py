@@ -1,20 +1,37 @@
 """
 journal_scraper.py — Build per-member journal folders.
 For each member: scrapes Rooms (Member_Info tab, opening each
-reservation popup for contact info), then Services and Statements
-(Billing tab, both skipped for Guest accounts — see is_guest_folder()),
-before moving to the next member. Saves:
+reservation popup for contact info — rate_details comes along for free
+in the same popup pass), then Services and Statements (Billing tab,
+both skipped for Guest accounts — see is_guest_folder()), before
+moving to the next member. Saves:
   - rooms CSV per member
+  - rate_details CSV per member (per-night Room Rates for each
+    reservation, fetched from reservationRateDetail.do while the
+    reservation popup is open — stays overlapping 2025-01-01 onward)
   - services CSV per member (Members only)
   - statements CSV per member (Members only — both the Homeowner and
     House and Dues Charges receivable types; see RECEIVABLE_TYPES and
     STATEMENT_MIN_DATE_BY_TYPE)
   - statement details CSV per member (itemized line items drilled from
     each kept statement period's detail page)
-  - rate_details CSV per member (per-night Room Rates for each
-    reservation, fetched from reservationRateDetail.do while the
-    reservation popup is open — stays overlapping 2025-01-01 onward)
   - enriched profile CSV (contact/address fields filled from popup)
+
+By default a run does all three sections (Rooms+RateDetails, Services,
+Statements). --rooms-only / --services-only / --statements-only each
+narrow the run to just that section — any combination can be passed at
+once. A narrowed run never writes to journal_done.txt (only a run that
+completes ALL THREE sections for an account marks it fully done there);
+instead each section has its own done-log (journal_rooms_done.txt /
+journal_services_done.txt / journal_statements_done.txt) so a large
+narrowed backfill (e.g. re-pulling Rooms for every account after a bug
+fix, without re-paying for Services/Statements) is independently
+resumable across a multi-hour run, same as a full run is.
+
+Usage:
+    python -m scraping.scrapers.journal_scraper --all
+    python -m scraping.scrapers.journal_scraper --all --rooms-only
+    python -m scraping.scrapers.journal_scraper --all --services-only --statements-only
 """
 import os
 import csv
@@ -27,8 +44,8 @@ from datetime import datetime, date
 from multiprocessing import Pool
 import sys
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from config import OUTPUT_FOLDER, BASE_URL, HEADLESS
-from login import login, get_frame_by_url
+from ..config import OUTPUT_FOLDER, BASE_URL, STATE_FOLDER, DATA_FOLDER, HEADLESS
+from ..login import login, get_frame_by_url
 
 
 STATEMENT_MIN_DATE   = None
@@ -49,14 +66,27 @@ def parse_statement_date(val):
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
-MAP_FILE          = os.path.join(OUTPUT_FOLDER, "member_id_map.csv")
+MAP_FILE          = os.path.join(DATA_FOLDER, "member_id_map.csv")
 JOURNAL_FOLDER    = os.path.join(OUTPUT_FOLDER, "journal")
 SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
-DONE_LOG          = os.path.join(OUTPUT_FOLDER, "journal_done.txt")
+DONE_LOG          = os.path.join(STATE_FOLDER, "journal_done.txt")
 # [2026-07-18] Accounts that finished with an unresolved tab — they
 # are deliberately NOT written to DONE_LOG, so the next run retries
 # them. This file is the audit trail of what is still outstanding.
-INCOMPLETE_LOG    = os.path.join(OUTPUT_FOLDER, "journal_incomplete.txt")
+INCOMPLETE_LOG    = os.path.join(STATE_FOLDER, "journal_incomplete.txt")
+
+# Per-section done-logs, used only by narrowed (--rooms-only /
+# --services-only / --statements-only) runs — DONE_LOG itself is
+# reserved for accounts that completed ALL THREE sections. Keeping
+# these separate means a narrowed backfill can be resumed across a
+# multi-hour run without ever making a full run think an account with
+# only Rooms backfilled is fully done.
+SECTION_DONE_LOGS = {
+    "rooms":      os.path.join(STATE_FOLDER, "journal_rooms_done.txt"),
+    "services":   os.path.join(STATE_FOLDER, "journal_services_done.txt"),
+    "statements": os.path.join(STATE_FOLDER, "journal_statements_done.txt"),
+}
+ALL_SECTIONS = ("rooms", "services", "statements")
 LIST_MEMBERS_URL  = f"{BASE_URL}/Membership/middlePage.jsp?listView&tabId=437&tabGrpModuleID=1"
 
 DEFAULT_LIMIT   = None
@@ -72,10 +102,10 @@ TAB_MAX_RETRIES = 3
 
 GENERIC_LABELS = {"Guests", "Dependent", "Guest", "Staff"}
 
-# Rooms, Services, and Statements tab identifiers — all three are
-# scraped in scrape_member() below, one after another, for every
-# member (Services/Statements skipped for Guests — see
-# is_guest_folder()).
+# Rooms, Services, and Statements tab identifiers — scraped in
+# scrape_member() below, one after another (whichever sections were
+# requested), for every member (Services/Statements skipped for
+# Guests — see is_guest_folder()).
 TAB_HREF_FALLBACKS = {
     "rooms": "roomsInfo.do",
     "services": "members_enrolled_services.jsp",
@@ -99,14 +129,14 @@ PROFILE_CONTACT_FIELDS = {
 # ─────────────────────────────────────────────
 # DONE LOG
 # ─────────────────────────────────────────────
-def load_done_set():
-    if not os.path.exists(DONE_LOG):
+def load_done_set(log_path=DONE_LOG):
+    if not os.path.exists(log_path):
         return set()
-    with open(DONE_LOG, "r", encoding="utf-8") as f:
+    with open(log_path, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f if line.strip())
 
-def mark_done(member_id):
-    with open(DONE_LOG, "a", encoding="utf-8") as f:
+def mark_done(member_id, log_path=DONE_LOG):
+    with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"{member_id}\n")
 
 def log_incomplete(member_number, member_id, status):
@@ -1814,8 +1844,15 @@ def scrape_statements(page, folder_name, prefix=""):
 # ─────────────────────────────────────────────
 # PER-MEMBER SCRAPE
 # ─────────────────────────────────────────────
-def scrape_member(page, member_number, member_id, prefix="", status=None):
+def scrape_member(page, member_number, member_id, prefix="", status=None,
+                   sections=ALL_SECTIONS):
     """
+    sections: which of {"rooms", "services", "statements"} to attempt
+    this call — Rooms always includes rate_details, they come from the
+    same popup pass and can't be split further. Member info fields are
+    only scraped when "rooms" is requested, since that's the only
+    section that opens reservation popups with contact data.
+
     status: optional dict the caller supplies to receive per-tab
     outcomes — "ok" (data saved or confirmed empty), "skipped"
     (legitimately not applicable, e.g. guest accounts), or "failed"
@@ -1826,9 +1863,8 @@ def scrape_member(page, member_number, member_id, prefix="", status=None):
     """
     if status is None:
         status = {}
-    status.setdefault("rooms", "failed")
-    status.setdefault("services", "failed")
-    status.setdefault("statements", "failed")
+    for s in sections:
+        status.setdefault(s, "failed")
 
     folder_name = get_folder_name(member_number, member_id)
     saved = {}
@@ -1838,8 +1874,9 @@ def scrape_member(page, member_number, member_id, prefix="", status=None):
         print(f"  {prefix}Navigation failed for {member_number}")
         return False, saved
 
-    member_info = scrape_member_info_fields(page, prefix)
-    append_member_info_to_profile(folder_name, member_info, prefix)
+    if "rooms" in sections:
+        member_info = scrape_member_info_fields(page, prefix)
+        append_member_info_to_profile(folder_name, member_info, prefix)
 
     shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not shell:
@@ -1847,66 +1884,67 @@ def scrape_member(page, member_number, member_id, prefix="", status=None):
         take_screenshot(page, f"no_shell_{folder_name}")
         return False, saved
 
-    tab_done = False
-    for attempt in range(1, TAB_MAX_RETRIES + 1):
-        note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
-        print(f"    {prefix}Rooms{note}")
+    if "rooms" in sections:
+        tab_done = False
+        for attempt in range(1, TAB_MAX_RETRIES + 1):
+            note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
+            print(f"    {prefix}Rooms{note}")
 
-        shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
-        if not shell:
-            print(f"    {prefix}Shell lost — re-navigating to member")
-            if not navigate_to_member(page, member_id, prefix):
-                break
             shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
             if not shell:
-                break
+                print(f"    {prefix}Shell lost — re-navigating to member")
+                if not navigate_to_member(page, member_id, prefix):
+                    break
+                shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+                if not shell:
+                    break
 
-        open_member_dropdown(shell, page)
-        click_section(shell, page, "Member_Info")
-        if not click_subtab(shell, page, "rooms", TAB_HREF_FALLBACKS["rooms"], prefix):
-            take_screenshot(page, f"no_tab_{folder_name}_rooms")
-            if attempt < TAB_MAX_RETRIES:
-                page.wait_for_timeout(1000 * attempt)
-            continue
-
-        rooms_success, room_rows, merged_contact, rate_rows = \
-            scrape_rooms_with_popups(page, folder_name, prefix)
-        if not rooms_success:
-            print(f"    {prefix}Rooms scraping failed")
-
-            if attempt < TAB_MAX_RETRIES:
-                page.wait_for_timeout(1000 * attempt)
+            open_member_dropdown(shell, page)
+            click_section(shell, page, "Member_Info")
+            if not click_subtab(shell, page, "rooms", TAB_HREF_FALLBACKS["rooms"], prefix):
+                take_screenshot(page, f"no_tab_{folder_name}_rooms")
+                if attempt < TAB_MAX_RETRIES:
+                    page.wait_for_timeout(1000 * attempt)
                 continue
 
-            return False, saved
+            rooms_success, room_rows, merged_contact, rate_rows = \
+                scrape_rooms_with_popups(page, folder_name, prefix)
+            if not rooms_success:
+                print(f"    {prefix}Rooms scraping failed")
 
-        if room_rows:
-            fp = save_tab_csv(folder_name, "rooms", room_rows)
-            if fp:
-                saved["rooms"] = fp
-                print(f"    {prefix}Rooms: {len(room_rows)} row(s) → {os.path.basename(fp)}")
-            else:
-                print(f"    {prefix}Rooms CSV could not be saved")
+                if attempt < TAB_MAX_RETRIES:
+                    page.wait_for_timeout(1000 * attempt)
+                    continue
+
                 return False, saved
-            if merged_contact:
-                enrich_profile_csv(folder_name, merged_contact, prefix)
-            if rate_rows:
-                fp = save_tab_csv(folder_name, "rate_details", rate_rows)
+
+            if room_rows:
+                fp = save_tab_csv(folder_name, "rooms", room_rows)
                 if fp:
-                    saved["rate_details"] = fp
-                    print(f"    {prefix}Rate details: {len(rate_rows)} night row(s) → {os.path.basename(fp)}")
+                    saved["rooms"] = fp
+                    print(f"    {prefix}Rooms: {len(room_rows)} row(s) → {os.path.basename(fp)}")
                 else:
-                    print(f"    {prefix}Rate details CSV could not be saved")
-        else:
-            print(f"    {prefix}Rooms: no data — processed successfully")
+                    print(f"    {prefix}Rooms CSV could not be saved")
+                    return False, saved
+                if merged_contact:
+                    enrich_profile_csv(folder_name, merged_contact, prefix)
+                if rate_rows:
+                    fp = save_tab_csv(folder_name, "rate_details", rate_rows)
+                    if fp:
+                        saved["rate_details"] = fp
+                        print(f"    {prefix}Rate details: {len(rate_rows)} night row(s) → {os.path.basename(fp)}")
+                    else:
+                        print(f"    {prefix}Rate details CSV could not be saved")
+            else:
+                print(f"    {prefix}Rooms: no data — processed successfully")
 
-        status["rooms"] = "ok"
-        tab_done = True
-        break
+            status["rooms"] = "ok"
+            tab_done = True
+            break
 
-    if not tab_done:
-        print(f"    {prefix}Rooms: exhausted retries")
-        return False, saved
+        if not tab_done:
+            print(f"    {prefix}Rooms: exhausted retries")
+            return False, saved
 
     # ── Billing > Services (integrated 2026-07-02) ─────────────────
     # Runs after Rooms, before moving to the next member — folded in
@@ -1918,225 +1956,134 @@ def scrape_member(page, member_number, member_id, prefix="", status=None):
     # data and has already succeeded by this point; Services failures
     # are just logged, and this member stays eligible for a later
     # targeted re-run without losing the Rooms data already captured.
-    if is_guest_folder(folder_name):
-        print(f"    {prefix}Services: skipped (guest account)")
-        status["services"] = "skipped"   # guests have no services — resolved, not a failure
-        services_confirmed_empty = False
-    else:
-        services_done = False
-        services_confirmed_empty = False
-        for attempt in range(1, TAB_MAX_RETRIES + 1):
-            note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
-            print(f"    {prefix}Services{note}")
+    if "services" in sections:
+        if is_guest_folder(folder_name):
+            print(f"    {prefix}Services: skipped (guest account)")
+            status["services"] = "skipped"   # guests have no services — resolved, not a failure
+        else:
+            services_done = False
+            for attempt in range(1, TAB_MAX_RETRIES + 1):
+                note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
+                print(f"    {prefix}Services{note}")
 
-            shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
-            if not shell:
-                print(f"    {prefix}Shell lost — re-navigating to member")
-                if not navigate_to_member(page, member_id, prefix):
-                    break
                 shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
                 if not shell:
+                    print(f"    {prefix}Shell lost — re-navigating to member")
+                    if not navigate_to_member(page, member_id, prefix):
+                        break
+                    shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+                    if not shell:
+                        break
+
+                open_member_dropdown(shell, page)
+                click_section(shell, page, "Billing")
+                if not click_subtab(shell, page, "members_enrolled_services", TAB_HREF_FALLBACKS["services"], prefix):
+                    take_screenshot(page, f"no_tab_{folder_name}_services")
+                    if attempt < TAB_MAX_RETRIES:
+                        page.wait_for_timeout(1000 * attempt)
+                    continue
+
+                services_success, service_rows = scrape_services(page, folder_name, prefix)
+                if not services_success:
+                    print(f"    {prefix}Services scraping failed")
+                    if attempt < TAB_MAX_RETRIES:
+                        page.wait_for_timeout(1000 * attempt)
+                        continue
+                    print(f"    {prefix}Services: exhausted retries — continuing anyway (Rooms already saved)")
                     break
 
-            open_member_dropdown(shell, page)
-            click_section(shell, page, "Billing")
-            if not click_subtab(shell, page, "members_enrolled_services", TAB_HREF_FALLBACKS["services"], prefix):
-                take_screenshot(page, f"no_tab_{folder_name}_services")
-                if attempt < TAB_MAX_RETRIES:
-                    page.wait_for_timeout(1000 * attempt)
-                continue
+                if service_rows:
+                    fp = save_tab_csv(folder_name, "services", service_rows)
+                    if fp:
+                        saved["services"] = fp
+                        print(f"    {prefix}Services: {len(service_rows)} row(s) → {os.path.basename(fp)}")
+                    else:
+                        print(f"    {prefix}Services CSV could not be saved")
+                else:
+                    # Confirmed empty (Services genuinely loaded and had
+                    # nothing) — NOT the same as a failed/uncertain attempt.
+                    print(f"    {prefix}Services: no data — processed successfully")
 
-            services_success, service_rows = scrape_services(page, folder_name, prefix)
-            if not services_success:
-                print(f"    {prefix}Services scraping failed")
-                if attempt < TAB_MAX_RETRIES:
-                    page.wait_for_timeout(1000 * attempt)
-                    continue
-                print(f"    {prefix}Services: exhausted retries — continuing anyway (Rooms already saved)")
+                status["services"] = "ok"
+                services_done = True
                 break
 
-            if service_rows:
-                fp = save_tab_csv(folder_name, "services", service_rows)
-                if fp:
-                    saved["services"] = fp
-                    print(f"    {prefix}Services: {len(service_rows)} row(s) → {os.path.basename(fp)}")
-                else:
-                    print(f"    {prefix}Services CSV could not be saved")
-            else:
-                # Confirmed empty (Services genuinely loaded and had
-                # nothing) — NOT the same as a failed/uncertain attempt.
-                # Confirmed with club 2026-07-12: every homeowner with
-                # statements is also enrolled in at least one Service,
-                # so confirmed-empty Services safely implies no
-                # Statements — this skips the much more expensive
-                # Statements attempt below for accounts we already have
-                # real evidence about. A FAILED Services attempt does
-                # NOT set this — "we don't know" still means "try
-                # Statements anyway."
-                services_confirmed_empty = True
-                print(f"    {prefix}Services: no data — processed successfully")
-
-            status["services"] = "ok"
-            services_done = True
-            break
-
-        if not services_done:
-            print(f"    {prefix}Services: not completed this run — account will be retried next run")
+            if not services_done:
+                print(f"    {prefix}Services: not completed this run — account will be retried next run")
 
     # ── Billing > Statements ────────────────────────────────────────
     # Runs after Services, before moving to the next member. Same
     # guest-skip and non-fatal-failure treatment as Services above.
     # Homeowner receivable type only, 2025+ periods, with per-period
     # detail drilling — see the STATEMENTS TAB section comments.
-    if is_guest_folder(folder_name):
-        print(f"    {prefix}Statements: skipped (guest account)")
-        status["statements"] = "skipped"   # guests have no statements
-    else:
-        # [2026-07-18] The "Services confirmed empty => no statements"
-        # shortcut was REMOVED: member 35 (Vista Del Mar's owner
-        # account) has an empty Services tab but real Homeowner
-        # statements, disproving the 2026-07-12 assumption. Statements
-        # are now always attempted for every non-guest account.
-        # (services_confirmed_empty is still computed above but no
-        # longer gates anything.)
-        statements_done = False
-        for attempt in range(1, TAB_MAX_RETRIES + 1):
-            note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
-            print(f"    {prefix}Statements{note}")
+    if "statements" in sections:
+        if is_guest_folder(folder_name):
+            print(f"    {prefix}Statements: skipped (guest account)")
+            status["statements"] = "skipped"   # guests have no statements
+        else:
+            # [2026-07-18] The "Services confirmed empty => no statements"
+            # shortcut was REMOVED: member 35 (Vista Del Mar's owner
+            # account) has an empty Services tab but real Homeowner
+            # statements, disproving the 2026-07-12 assumption. Statements
+            # are now always attempted for every non-guest account.
+            statements_done = False
+            for attempt in range(1, TAB_MAX_RETRIES + 1):
+                note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
+                print(f"    {prefix}Statements{note}")
 
-            shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
-            if not shell:
-                print(f"    {prefix}Shell lost — re-navigating to member")
-                if not navigate_to_member(page, member_id, prefix):
-                    break
                 shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
                 if not shell:
+                    print(f"    {prefix}Shell lost — re-navigating to member")
+                    if not navigate_to_member(page, member_id, prefix):
+                        break
+                    shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+                    if not shell:
+                        break
+
+                open_member_dropdown(shell, page)
+                click_section(shell, page, "Billing")
+                if not click_subtab(shell, page, "memberStatements", TAB_HREF_FALLBACKS["statements"], prefix):
+                    take_screenshot(page, f"no_tab_{folder_name}_statements")
+                    if attempt < TAB_MAX_RETRIES:
+                        page.wait_for_timeout(1000 * attempt)
+                    continue
+
+                statements_success, statement_rows, statement_detail_rows = \
+                    scrape_statements(page, folder_name, prefix)
+                if not statements_success:
+                    print(f"    {prefix}Statements scraping failed")
+                    if attempt < TAB_MAX_RETRIES:
+                        page.wait_for_timeout(1000 * attempt)
+                        continue
+                    print(f"    {prefix}Statements: exhausted retries — continuing anyway (Rooms/Services already saved)")
                     break
 
-            open_member_dropdown(shell, page)
-            click_section(shell, page, "Billing")
-            if not click_subtab(shell, page, "memberStatements", TAB_HREF_FALLBACKS["statements"], prefix):
-                take_screenshot(page, f"no_tab_{folder_name}_statements")
-                if attempt < TAB_MAX_RETRIES:
-                    page.wait_for_timeout(1000 * attempt)
-                continue
+                if statement_rows:
+                    fp = save_tab_csv(folder_name, "statements", statement_rows)
+                    if fp:
+                        saved["statements"] = fp
+                        print(f"    {prefix}Statements: {len(statement_rows)} row(s) → {os.path.basename(fp)}")
+                    else:
+                        print(f"    {prefix}Statements CSV could not be saved")
+                else:
+                    print(f"    {prefix}Statements: no data — processed successfully")
 
-            statements_success, statement_rows, statement_detail_rows = \
-                scrape_statements(page, folder_name, prefix)
-            if not statements_success:
-                print(f"    {prefix}Statements scraping failed")
-                if attempt < TAB_MAX_RETRIES:
-                    page.wait_for_timeout(1000 * attempt)
-                    continue
-                print(f"    {prefix}Statements: exhausted retries — continuing anyway (Rooms/Services already saved)")
+                if statement_detail_rows:
+                    fp = save_tab_csv(folder_name, "statement_details", statement_detail_rows)
+                    if fp:
+                        saved["statement_details"] = fp
+                        print(f"    {prefix}Statement details: {len(statement_detail_rows)} line(s) → {os.path.basename(fp)}")
+                    else:
+                        print(f"    {prefix}Statement details CSV could not be saved")
+
+                status["statements"] = "ok"
+                statements_done = True
                 break
 
-            if statement_rows:
-                fp = save_tab_csv(folder_name, "statements", statement_rows)
-                if fp:
-                    saved["statements"] = fp
-                    print(f"    {prefix}Statements: {len(statement_rows)} row(s) → {os.path.basename(fp)}")
-                else:
-                    print(f"    {prefix}Statements CSV could not be saved")
-            else:
-                print(f"    {prefix}Statements: no data — processed successfully")
-
-            if statement_detail_rows:
-                fp = save_tab_csv(folder_name, "statement_details", statement_detail_rows)
-                if fp:
-                    saved["statement_details"] = fp
-                    print(f"    {prefix}Statement details: {len(statement_detail_rows)} line(s) → {os.path.basename(fp)}")
-                else:
-                    print(f"    {prefix}Statement details CSV could not be saved")
-
-            status["statements"] = "ok"
-            statements_done = True
-            break
-
-        if not statements_done:
-            print(f"    {prefix}Statements: not completed this run — account will be retried next run")
+            if not statements_done:
+                print(f"    {prefix}Statements: not completed this run — account will be retried next run")
 
     return True, saved
-
-# ─────────────────────────────────────────────
-# STATEMENTS-ONLY MEMBER SCRAPE  [2026-07-18]
-# ─────────────────────────────────────────────
-def scrape_member_statements_only(page, member_number, member_id,
-                                  prefix="", status=None):
-    """
-    Targeted mode: navigate to the member and pull ONLY
-    Billing > Statements (+ per-period details). Skips Rooms popups and
-    Services entirely, so a statements backfill over a list of owner
-    accounts takes minutes instead of hours. Guest accounts are still
-    skipped (correct behavior — e.g. 57 is a guest; 57A is the member).
-    """
-    if status is None:
-        status = {}
-    # Rooms/Services are intentionally not attempted in this mode.
-    status.setdefault("statements", "failed")
-
-    folder_name = get_folder_name(member_number, member_id)
-    saved = {}
-
-    dismiss_popup(page)
-    if not navigate_to_member(page, member_id, prefix):
-        print(f"  {prefix}Navigation failed for {member_number}")
-        return False, saved
-
-    if is_guest_folder(folder_name):
-        print(f"    {prefix}Statements: skipped (guest account)")
-        status["statements"] = "skipped"
-        return True, saved
-
-    for attempt in range(1, TAB_MAX_RETRIES + 1):
-        note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
-        print(f"    {prefix}Statements{note}")
-
-        shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
-        if not shell:
-            print(f"    {prefix}Shell lost — re-navigating to member")
-            if not navigate_to_member(page, member_id, prefix):
-                return False, saved
-            shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
-            if not shell:
-                return False, saved
-
-        open_member_dropdown(shell, page)
-        click_section(shell, page, "Billing")
-        if not click_subtab(shell, page, "memberStatements",
-                            TAB_HREF_FALLBACKS["statements"], prefix):
-            take_screenshot(page, f"no_tab_{folder_name}_statements")
-            if attempt < TAB_MAX_RETRIES:
-                page.wait_for_timeout(1000 * attempt)
-            continue
-
-        statements_success, statement_rows, statement_detail_rows = \
-            scrape_statements(page, folder_name, prefix)
-        if not statements_success:
-            print(f"    {prefix}Statements scraping failed")
-            if attempt < TAB_MAX_RETRIES:
-                page.wait_for_timeout(1000 * attempt)
-                continue
-            return False, saved
-
-        if statement_rows:
-            fp = save_tab_csv(folder_name, "statements", statement_rows)
-            if fp:
-                saved["statements"] = fp
-                print(f"    {prefix}Statements: {len(statement_rows)} row(s) → {os.path.basename(fp)}")
-        else:
-            print(f"    {prefix}Statements: no data — processed successfully")
-
-        if statement_detail_rows:
-            fp = save_tab_csv(folder_name, "statement_details", statement_detail_rows)
-            if fp:
-                saved["statement_details"] = fp
-                print(f"    {prefix}Statement details: {len(statement_detail_rows)} line(s) → {os.path.basename(fp)}")
-
-        status["statements"] = "ok"
-        return True, saved
-
-    return False, saved
 
 # ─────────────────────────────────────────────
 # WORKER
@@ -2145,11 +2092,18 @@ def _worker_init():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 def scrape_chunk(args):
-    members_chunk, worker_id, force, statements_only = args
+    members_chunk, worker_id, force, sections = args
     time.sleep(worker_id * 3)
     prefix   = f"[W{worker_id}] "
     results  = {"success": [], "failed": [], "skipped": [], "incomplete": []}
     done_set = load_done_set()
+    # Narrowed runs (sections is a strict subset of ALL_SECTIONS) also
+    # check their own per-section done-logs, so a narrowed backfill is
+    # resumable on its own without ever touching DONE_LOG.
+    section_done_sets = (
+        {s: load_done_set(SECTION_DONE_LOGS[s]) for s in sections}
+        if sections != ALL_SECTIONS else {}
+    )
 
     with sync_playwright() as p:
         browser  = p.chromium.launch(headless=HEADLESS)
@@ -2182,22 +2136,24 @@ def scrape_chunk(args):
 
                 ensure_session(page, worker_id)
 
-                if member_id in done_set and not force:
+                already_done = member_id in done_set or (
+                    section_done_sets
+                    and all(member_id in section_done_sets[s] for s in sections)
+                )
+                if already_done and not force:
                     print(f"  {prefix}Already done — skipping")
                     results["skipped"].append(folder_name)
                     continue
 
-                scrape_fn = (scrape_member_statements_only
-                             if statements_only else scrape_member)
                 status = {}
-                success, saved = scrape_fn(page, member_number, member_id,
-                                           prefix, status)
+                success, saved = scrape_member(page, member_number, member_id,
+                                               prefix, status, sections=sections)
                 if not success:
                     if ensure_session(page, worker_id):
                         print(f"  {prefix}Retrying {member_number} after re-login...")
                         status = {}   # fresh slate for the retry
-                        success, saved = scrape_fn(page, member_number, member_id,
-                                                   prefix, status)
+                        success, saved = scrape_member(page, member_number, member_id,
+                                                       prefix, status, sections=sections)
 
                 if success:
                     # [2026-07-18] An account is only marked done when
@@ -2213,20 +2169,24 @@ def scrape_chunk(args):
                         if v not in ("ok", "skipped")
                     )
 
-                    # statements-only runs never mark done: a member
-                    # first touched in this mode still needs a full
-                    # Rooms/Services pass in a future normal run.
-                    if statements_only:
-                        pass
-                    elif unresolved:
+                    if unresolved:
                         log_incomplete(member_number, member_id, status)
                         results["incomplete"].append(folder_name)
                         print(f"  {prefix}! {member_number}: incomplete "
                               f"({', '.join(unresolved)}) — not marked done, "
                               f"will retry next run")
-                    else:
+                    elif sections == ALL_SECTIONS:
                         mark_done(member_id)
                         done_set.add(member_id)
+                    else:
+                        # Narrowed run: mark only the section-specific
+                        # done-logs, never DONE_LOG — a member first
+                        # touched this way still needs a full pass in a
+                        # future normal run before it counts as fully
+                        # done.
+                        for s in sections:
+                            mark_done(member_id, SECTION_DONE_LOGS[s])
+                            section_done_sets[s].add(member_id)
 
                     if saved:
                         print(f"  {prefix}✓ {member_number}: {len(saved)} file(s) saved")
@@ -2234,7 +2194,7 @@ def scrape_chunk(args):
                         print(f"  {prefix}✓ {member_number}: processed successfully — no records")
                     results["success"].append(folder_name)
                 else:
-                    print(f"  {prefix}✗ {member_number}: page or Rooms tab failed to load")
+                    print(f"  {prefix}✗ {member_number}: page or {'/'.join(sections)} tab failed to load")
                     results["failed"].append(folder_name)
 
         except Exception as e:
@@ -2260,23 +2220,36 @@ def main():
     parser.add_argument("--members", type=str, default=None,
                         help="Comma-separated member numbers e.g. 67,67A,23B")
     parser.add_argument("--force",   action="store_true",
-                        help="Ignore journal_done.txt for the selected members "
+                        help="Ignore journal_done.txt (and the per-section done-logs "
+                             "for a narrowed run) for the selected members "
                              "(auto-enabled for --member/--id/--members)")
+    parser.add_argument("--rooms-only", action="store_true",
+                        help="Scrape only Rooms (+ rate_details, same popup pass)")
+    parser.add_argument("--services-only", action="store_true",
+                        help="Scrape only Billing > Services")
     parser.add_argument("--statements-only", action="store_true",
-                        help="Skip Rooms and Services; scrape only "
-                             "Billing > Statements (+ details)")
+                        help="Scrape only Billing > Statements (+ details)")
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
                         help=f"Parallel workers (default: {DEFAULT_WORKERS})")
     parser.add_argument("--reset",   action="store_true",
-                        help="Clear done log and rescrape everything")
+                        help="Clear the relevant done log(s) and rescrape everything")
     args = parser.parse_args()
 
     if not os.path.exists(MAP_FILE):
         print(f"ERROR: {MAP_FILE} not found. Run build_member_map.py first.")
         return
 
-    if args.reset and os.path.exists(DONE_LOG):
-        os.remove(DONE_LOG)
+    requested = [s for s, flag in (("rooms", args.rooms_only),
+                                    ("services", args.services_only),
+                                    ("statements", args.statements_only)) if flag]
+    sections = tuple(requested) if requested else ALL_SECTIONS
+
+    if args.reset:
+        reset_logs = [DONE_LOG] if sections == ALL_SECTIONS else \
+                     [SECTION_DONE_LOGS[s] for s in sections]
+        for log_path in reset_logs:
+            if os.path.exists(log_path):
+                os.remove(log_path)
         print("Done log cleared.")
 
     all_members = load_member_map(MAP_FILE)
@@ -2285,6 +2258,8 @@ def main():
     done_count = len(load_done_set())
     if done_count:
         print(f"Already done: {done_count} (use --reset to rescrape)")
+    if sections != ALL_SECTIONS:
+        print(f"Sections           : {', '.join(sections)}")
 
     force = args.force or bool(args.member or args.id or args.members)
 
@@ -2321,12 +2296,12 @@ def main():
 
     if len(members) == 1 or args.workers == 1:
         print("Mode               : single worker\n")
-        all_results = [scrape_chunk((members, 1, force, args.statements_only))]
+        all_results = [scrape_chunk((members, 1, force, sections))]
     else:
         num_workers = min(args.workers, len(members))
         chunk_size  = math.ceil(len(members) / num_workers)
         chunks = [
-            (members[i: i + chunk_size], wid, force, args.statements_only)
+            (members[i: i + chunk_size], wid, force, sections)
             for wid, i in enumerate(range(0, len(members), chunk_size), 1)
         ]
         print(f"Workers            : {num_workers}")

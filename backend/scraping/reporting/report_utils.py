@@ -5,8 +5,8 @@ report_utils.py — Shared utilities for report navigation and frame finding.
 import os
 from datetime import datetime
 
-from login import get_frame_by_url
-from config import OUTPUT_FOLDER, SEARCH_REPORT_URL
+from ..login import get_frame_by_url
+from ..config import OUTPUT_FOLDER, SEARCH_REPORT_URL
 
 SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
 

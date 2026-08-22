@@ -15,12 +15,12 @@ import glob
 import sys
 from playwright.sync_api import sync_playwright
 
-from config import REPORTS_FOLDER, OUTPUT_FOLDER, HEADLESS
-from login import login
-from build_member_map import navigate_to_list_members
+from ..config import REPORTS_FOLDER, OUTPUT_FOLDER, DATA_FOLDER, HEADLESS
+from ..login import login
+from .build_member_map import navigate_to_list_members
 
 # ---------------------------------------------------
-MAP_FILE = os.path.join(OUTPUT_FOLDER, "member_id_map.csv")
+MAP_FILE = os.path.join(DATA_FOLDER, "member_id_map.csv")
 
 DEMOGRAPHICS_FOLDER =REPORTS_FOLDER
 

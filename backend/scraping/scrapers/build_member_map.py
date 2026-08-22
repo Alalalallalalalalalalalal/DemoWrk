@@ -22,12 +22,12 @@ from datetime import datetime
 import sys
 from playwright.sync_api import sync_playwright
 
-from config import OUTPUT_FOLDER, BASE_URL, HEADLESS
-from login import login, get_frame_by_url
+from ..config import OUTPUT_FOLDER, BASE_URL, DATA_FOLDER, HEADLESS
+from ..login import login, get_frame_by_url
 
 # ─────────────────────────────────────────────
 LIST_MEMBERS_URL  = f"{BASE_URL}/Membership/middlePage.jsp?listView&tabId=437&tabGrpModuleID=1"
-MAP_FILE          = os.path.join(OUTPUT_FOLDER, "member_id_map.csv")
+MAP_FILE          = os.path.join(DATA_FOLDER, "member_id_map.csv")
 SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
 # ─────────────────────────────────────────────
 

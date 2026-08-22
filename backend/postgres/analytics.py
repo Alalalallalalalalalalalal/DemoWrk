@@ -3,12 +3,13 @@
 Aggregator module. This used to be one big file containing every analytics
 route; it's now split into focused modules:
 
-  analytics_dashboard.py     /dashboard-summary (legacy all-in-one widget feed)
-  analytics_seasons.py       season groups/seasons CRUD, /season-summary, /seasons/{id}/members
-  analytics_tables.py        /tables, /table/{table_name}, /table/{table_name}/search (report builder)
-  analytics_ml_insights.py   /ml/amenity-season-insights, /ml/member-segments, /ml/segment-config
-  villas/routes.py           villa/room/bedroom stats, booked-people, visits-rooms-dashboard, source breakdowns
-  demographics/routes.py     /demographics-summary, state/category/dimension drilldowns, new-vs-repeat visitor details
+  dashboard/                 /dashboard-summary (legacy all-in-one widget feed)
+  seasons/                   season groups/seasons CRUD, /season-summary, /seasons/{id}/members
+  tables/                    /tables, /table/{table_name}, /table/{table_name}/search (report builder)
+  ml_insights/                /ml/amenity-season-insights, /ml/member-segments, /ml/segment-config
+  villas/                    villa/room/bedroom stats, booked-people, visits-rooms-dashboard, source breakdowns
+  demographics/              /demographics-summary, state/category/dimension drilldowns, new-vs-repeat visitor details
+  marketing/                 marketing targeting campaigns
   analytics_shared.py        shared get_db / rows / one / SQL-fragment helpers (no routes)
 
 This file just re-exports a single combined `router` so existing code doing
@@ -19,13 +20,13 @@ This file just re-exports a single combined `router` so existing code doing
 
 from fastapi import APIRouter
 
-from .analytics_dashboard import router as dashboard_router
-from .analytics_seasons import router as seasons_router
-from .analytics_tables import router as tables_router
-from .analytics_ml_insights import router as ml_insights_router
-from .villas.routes import router as villas_router
-from .demographics.routes import router as demographics_router
-from .analytics_marketing import router as marketing_router
+from .dashboard import router as dashboard_router
+from .seasons import router as seasons_router
+from .tables import router as tables_router
+from .ml_insights import router as ml_insights_router
+from .villas import router as villas_router
+from .demographics import router as demographics_router
+from .marketing import router as marketing_router
 
 router = APIRouter()
 

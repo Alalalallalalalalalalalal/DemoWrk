@@ -22,12 +22,12 @@ from datetime import datetime
 import sys
 from playwright.sync_api import sync_playwright
 
-from config import OUTPUT_FOLDER, REPORTS_FOLDER, HEADLESS
-from login import login, open_reporting_menu
-from report_utils import navigate_to_search_reports
-import report_member_demographics
-import report_member_dependents
-import new_member_updater
+from ..config import OUTPUT_FOLDER, REPORTS_FOLDER, HEADLESS
+from ..login import login, open_reporting_menu
+from ..reporting.report_utils import navigate_to_search_reports
+from ..reporting import report_member_demographics
+from ..reporting import report_member_dependents
+from . import new_member_updater
 
 SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
 

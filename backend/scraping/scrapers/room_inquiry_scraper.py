@@ -30,8 +30,8 @@ import time
 import argparse
 from datetime import datetime
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from config import OUTPUT_FOLDER, BASE_URL, HEADLESS
-from login import login
+from ..config import OUTPUT_FOLDER, BASE_URL, HEADLESS
+from ..login import login
 
 # ─────────────────────────────────────────────
 # CONFIG

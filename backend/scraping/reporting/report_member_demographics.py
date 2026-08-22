@@ -4,8 +4,8 @@ report_member_demographics.py — Downloads the Member Demographics report (ID 5
 import os
 from datetime import datetime
 
-from config import OUTPUT_FOLDER, REPORTS_FOLDER
-from report_utils import find_reports_frame
+from ..config import OUTPUT_FOLDER, REPORTS_FOLDER
+from .report_utils import find_reports_frame
 
 REPORT_ID   = 7
 REPORT_NAME = "member_demographics"

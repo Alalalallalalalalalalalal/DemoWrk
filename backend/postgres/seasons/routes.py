@@ -1,4 +1,4 @@
-# backend/postgres/analytics_seasons.py
+# backend/postgres/seasons/routes.py
 """
 Season group / season CRUD and the season-summary + season-members lookup
 endpoints. Seasons are date-range definitions (e.g. "Winter Peak": Dec 15 -
@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from .analytics_shared import get_db
+from ..analytics_shared import get_db
 
 router = APIRouter()
 

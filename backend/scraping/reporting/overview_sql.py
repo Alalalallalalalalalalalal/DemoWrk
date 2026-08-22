@@ -77,15 +77,6 @@ DB_CONFIG = {
     "options":             "-c statement_timeout=0",
 }
 
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-# Searched in order — first hit wins
-ROOM_LOOKUP_CANDIDATES = [
-    os.path.join(_SCRIPT_DIR, "room_lookup.csv"),
-    os.path.join(_SCRIPT_DIR, "reports", "room_lookup.csv"),
-    os.path.join(os.path.dirname(_SCRIPT_DIR), "room_lookup.csv"),
-    os.path.join(os.path.dirname(_SCRIPT_DIR), "playwright", "room_lookup.csv"),
-]
-
 REFRESH_STATEMENTS = [
     # Order matters: villa_bookings reads from transaction_lines;
     # booking_meta is independent of both.
@@ -1608,60 +1599,6 @@ REFRESH MATERIALIZED VIEW overview_villa_bookings;
 """
 
 
-def load_room_lookup(conn):
-    """Load room_lookup.csv into a room_lookup table. The table is ALWAYS
-    created (even empty) so the backfill SQL can reference it safely."""
-    import csv as _csv
-
-    csv_path = next((p for p in ROOM_LOOKUP_CANDIDATES if os.path.exists(p)), None)
-
-    rows = []
-    if csv_path:
-        with open(csv_path, newline="", encoding="utf-8") as f:
-            rows = [r for r in _csv.DictReader(f) if r.get("room_number")]
-    else:
-        print("  WARNING: room_lookup.csv not found — bedroom backfill will")
-        print("  rely on the other sources only. Searched:")
-        for p in ROOM_LOOKUP_CANDIDATES:
-            print(f"    {p}")
-
-    with conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS room_lookup (
-                room_number   VARCHAR(50) PRIMARY KEY,
-                villa_name    VARCHAR(255),
-                display_name  VARCHAR(255),
-                max_persons   INTEGER,
-                bedroom_count INTEGER,
-                room_id       VARCHAR(50),
-                room_type_id  VARCHAR(50)
-            )
-        """)
-        for r in rows:
-            cur.execute("""
-                INSERT INTO room_lookup
-                    (room_number, villa_name, display_name, max_persons,
-                     bedroom_count, room_id, room_type_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (room_number) DO UPDATE SET
-                    villa_name = EXCLUDED.villa_name,
-                    display_name = EXCLUDED.display_name,
-                    max_persons = EXCLUDED.max_persons,
-                    bedroom_count = EXCLUDED.bedroom_count,
-                    room_id = EXCLUDED.room_id,
-                    room_type_id = EXCLUDED.room_type_id
-            """, (
-                r.get("room_number"), r.get("villa_name"),
-                r.get("display_name"),
-                int(r["max_persons"]) if r.get("max_persons") else None,
-                int(r["bedroom_count"]) if r.get("bedroom_count") else None,
-                r.get("room_id"), r.get("room_type_id"),
-            ))
-    conn.commit()
-    if rows:
-        print(f"  room_lookup: {len(rows)} rooms loaded from {csv_path}")
-
-
 def run_sql(conn, sql, label):
     """Execute a multi-statement SQL block as one command."""
     print(f"Running {label} ...")
@@ -1795,7 +1732,6 @@ def main():
         else:
             if not args.views_only:
                 run_sql(conn, CLASSIFICATION_SQL, "folio classification")
-                load_room_lookup(conn)
                 run_sql(conn, RATE_DETAILS_BACKFILL_SQL, "rate details backfill")
             if not args.classify_only:
                 # Dependency order: statement views -> unified ledger ->

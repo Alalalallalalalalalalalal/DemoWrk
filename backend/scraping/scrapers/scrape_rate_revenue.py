@@ -54,10 +54,10 @@ except ImportError:
 from playwright.sync_api import sync_playwright
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-from config import BASE_URL, HEADLESS
+from ..config import BASE_URL, HEADLESS
 
-FOLIO_CSV            = Path(__file__).parent / "reports" / "folio_report.csv"
-REPORTS_DIR          = Path(__file__).parent / "reports"
+FOLIO_CSV            = Path(__file__).parent.parent / "reports" / "folio_report.csv"
+REPORTS_DIR          = Path(__file__).parent.parent / "reports"
 FREE_DETAIL_CSV      = REPORTS_DIR / "rate_details_free.csv"
 PAID_DETAIL_CSV      = REPORTS_DIR / "rate_details_paid.csv"
 FREE_SUMMARY_CSV     = REPORTS_DIR / "free_revenue_summary.csv"
@@ -65,14 +65,14 @@ PAID_SUMMARY_CSV     = REPORTS_DIR / "paid_revenue_summary.csv"
 DONE_LOG             = REPORTS_DIR / "rate_details_done.txt"
 
 # If folio_report.csv is in the same folder as this script, use:
-# FOLIO_CSV = Path(__file__).parent / "folio_report.csv"
+# FOLIO_CSV = Path(__file__).parent.parent / "folio_report.csv"
 REQUEST_DELAY  = 2.0   # seconds between requests — gives page time to fully load
 
 # room_lookup.csv — used to get room_type_id for Checked In reservations
-ROOM_LOOKUP_CSV = Path(__file__).parent.parent / "playwright" / "room_lookup.csv"
+ROOM_LOOKUP_CSV = Path(__file__).parent.parent.parent / "scraping" / "room_lookup.csv"
 # Also try same folder
 if not ROOM_LOOKUP_CSV.exists():
-    ROOM_LOOKUP_CSV = Path(__file__).parent / "room_lookup.csv"
+    ROOM_LOOKUP_CSV = Path(__file__).parent.parent / "room_lookup.csv"
 
 # ── LOGIN (reuse from your login.py or paste credentials here) ───────────────
 USERNAME = None   # set to string or leave None to import from login module
@@ -90,8 +90,7 @@ def get_session_cookies(headless=HEADLESS):
         page    = browser.new_page()
         try:
             # Try importing your existing login module
-            sys.path.insert(0, str(Path(__file__).parent))
-            from login import login as do_login
+            from ..login import login as do_login
             do_login(page)
             print("  Logged in via login.py")
         except Exception as e:
@@ -146,10 +145,10 @@ def load_room_lookup():
     lookup = {}
     candidates = [
         ROOM_LOOKUP_CSV,
-        Path(__file__).parent / "reports" / "room_lookup.csv",  # same folder as folio_report.csv
-        Path(__file__).parent / "room_lookup.csv",
+        Path(__file__).parent.parent / "reports" / "room_lookup.csv",  # same folder as folio_report.csv
         Path(__file__).parent.parent / "room_lookup.csv",
-        Path(__file__).parent.parent / "playwright" / "room_lookup.csv",
+        Path(__file__).parent.parent.parent / "room_lookup.csv",
+        Path(__file__).parent.parent.parent / "scraping" / "room_lookup.csv",
     ]
     csv_path = next((c for c in candidates if c.exists()), None)
     if not csv_path:
@@ -209,8 +208,8 @@ def load_folio_report():
     csv_path = FOLIO_CSV
     candidates = [
         FOLIO_CSV,
-        Path(__file__).parent / "folio_report.csv",
-        Path(__file__).parent / "reports" / "folio_report.csv",
+        Path(__file__).parent.parent / "folio_report.csv",
+        Path(__file__).parent.parent / "reports" / "folio_report.csv",
     ]
     for c in candidates:
         if c.exists():

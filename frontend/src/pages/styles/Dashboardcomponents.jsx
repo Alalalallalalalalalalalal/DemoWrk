@@ -1,7 +1,7 @@
 // /frontend/src/pages/Dashboardcomponents.jsx
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { Star, Hash, MapPin, Info } from "lucide-react";
-import { useState, useRef, useCallback } from "react";
+import { Component, useState, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { styles, COLORS, TOOLTIP_STYLE } from "./Dashboardstyles";
 
@@ -611,4 +611,41 @@ export function DirectoryRow({ m, i }) {
       </td>
     </tr>
   );
+}
+
+/* ─── Reusable Card wrapper ──────────────────────────────────── */
+export function Card({ title, sub, children }) {
+  return (
+    <div className="dashboard-card">
+      <div className="dashboard-eyebrow">{sub}</div>
+      <h2 className="dashboard-card-title">{title}</h2>
+      {children}
+    </div>
+  );
+}
+
+/* ─── Error boundary ─────────────────────────────────────────── */
+export class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error(`${this.props.title} crashed:`, error, info);
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="dashboard-error">
+        <strong>{this.props.title} could not render.</strong>
+        <div className="dashboard-error-message">
+          {this.state.error?.message ||
+            "Check the browser console for details."}
+        </div>
+      </div>
+    );
+  }
 }

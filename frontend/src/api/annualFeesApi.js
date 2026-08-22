@@ -1,5 +1,5 @@
-// frontend/src/api/villaFeesApi.js
-// API client for the Villa Fees tab, including the dues history endpoints.
+// frontend/src/api/annualFeesApi.js
+// API client for the Annual Fees tab, including the dues history endpoints.
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -14,7 +14,7 @@ async function fetchData(endpoint) {
     return response.json();
 }
 
-export const villaFeesApi = {
+export const annualFeesApi = {
     // ── single-year villa fee overview (existing tab) ──
     years: () => fetchData("/analytics/villa-fees/years"),
     summary: (year) => fetchData(`/analytics/villa-fees/summary?year=${year}`),

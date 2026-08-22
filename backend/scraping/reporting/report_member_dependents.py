@@ -4,8 +4,8 @@ report_member_dependents.py — Downloads the Member Dependents report (ID 6).
 import os
 from datetime import datetime
 
-from config import OUTPUT_FOLDER, REPORTS_FOLDER
-from report_utils import find_reports_frame
+from ..config import OUTPUT_FOLDER, REPORTS_FOLDER
+from .report_utils import find_reports_frame
 
 REPORT_ID   = 6
 REPORT_NAME = "member_dependents"

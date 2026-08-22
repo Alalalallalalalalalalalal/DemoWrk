@@ -1,4 +1,4 @@
-// frontend/src/pages/VillaFeesTab.jsx
+// frontend/src/pages/annual-fees/AnnualFeesTab.jsx
 //
 // Annual Fees for Members - annual Maintenance Fee + Capital Expenditure
 // Contribution billed per villa, from statement_details.
@@ -32,7 +32,7 @@ import {
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { villaFeesApi } from "../api/villaFeesApi";
+import { annualFeesApi } from "../../api/annualFeesApi";
 import DuesHistorySection from "./DuesHistorySection";
 
 const serif = "'Cormorant Garamond', serif";
@@ -373,7 +373,7 @@ const feeBadge = (feeType) => FEE_BADGE_COLORS[feeType] ?? FEE_BADGE_FALLBACK;
 
 /* ─── main tab ──────────────────────────────────────────────────── */
 
-export default function VillaFeesTab() {
+export default function AnnualFeesTab() {
     const [years, setYears] = useState([]);
     const [year, setYear] = useState(null);
     const [summary, setSummary] = useState(null);
@@ -388,7 +388,7 @@ export default function VillaFeesTab() {
 
     // Load available years once, default to the latest.
     useEffect(() => {
-        villaFeesApi
+        annualFeesApi
             .years()
             .then((ys) => {
                 const list = (ys ?? []).map((r) => r.year).filter(Boolean);
@@ -407,9 +407,9 @@ export default function VillaFeesTab() {
         setLoading(true);
         setError(null);
         Promise.all([
-            villaFeesApi.summary(year),
-            villaFeesApi.byVilla(year),
-            villaFeesApi.report(year),
+            annualFeesApi.summary(year),
+            annualFeesApi.byVilla(year),
+            annualFeesApi.report(year),
         ])
             .then(([s, v, r]) => {
                 setSummary(s ?? null);

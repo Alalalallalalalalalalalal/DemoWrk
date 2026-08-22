@@ -1,9 +1,9 @@
-# backend/postgres/analytics_marketing.py
+# backend/postgres/marketing/routes.py
 """
 Marketing targeting endpoints for ML Insights.
 
 Adds action-ready marketing audiences that can be exported to MailLink or any
-email platform. This module is intentionally separate from analytics_ml_insights.py
+email platform. This module is intentionally separate from ml_insights/routes.py
 so descriptive ML analytics and marketing execution stay cleanly separated.
 
 Routes, once included under /analytics by backend/postgres/analytics.py:
@@ -20,7 +20,7 @@ from typing import Any
 import re
 
 
-from .analytics_shared import get_db
+from ..analytics_shared import get_db
 
 router = APIRouter()
 
@@ -737,7 +737,7 @@ def marketing_campaigns(
     # [2026-08-13] Was: BASE_MARKETING_CTES (folios joined to members/
     # member_addresses/member_phones, live regex amenity classification,
     # non-indexed season-range join — the same expensive pattern fixed in
-    # analytics_ml_insights.py, but heavier here since marketing_folios
+    # ml_insights/routes.py, but heavier here since marketing_folios
     # scans ALL of folios, not just amenity-matching rows) re-executed
     # from scratch for EVERY campaign definition in the loop below. With
     # several hardcoded CAMPAIGN_DEFINITIONS, that's N full re-computations

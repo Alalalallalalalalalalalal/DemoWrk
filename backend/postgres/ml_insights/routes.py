@@ -1,4 +1,4 @@
-# backend/postgres/analytics_ml_insights.py
+# backend/postgres/ml_insights/routes.py
 """
 Machine-learning-adjacent analytics endpoints:
 
@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from .analytics_shared import get_db
+from ..analytics_shared import get_db
 
 router = APIRouter()
 

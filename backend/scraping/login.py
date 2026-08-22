@@ -1,7 +1,7 @@
 """
 login.py — Handles portal login.
 """
-from config import USERNAME, PASSWORD, PORTAL_URL
+from .config import USERNAME, PASSWORD, PORTAL_URL
 import time
 
 def get_frame_by_url(page, keyword):

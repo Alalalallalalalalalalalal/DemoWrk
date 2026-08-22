@@ -1,4 +1,4 @@
-# backend/postgres/analytics_tables.py
+# backend/postgres/tables/routes.py
 """
 Generic table-browsing endpoints used by the report builder UI: lists which
 tables are exposable, dumps a whole allowed table, or does a simple
@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
-from .analytics_shared import get_db
+from ..analytics_shared import get_db
 
 router = APIRouter()
 

@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from postgres.analytics import router as analytics_router
-from postgres.finance.routes import router as finance_router
+from postgres.finance import router as finance_router
 from postgres.overview.routes import router as overview_router #For overview analytics
 
 app = FastAPI()

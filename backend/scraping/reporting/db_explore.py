@@ -3,7 +3,7 @@ db_explore.py — Read-only diagnostic queries to understand data shape.
 No data is written or changed. Safe to run at any time.
 
 Usage:
-    python backend/playwright/db_explore.py
+    cd backend && python -m scraping.reporting.db_explore
 """
 
 import os

@@ -39,16 +39,16 @@ from datetime import datetime
 from multiprocessing import Pool
 import sys
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from config import OUTPUT_FOLDER, BASE_URL, HEADLESS
-from login import login
-from room_inquiry_scraper import get_payment_type
+from ..config import OUTPUT_FOLDER, BASE_URL, STATE_FOLDER, HEADLESS
+from ..login import login
+from .room_inquiry_scraper import get_payment_type
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
 JOURNAL_FOLDER       = os.path.join(OUTPUT_FOLDER, "journal")
 SCREENSHOT_FOLDER     = os.path.join(OUTPUT_FOLDER, "screenshots")
 REPORTS_FOLDER        = os.path.join(OUTPUT_FOLDER, "reports")
-DONE_LOG              = os.path.join(OUTPUT_FOLDER, "folio_done.txt")
+DONE_LOG              = os.path.join(STATE_FOLDER, "folio_done.txt")
 FOLIO_REPORT_CSV      = os.path.join(REPORTS_FOLDER, "folio_report.csv")
 # Enrichment is written back onto folio_report.csv itself (in place).
 ENRICHED_REPORT_CSV   = FOLIO_REPORT_CSV
@@ -821,7 +821,7 @@ def scrape_reservation(page, reservation_row, prefix=""):
     pr(prefix, f"  Payment Type: {listing_meta['Payment Type']}")
     # ── Bedroom count + Villa Name: fall back to room lookup if still unresolved ──
     if not listing_meta.get("Bedroom Count") or not listing_meta.get("Villa Name"):
-        from room_inquiry_scraper import get_bedroom_count_from_lookup, load_room_lookup
+        from .room_inquiry_scraper import get_bedroom_count_from_lookup, load_room_lookup
         lookup = load_room_lookup()
         room_row = lookup.get(room_unit.upper(), {})
         if not listing_meta.get("Bedroom Count"):

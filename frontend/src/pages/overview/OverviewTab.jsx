@@ -1,9 +1,9 @@
-// frontend/src/pages/OverviewTab.jsx
+// frontend/src/pages/overview/OverviewTab.jsx
 
 import { createContext, useContext, useState, useMemo } from "react";
 import { ArrowUpRight } from "lucide-react";
-import { InfoTip } from "./styles/Dashboardcomponents";
-import { FinancePeriodFilter } from "./finance/FinanceShared";
+import { InfoTip } from "../styles/Dashboardcomponents";
+import { FinancePeriodFilter } from "../finance/FinanceShared";
 
 const serif = "'Cormorant Garamond', serif";
 
@@ -172,7 +172,7 @@ function FixedTooltip() {
     const isSections = Array.isArray(text);
     return (
         <>
-            {/* click-away backdrop, same pattern as VillaFeesTab's InfoButton */}
+            {/* click-away backdrop, same pattern as AnnualFeesTab's InfoButton */}
             <div
                 onClick={() => ctx.hide()}
                 style={{ position: "fixed", inset: 0, zIndex: 9998 }}

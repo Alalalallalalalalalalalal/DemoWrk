@@ -16,8 +16,8 @@ import calendar
 import argparse
 from datetime import datetime, date
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from config import OUTPUT_FOLDER, BASE_URL, HEADLESS
-from login import login, get_frame_by_url
+from ..config import OUTPUT_FOLDER, BASE_URL, STATE_FOLDER, HEADLESS
+from ..login import login, get_frame_by_url
 
 # ─────────────────────────────────────────────
 # CONFIG
@@ -25,7 +25,7 @@ from login import login, get_frame_by_url
 REPORTS_FOLDER    = os.path.join(OUTPUT_FOLDER, "reports")
 SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
 FOLIO_REPORT_CSV  = os.path.join(REPORTS_FOLDER, "folio_report.csv")  # combined/master file
-DONE_LOG          = os.path.join(OUTPUT_FOLDER, "folio_report_done.txt")
+DONE_LOG          = os.path.join(STATE_FOLDER, "folio_report_done.txt")
 
 NAV_TIMEOUT        = 15000
 FRAME_TIMEOUT      = 8000

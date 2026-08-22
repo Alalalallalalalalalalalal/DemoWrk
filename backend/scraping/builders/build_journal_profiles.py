@@ -23,10 +23,10 @@ import csv
 import glob
 import argparse
 
-from config import OUTPUT_FOLDER, REPORTS_FOLDER
+from ..config import OUTPUT_FOLDER, REPORTS_FOLDER, DATA_FOLDER
 
 # ─────────────────────────────────────────────
-MAP_FILE       = os.path.join(OUTPUT_FOLDER, "member_id_map.csv")
+MAP_FILE       = os.path.join(DATA_FOLDER, "member_id_map.csv")
 JOURNAL_FOLDER = os.path.join(OUTPUT_FOLDER, "journal")
 GENERIC_LABELS = {"Guests", "Dependent", "Guest", "Staff"}
 # ─────────────────────────────────────────────
