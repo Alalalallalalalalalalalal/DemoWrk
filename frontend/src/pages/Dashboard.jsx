@@ -66,6 +66,9 @@ import FinanceTab from "./finance/FinanceTab";
 //Overview tab components
 import OverviewTab from "./OverviewTab";
 
+// New vs Repeat Guest Revenue — its own tab (not nested inside Marketing)
+import GuestRevenueTab from "./GuestRevenueTab";
+
 /* ─── Sidebar nav config ─────────────────────────────────────── */
 const TABS = [
   { id: "overview", label: "Overview", Icon: LayoutDashboard },
@@ -76,6 +79,7 @@ const TABS = [
   { id: "market", label: "Marketing Targeting", Icon: PartyPopper },
   { id: "ml", label: "ML Insights", Icon: Sparkles },
   { id: "villa_fees", label: "Annual Fees", Icon: Home },
+  { id: "guest_revenue", label: "Guest Revenue", Icon: TrendingUp },
 ];
 
 const SUB = {
@@ -87,6 +91,7 @@ const SUB = {
   market: "Analysis and Insights on market Targeting",
   ml: "Segmentation, amenity insights and campaign recommendations — all monetary figures in $USD",
   villa_fees: "Maintenance, Capital Expenditure and membership dues billed per villa",
+  guest_revenue: "New vs repeat guest revenue — trends by month and summary averages",
 };
 
 /* ─── Recharts shared props ──────────────────────────────────── */
@@ -592,6 +597,13 @@ export default function Dashboard() {
 
         {/* ════ VILLA FEES (TEST) ════ */}
         {activeTab === "villa_fees" && <VillaFeesTab />}
+
+        {/* ════ GUEST REVENUE (New vs Repeat) ════ */}
+        {activeTab === "guest_revenue" && (
+          <ErrorBoundary title="Guest Revenue">
+            <GuestRevenueTab />
+          </ErrorBoundary>
+        )}
 
         {/* ════ REPORTS ════ */}
         {activeTab === "reports" && (

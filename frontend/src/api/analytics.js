@@ -43,6 +43,37 @@ export const analyticsApi = {
   // Combined dashboard endpoint
   dashboardSummary: () => fetchData("/analytics/dashboard-summary"),
 
+    // ── Guest Revenue ────────────────────────────────────────────────
+  guestRevenueNewVsRepeat: (params = {}) =>
+    fetchData(
+      withQuery("/analytics/guest-revenue/new-vs-repeat", params),
+    ),
+
+  guestRevenueNewVsRepeatSummary: (params = {}) =>
+    fetchData(
+      withQuery("/analytics/guest-revenue/new-vs-repeat/summary", params),
+    ),
+
+  // Accounts behind one chart bar / trend-table cell — requires
+  // params.guest_status ("New" or "Repeat") plus the same year/month or
+  // start_date/end_date shape the two calls above use.
+  guestRevenueAccounts: (params = {}) =>
+    fetchData(
+      withQuery("/analytics/guest-revenue/new-vs-repeat/accounts", params),
+    ),
+
+  // One guest's revenue-by-source breakdown for a given period (same
+  // year/month params as guestRevenueAccounts, scoped to that one guest).
+  guestRevenueAccountBreakdown: (memberNumber, params = {}) =>
+    fetchData(
+      withQuery(
+        `/analytics/guest-revenue/new-vs-repeat/account/${encodeURIComponent(
+          memberNumber,
+        )}/breakdown`,
+        params,
+      ),
+    ),
+
   // Demographics detail endpoints
   demographicsSummary: (params = {}) =>
     fetchData(withQuery("/analytics/demographics-summary", params)),
