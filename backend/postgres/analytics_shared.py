@@ -31,49 +31,56 @@ def one(db: Session, sql: str, params: dict | None = None):
 
 
 def date_filter_sql(alias="f", column="check_in_date"):
+    """
+    [2026-08-20 REARCHITECTED] Was a stay-OVERLAP filter (check_in <= end
+    AND check_out >= start), which double-counts any stay whose date
+    range crosses a period boundary — e.g. a Dec 28 -> Jan 3 stay was
+    counted in BOTH the 2025 and 2026 totals when each was queried
+    separately. overview_date_filter_sql()'s "checkin" mode (see
+    overview_analytics.py) already fixed exactly this for Overview back
+    on 2026-07-19 (its own comment cites a live $1.22M/55-stay double
+    count) by attributing a stay's ENTIRE revenue to the period
+    containing its check-in date, not every period it happens to
+    overlap. Per explicit direction that Finance and Overview's numbers
+    must match, Finance now uses the same rule — this is a straight port
+    of overview_date_filter_sql()'s "checkin" branch onto the
+    alias/column signature this function's ~10 call sites already use.
+
+    [2026-08-20, same pass] Also added the COMPLETED-STAY CUTOFF:
+    revenue only counts once a stay has checked out. An in-progress
+    stay's folio is still open (comps/adjustments/credits can still
+    land before departure), so Finance was counting already-posted
+    charges from currently-checked-in guests immediately while Overview
+    held them back until checkout (see overview_stripped_lines in
+    overview_sql.py, same rule) — a live example: a $463.75 restaurant
+    charge on a stay checked in Aug 10 with checkout Sep 3 showed in
+    Finance's Amenities total but not Overview's, entirely explaining
+    the last few hundred dollars of an otherwise-reconciled figure. Per
+    explicit direction, Finance now waits for checkout too. Assumes
+    `{alias}` has a check_out_date column — true for every current call
+    site (all alias="f"/folios).
+    """
     d = f"{alias}.{column}"
     out = f"{alias}.check_out_date"
 
     return f"""
       AND (
-        (:date IS NULL AND :start_date IS NULL AND :end_date IS NULL)
-        OR (
-          :date IS NOT NULL
-          AND {d} <= :date
-          AND {out} >= :date
-        )
-        OR (
-          :date IS NULL
-          AND :start_date IS NOT NULL
-          AND :end_date IS NOT NULL
-          AND {d} <= :end_date
-          AND {out} >= :start_date
-        )
+        CASE
+            WHEN :start_date IS NOT NULL OR :end_date IS NOT NULL THEN
+                {d} >= COALESCE(:start_date, {d})
+                AND {d} <= COALESCE(:end_date, {d})
+            WHEN :date IS NOT NULL THEN
+                {d} = :date
+            WHEN :year IS NOT NULL AND :month IS NOT NULL THEN
+                {d} >= MAKE_DATE(:year, :month, 1)
+                AND {d} <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::date
+            WHEN :year IS NOT NULL THEN
+                {d} >= MAKE_DATE(:year, 1, 1)
+                AND {d} <= MAKE_DATE(:year, 12, 31)
+            ELSE TRUE
+        END
       )
-      AND (
-        :date IS NOT NULL OR :start_date IS NOT NULL OR :end_date IS NOT NULL
-        OR :year IS NULL
-        OR (
-          {d} <= MAKE_DATE(:year, 12, 31)
-          AND {out} >= MAKE_DATE(:year, 1, 1)
-        )
-      )
-      AND (
-        :date IS NOT NULL OR :start_date IS NOT NULL OR :end_date IS NOT NULL
-        OR :month IS NULL
-        OR (
-          :year IS NOT NULL
-          AND {d} <= (MAKE_DATE(:year, :month, 1) + INTERVAL '1 month - 1 day')::DATE
-          AND {out} >= MAKE_DATE(:year, :month, 1)
-        )
-        OR (
-          :year IS NULL
-          AND (
-            EXTRACT(MONTH FROM {d})::INT = :month
-            OR EXTRACT(MONTH FROM {out})::INT = :month
-          )
-        )
-      )
+      AND ({out} IS NULL OR {out} < CURRENT_DATE)
     """
 
 

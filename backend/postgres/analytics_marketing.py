@@ -734,11 +734,32 @@ def marketing_campaigns(
     cards = []
     definitions = _get_campaign_definitions(db, include_inactive=include_inactive)
 
+    # [2026-08-13] Was: BASE_MARKETING_CTES (folios joined to members/
+    # member_addresses/member_phones, live regex amenity classification,
+    # non-indexed season-range join — the same expensive pattern fixed in
+    # analytics_ml_insights.py, but heavier here since marketing_folios
+    # scans ALL of folios, not just amenity-matching rows) re-executed
+    # from scratch for EVERY campaign definition in the loop below. With
+    # several hardcoded CAMPAIGN_DEFINITIONS, that's N full re-computations
+    # of the heaviest query in the codebase per page load — this endpoint
+    # was hanging past a 30s timeout. Materialize member_profile once,
+    # then run each campaign's cheap filter/aggregate against that.
+    db.execute(text("DROP TABLE IF EXISTS _marketing_member_profile"))
+    db.execute(text(f"""
+        CREATE TEMP TABLE _marketing_member_profile
+        ON COMMIT DROP AS
+        {BASE_MARKETING_CTES}
+        SELECT * FROM member_profile
+    """))
+    db.execute(text(
+        "CREATE INDEX ON _marketing_member_profile (member_number)"
+    ))
+    db.execute(text("ANALYZE _marketing_member_profile"))
+
     for key, campaign in definitions.items():
         if not include_inactive and not campaign.get("is_active", True):
             continue
         sql = f"""
-            {BASE_MARKETING_CTES}
             SELECT
                 COUNT(*)::INT AS member_count,
                 ROUND(COALESCE(SUM(lifetime_spend), 0)::NUMERIC, 2) AS potential_revenue,
@@ -750,7 +771,7 @@ def marketing_campaigns(
                 COUNT(DISTINCT preferred_villa)::INT AS villa_count,
                 COUNT(DISTINCT preferred_amenity)::INT AS amenity_count,
                 COUNT(DISTINCT business_source)::INT AS source_count
-            FROM member_profile
+            FROM _marketing_member_profile
             WHERE {_validate_sql_piece(campaign['where'], 'where')}
         """
         stats = _rows(db, sql)[0]

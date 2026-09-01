@@ -141,6 +141,8 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
 
   // ── fetch all sections in parallel, re-run whenever period changes ──
   useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
     const periodParams = periodToParams(period);
 
     setLoadingMap({
@@ -148,39 +150,44 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
     });
     setErrorMap({});
 
+    const ignoreAbort = (setErrFn) => (e) => {
+      if (e.name === "AbortError") return; // expected when period changes mid-flight — not a real error
+      setErrFn(e.message);
+    };
+
     // Overview
-    financeApi.overview(periodParams)
+    financeApi.overview(periodParams, { signal })
       .then(setOverview)
-      .catch((e) => setErr("overview", e.message))
+      .catch((e) => ignoreAbort(setErr)("overview", e.message))
       .finally(() => setLoad("overview", false));
 
-    financeApi.categoryCompBreakdown(periodParams)
+    financeApi.categoryCompBreakdown(periodParams, { signal })
       .then(setCategoryBreakdown)
-      .catch((e) => setErr("category", e.message))
+      .catch((e) => ignoreAbort(setErr)("category", e.message))
       .finally(() => setLoad("category", false));
 
     // Source breakdown
-    financeApi.sourceBreakdown(periodParams)
+    financeApi.sourceBreakdown(periodParams, { signal })
       .then(setSourceBdown)
-      .catch((e) => setErr("source", e.message))
+      .catch((e) => ignoreAbort(setErr)("source", e.message))
       .finally(() => setLoad("source", false));
 
     // Member vs Guest
-    financeApi.memberVsGuest(periodParams)
+    financeApi.memberVsGuest(periodParams, { signal })
       .then(setMemberGuest)
-      .catch((e) => setErr("memberGuest", e.message))
+      .catch((e) => ignoreAbort(setErr)("memberGuest", e.message))
       .finally(() => setLoad("memberGuest", false));
 
     // Villa revenue
-    financeApi.villaRevenue(periodParams)
+    financeApi.villaRevenue(periodParams, { signal })
       .then(setVillaRevenue)
-      .catch((e) => setErr("villa", e.message))
+      .catch((e) => ignoreAbort(setErr)("villa", e.message))
       .finally(() => setLoad("villa", false));
 
     // Amenity revenue
-    financeApi.amenityRevenue(periodParams)
+    financeApi.amenityRevenue(periodParams, { signal })
       .then(setAmenityRevenue)
-      .catch((e) => setErr("amenity", e.message))
+      .catch((e) => ignoreAbort(setErr)("amenity", e.message))
       .finally(() => setLoad("amenity", false));
 
     // Villa net revenue (for CategoryCompBreakdown card)
@@ -188,9 +195,12 @@ const [period, setPeriod] = useState(DEFAULT_PERIOD);
     const yearParam = /^\d{4}$/.test(String(period.year))
       ? { years: String(period.year) }
       : {};
-    financeApi.villaStatementTotals(yearParam)
+      
+    financeApi.villaStatementTotals(yearParam, { signal })
       .then((r) => setVillaTotals(Array.isArray(r) ? (r[0] ?? null) : r))
-      .catch((e) => console.error("villaStatementTotals failed:", e));
+      .catch((e) => ignoreAbort(setErr)("villaStatementTotals", e.message));
+    
+    return () => controller.abort(); // cancel any in-flight requests if period changes before they finish
   }, [period]);
 
   // ── drawer helpers ─────────────────────────────────────────────

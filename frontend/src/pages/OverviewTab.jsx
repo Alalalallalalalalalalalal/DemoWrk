@@ -524,13 +524,10 @@ export default function OverviewTab({
     directoryMembers = [], // No longer populated by dashboard.jsx (was always []); "With email on file" now uses emailOnFile below instead. `checkedIn` further down still reads this but is dead/unrendered.
     emailOnFile = null,
     memberDuesSummary = null,
-    outstandingBalanceSummary = null,
-    memberVsGuestRevenue = [], // DEPRECATED — no longer read; superseded by transactionMemberVsGuestRevenue. Safe to stop passing this from dashboard.jsx.
     villaStats = [],
     visitsTabSummary = null,
     bedroomBookings = [],
     villaRevenue = [], // DEPRECATED — no longer read; superseded by villaAmenityRevenue. Safe to stop passing this from dashboard.jsx.
-    monthlyRevenue = [], // DEPRECATED — no longer read; superseded by monthlyRevenueByCategory. Safe to stop passing this from dashboard.jsx.
     transactionFinanceSummary = [],
     transactionMemberVsGuestRevenue = [],
     transactionMemberVsGuestRevenueByCategory = [],
@@ -612,10 +609,18 @@ export default function OverviewTab({
         const villa = filteredMemberGuestByCategory.find(r => r.customerType === customerType && r.line_category === "Villa");
         const amenity = filteredMemberGuestByCategory.find(r => r.customerType === customerType && r.line_category === "Amenity");
         const membership = filteredMemberGuestByCategory.find(r => r.customerType === customerType && r.line_category === "Membership");
+        // [2026-08-20] 4th bucket — the backend's card_category_case is
+        // now Villa/Amenity/Membership/Service (was 3-way, with Service
+        // folded silently into Amenity — see that endpoint's comment for
+        // why: it was inflating this card's amenity figure well past
+        // Finance's Amenities Revenue, e.g. reported live at $30.5M
+        // instead of the true ~$26.7M).
+        const service = filteredMemberGuestByCategory.find(r => r.customerType === customerType && r.line_category === "Service");
         return {
             villaRevenue: villa?.revenue ?? 0,
             amenityRevenue: amenity?.revenue ?? 0,
             membershipRevenue: membership?.revenue ?? 0,
+            serviceRevenue: service?.revenue ?? 0,
         };
     };
 
@@ -828,6 +833,14 @@ export default function OverviewTab({
     const financeLines = applyLineStatusFilter(transactionFinanceSummary, financeFilter, r => `${r.line_category}`);
     const financeVillaRevenue = financeLines.find(r => r.line_category === "Villa")?.total_amount ?? 0;
     const financeAmenityRevenue = financeLines.find(r => r.line_category === "Amenity")?.total_amount ?? 0;
+    // [2026-08-20] overview_line_category is now a 3-way Villa/Amenity/
+    // Service split (was Villa/Amenity — see overview_sql.py's
+    // 2026-08-20 rearchitecture). Service covers Membership, Adjustment,
+    // Transport, Laundry, etc. — real revenue that must count toward
+    // "Rev. per transaction" below (its transaction_count already
+    // includes these rows via financeLines.reduce, so leaving Service
+    // out of the dollar total would understate revenue per transaction).
+    const financeServiceRevenue = financeLines.find(r => r.line_category === "Service")?.total_amount ?? 0;
     // Kept as the literal NET total (always exactly $0 under the Free
     // filter, by definition - see overview_views.sql's 'Free' status
     // docstring) deliberately, NOT switched to gross/value-given-away —
@@ -838,7 +851,7 @@ export default function OverviewTab({
     // finTotalSplit below) so its headline number agrees with its own
     // sub-text and the Member vs Guest card, without changing what
     // Rev. per transaction means.
-    const totalVillaRevenue = financeVillaRevenue + financeAmenityRevenue;
+    const totalVillaRevenue = financeVillaRevenue + financeAmenityRevenue + financeServiceRevenue;
     const financeTransactionCount = financeLines.reduce((a, b) => a + (b.transaction_count || 0), 0);
     const revPerBooking = financeTransactionCount > 0 ? totalVillaRevenue / financeTransactionCount : null;
 
@@ -866,10 +879,16 @@ export default function OverviewTab({
         const villa = filteredFinanceByCategory.find(r => r.customerType === customerType && r.line_category === "Villa");
         const amenity = filteredFinanceByCategory.find(r => r.customerType === customerType && r.line_category === "Amenity");
         const membership = filteredFinanceByCategory.find(r => r.customerType === customerType && r.line_category === "Membership");
+        // [2026-08-20] 4th bucket, see memberGuestCategorySplit's comment
+        // above — without this, its dollars were silently folded into
+        // amenityRevenue, inflating this card's Amenity figure past
+        // Finance's Amenities Revenue.
+        const service = filteredFinanceByCategory.find(r => r.customerType === customerType && r.line_category === "Service");
         return {
             villaRevenue: villa?.revenue ?? 0,
             amenityRevenue: amenity?.revenue ?? 0,
             membershipRevenue: membership?.revenue ?? 0,
+            serviceRevenue: service?.revenue ?? 0,
         };
     };
     const finMemberSplit = financeCategorySplit("Member");
@@ -884,6 +903,10 @@ export default function OverviewTab({
     // regardless of who it's attributed to, unlike the Member row's
     // "other", which exists only to avoid implying every member
     // personally pays this fee.
+    // [2026-08-20] serviceRevenue (Adjustment/Transport/Laundry/etc,
+    // see financeCategorySplit) deliberately NOT included in this
+    // card's total or sub-text — Villa/Amenity/Membership only, per
+    // request.
     const finTotalSplit = {
         villaRevenue: (finMemberSplit.villaRevenue ?? 0) + (finGuestSplit.villaRevenue ?? 0),
         amenityRevenue: (finMemberSplit.amenityRevenue ?? 0) + (finGuestSplit.amenityRevenue ?? 0),
@@ -909,6 +932,9 @@ export default function OverviewTab({
     const finTotalSubText = (() => {
         const v = Math.abs(finTotalSplit.villaRevenue);
         const a = Math.abs(finTotalSplit.amenityRevenue);
+        // [2026-08-20] Service (Adjustment/Transport/Laundry/etc.) is
+        // deliberately NOT shown or counted here — this card stays a
+        // three-bucket Villa/Amenity/Membership view, per request.
         const membershipAndDues = Math.abs(finTotalSplit.membershipRevenue) + (includeDuesInFinanceTotal ? financeDuesAmount : 0);
         if (v === 0 && a === 0 && membershipAndDues === 0) return undefined;
         return `${money(v)} villa · ${money(a)} amenity · ${money(membershipAndDues)} membership & dues`;
@@ -973,6 +999,10 @@ export default function OverviewTab({
     const monthlyAmenityRows = filteredMonthlyByCategory.filter(r => r.line_category === "Amenity");
     const monthlyVillaByMonth = regroupSum(monthlyVillaRows, "month", ["revenue", "transactions", "bookings"]);
     const monthlyAmenityByMonth = regroupSum(monthlyAmenityRows, "month", ["revenue", "transactions", "bookings"]);
+    // [2026-08-20] Service (Adjustment/Transport/Laundry/etc, see
+    // overview_line_category's 3-way split in overview_sql.py) is
+    // deliberately NOT shown or counted here — this card stays a
+    // two-bucket Villa/Amenity view, per request.
     // Combine into one row per month: villaRevenue, amenityRevenue, and a
     // combined `revenue` total — kept under the same field name `revenue`
     // so peakMonth/Hero KPI band (which only care about the combined
@@ -1375,6 +1405,9 @@ export default function OverviewTab({
                                     // transaction_date per line, filtered to lines matching those
                                     // known dues-type names — see the tooltip's "How Member dues is
                                     // calculated" section for the full logic.
+                                    // [2026-08-20] Service (Adjustment/Transport/Laundry/etc, see
+                                    // memberGuestCategorySplit) deliberately NOT shown or counted
+                                    // here — this card stays a three-bucket view, per request.
                                     const membershipAbs = r.customerType === "Guests"
                                         ? Math.abs(membershipRevenue)
                                         : Math.abs(memberDuesSummary?.total_dues ?? 0);

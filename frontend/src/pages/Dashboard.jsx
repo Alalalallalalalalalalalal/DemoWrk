@@ -131,8 +131,6 @@ export default function Dashboard() {
   const [totalRecentActivitySpend, setTotalRecentActivitySpend] =
     useState(null);
   const [topSpendDescriptions, setTopSpendDescriptions] = useState([]);
-  const [totalAmountDue, setTotalAmountDue] = useState(null);
-  const [amountDueByPeriod, setAmountDueByPeriod] = useState([]);
   const [totalDependents, setTotalDependents] = useState(null);
   const [dependentsPerHousehold, setDependentsPerHousehold] = useState([]);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
@@ -152,12 +150,10 @@ export default function Dashboard() {
   const [exportMenu, setExportMenu] = useState(false);
 
   const [selectedVillaName, setSelectedVillaName] = useState(null);
-  const [memberVsGuestRevenue, setMemberVsGuestRevenue] = useState([]);
   const [villaStats, setVillaStats] = useState([]);
   const [visitsTabSummary, setVisitsTabSummary] = useState(null);
   const [bedroomBookings, setBedroomBookings] = useState([]);
   const [villaRevenue, setVillaRevenue] = useState([]);
-  const [monthlyRevenue, setMonthlyRevenue] = useState([]);
   const [transactionFinanceSummary, setTransactionFinanceSummary] = useState(
     [],
   );
@@ -217,9 +213,14 @@ export default function Dashboard() {
         setDependentsByAgeGroup(data.dependentsByAgeGroup ?? []);
         setDependentsPerMember(data.dependentsPerMember ?? []);
         setDependentsPerHousehold(data.dependentsPerHousehold ?? []);
-        // NOTE: totalAmountDue, amountDueByPeriod, and totalDependents are
-        // intentionally NOT set here anymore — they now come from
-        // /overview/summary below, so there's only one writer for each.
+        // NOTE: totalDependents is intentionally NOT set here anymore — it
+        // comes from /overview/summary below, so there's only one writer.
+        // totalAmountDue / amountDueByPeriod used to follow the same
+        // pattern but were removed entirely on 2026-08-13 — OverviewTab.jsx
+        // stopped reading them back on 2026-07-01 (statements no longer
+        // generate from folios), and overview_analytics.py's /summary
+        // bundle was still computing both on every page load for no
+        // reader. See overview_analytics.py's /overview/summary docstring.
       })
       .catch(console.error);
 
@@ -269,8 +270,6 @@ export default function Dashboard() {
           setVillaStats(data.overviewVillaStats ?? []);
           setVisitsTabSummary(data.overviewVisitsSummary ?? null);
           setBedroomBookings(data.overviewBookingsByBedroom ?? []);
-          setMonthlyRevenue(data.overviewMonthlyRevenue ?? []);
-          setMemberVsGuestRevenue(data.overviewMemberVsGuestRevenue ?? []);
           setTransactionFinanceSummary(
             data.overviewTransactionFinanceSummary ?? [],
           );
@@ -284,8 +283,6 @@ export default function Dashboard() {
           setMonthlyRevenueByCategory(
             data.overviewMonthlyRevenueByCategory ?? [],
           );
-          setTotalAmountDue(data.overviewAmountDue ?? null);
-          setAmountDueByPeriod(data.overviewAmountDueByPeriod ?? []);
           setTotalDependents(data.overviewDependents ?? null);
           setReversalsSummary(data.overviewReversalsSummary ?? null);
           setVillaRackRateFree(data.overviewVillaRackRateFree ?? []);
@@ -531,17 +528,13 @@ export default function Dashboard() {
             mostUsedRoomTypes={mostUsedRoomTypes}
             totalDependents={totalDependents}
             dependentsPerMember={dependentsPerMember}
-            totalAmountDue={totalAmountDue}
-            amountDueByPeriod={amountDueByPeriod}
             totalRecentActivitySpend={totalRecentActivitySpend}
             topSpendDescriptions={topSpendDescriptions}
             directoryMembers={[]}
-            memberVsGuestRevenue={memberVsGuestRevenue}
             villaStats={villaStats}
             visitsTabSummary={visitsTabSummary}
             bedroomBookings={bedroomBookings}
             villaRevenue={villaRevenue}
-            monthlyRevenue={monthlyRevenue}
             transactionFinanceSummary={transactionFinanceSummary}
             transactionMemberVsGuestRevenue={transactionMemberVsGuestRevenue}
             transactionMemberVsGuestRevenueByCategory={
