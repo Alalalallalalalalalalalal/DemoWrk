@@ -1,354 +1,766 @@
 """
-reservation_lead_time_scraper.py — Entry point. Orchestrates login, menu
-navigation, and reservation lead-time scraping.
+reservation_lead_time_scraper.py — Booking Lead Time scraper.
 
-Mirrors member_scraper.py's structure: login -> switch module -> navigate ->
-process each item -> save -> summary. The difference is we're switching to
-the Membership module (not Reporting) and looping over member numbers
-(not report types).
+Portal flow this automates:
+  Accounts Receivable tab -> switch to Membership
+  -> search member -> click the member number
+  -> click the member-name tab (Member_Info) -> Rooms
+  -> click each reservation's Confirmation Code (opens the reservation
+     popup — the same DialogWindowFrame_0 dialog journal_scraper.py
+     already drives for contact info / rate details)
+  -> inside that popup, click "Created On" (javascript:viewAuditLog())
+     to open the nested Audit Log dialog
+  -> scrape the "Created On" timestamp from the audit log
+  -> Lead Time (days) = Check-In Date (arrival) - Created On (booked)
 
-What this script does, per member number:
-    1. Switch top module tab to Membership (open_membership_menu, login.py)
-    2. Fill/submit the quick-search form (member_utils.py)
-    3. Open the member record from search results
-    4. Click the member-name tab beside "Membership" -> Member Info panel
-    5. Click "Rooms" -> lists that member's reservations w/ confirmation codes
-    6. Click each confirmation code -> read "Created On" (booking creation date)
-    7. Compute lead_time_days = arrival_date - created_on
+Reuses login/frame/popup/retry plumbing from journal_scraper.py instead
+of duplicating it — only the audit-log step and the lead-time math are
+new here.
 
-Output:
-    reports/reservation_lead_time.csv
-      Columns: member_number, confirmation_code, room_number, arrival_date,
-               departure_date, status, created_on, lead_time_days
+Output: one CSV per member, journal/{folder}/{folder}_lead_time.csv,
+in the same shape save_tab_csv() writes for every other tab. Run
+lead_time_report.py afterwards to get full/trend/average views across
+all members, filterable by year or a custom date range.
 
-Also see lead_time_report.py for the trend / average / export layer.
-
-Setup:
-    pip install playwright python-dateutil pandas openpyxl
-    playwright install chromium
+NOTE ON SELECTORS: the exact field name the Audit Log dialog uses for
+"Created On" wasn't available to write this against, so
+scrape_created_on() tries a couple of common input patterns and then
+falls back to scanning the dialog's own table rows for a label match
+("Created On", "Create Date", "Booked On", ...). If neither finds
+anything, it dumps every table row in the dialog to stdout so the
+correct label/selector can be read off that dump and slotted into
+CREATED_ON_LABELS / the input selector list below.
 
 Usage:
-    python reservation_lead_time_scraper.py --member 12345
-    python reservation_lead_time_scraper.py --members-csv reports/member_map.csv
-    python reservation_lead_time_scraper.py --members-csv reports/member_map.csv --limit 25
+    python reservation_lead_time_scraper.py --all
+    python reservation_lead_time_scraper.py --member 17A
+    python reservation_lead_time_scraper.py --members 67,67A,23B
+    python reservation_lead_time_scraper.py --limit 50 --workers 5
+    python reservation_lead_time_scraper.py --reset      # clear done log
 """
-
 import os
+import re
 import csv
-import sys
+import time
+import math
 import argparse
+import signal
+import sys
 from datetime import datetime
+from multiprocessing import Pool
 
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from dateutil import parser as dateparser
+from playwright.sync_api import sync_playwright
 
-from config import OUTPUT_FOLDER, REPORTS_FOLDER
-from login import login, open_membership_menu
-from member_utils import (
-    navigate_to_search_member,
-    search_member_by_number,
-    open_member_record,
-    click_member_name_tab,
-    click_rooms_subtab,
-    get_content_context,
+from config import OUTPUT_FOLDER, BASE_URL
+from login import login, get_frame_by_url
+
+from journal_scraper import (
+    MAP_FILE, JOURNAL_FOLDER,
+    FRAME_TIMEOUT, POPUP_TIMEOUT, TAB_MAX_RETRIES, TAB_HREF_FALLBACKS,
+    LIST_MEMBERS_URL,
+    load_member_map, get_folder_name, save_tab_csv, strip_val,
+    parse_statement_date, extract_table,
+    dismiss_popup, ensure_session, navigate_to_member, take_screenshot,
+    get_landing_frame, get_shell_frame, open_member_dropdown, click_section,
+    click_subtab, get_popup_frame, close_reservation_popup,
+    reservation_dialog_open, get_input_val,
 )
 
-SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
-LEAD_TIME_CSV     = os.path.join(REPORTS_FOLDER, "reservation_lead_time.csv")
+# ─────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────
+DONE_LOG = os.path.join(OUTPUT_FOLDER, "lead_time_done.txt")
+DEFAULT_LIMIT = None
+DEFAULT_WORKERS = 5
+
+# Labels the Audit Log dialog might use for the booking-created field.
+# Checked lowercase, substring match, in this order.
+CREATED_ON_LABELS = (
+    "created on", "create date", "creation date",
+    "booked on", "booking date", "date created",
+)
 
 
-def pr(msg):
-    print(f"  {msg}")
+# ─────────────────────────────────────────────
+# DONE LOG
+# ─────────────────────────────────────────────
+def load_done_set():
+    if not os.path.exists(DONE_LOG):
+        return set()
+    with open(DONE_LOG, "r", encoding="utf-8") as f:
+        return set(line.strip() for line in f if line.strip())
 
 
-def screenshot(page, name):
+def mark_done(member_id):
+    with open(DONE_LOG, "a", encoding="utf-8") as f:
+        f.write(f"{member_id}\n")
+
+
+# ─────────────────────────────────────────────
+# AUDIT LOG DIALOG
+# ─────────────────────────────────────────────
+def _dump_dialog_rows(frame, conf_code, prefix=""):
+    print(f"    {prefix}[DEBUG] Audit log row dump for conf {conf_code}:")
     try:
-        os.makedirs(SCREENSHOT_FOLDER, exist_ok=True)
-        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(SCREENSHOT_FOLDER, f"lead_time_{name}_{ts}.png")
-        page.screenshot(path=path)
-        pr(f"Screenshot: {path}")
+        rows = frame.evaluate("""
+            () => Array.from(document.querySelectorAll('tr')).map(tr =>
+                Array.from(tr.querySelectorAll('td,th')).map(c => (c.innerText || '').trim())
+            ).filter(r => r.length)
+        """)
+        for r in rows:
+            print(f"      {r}")
+    except Exception as e:
+        print(f"    {prefix}[DEBUG] dump failed: {e}")
+
+
+def click_created_on_audit_log(popup_frame, page, prefix=""):
+    """
+    Click the "Created On" link inside the open reservation popup
+    (fires javascript:viewAuditLog()), which opens a nested Audit Log
+    dialog. Returns the frame for that dialog, or None.
+    """
+    link = None
+    try:
+        for a in popup_frame.query_selector_all("a"):
+            try:
+                blob = (a.get_attribute("onclick") or "") + (a.get_attribute("href") or "")
+                if "viewAuditLog" in blob:
+                    link = a
+                    break
+            except Exception:
+                continue
     except Exception:
         pass
 
+    if not link:
+        print(f"    {prefix}Audit log link (viewAuditLog) not found in popup")
+        return None
 
-# ─────────────────────────────────────────────
-# SCRAPE: reservations list + reservation detail (Created On)
-# ─────────────────────────────────────────────
-def scrape_reservations_list(lf):
-    """
-    Scrape the reservations table under Member Info > Rooms.
-    Returns list of dicts with an extra "_conf_link" ElementHandle to click into.
-    """
-    rows = []
     try:
-        lf.wait_for_selector("tbody tr", timeout=8000)
-    except PWTimeout:
-        pr("WARNING: no reservation rows found on Rooms tab.")
-        return rows
-
-    table_rows = lf.query_selector_all("tbody tr")
-    pr(f"  Found {len(table_rows)} reservation row(s)")
-
-    for tr in table_rows:
-        try:
-            cells = tr.query_selector_all("td")
-            if not cells:
-                continue
-
-            def cell_text(i):
-                return cells[i].inner_text().strip() if len(cells) > i else ""
-
-            # ADJUST: column order — confirmation code is assumed col 0,
-            # room col 1, arrival col 2, departure col 3, status col 4.
-            conf_cell = cells[0]
-            conf_link = conf_cell.query_selector("a")
-            confirmation_code = (
-                conf_link.inner_text().strip() if conf_link else cell_text(0)
-            )
-
-            rows.append({
-                "confirmation_code": confirmation_code,
-                "room_number":       cell_text(1),
-                "arrival_date":      cell_text(2),
-                "departure_date":    cell_text(3),
-                "status":            cell_text(4),
-                "_conf_link":        conf_link,
-            })
-        except Exception as e:
-            pr(f"  Reservation row error: {e}")
-            continue
-
-    return rows
-
-
-def scrape_created_on(page, conf_link):
-    """
-    Click a confirmation-code link to open the reservation detail, read the
-    'Created On' field, then navigate back to the reservations list.
-    """
-    if not conf_link:
-        return ""
-    try:
-        conf_link.click()
-        page.wait_for_timeout(1800)
-
-        lf = get_content_context(page)
-
-        created_on = ""
-        # ADJUST: "Created On" is usually a label with the value in a sibling
-        # cell/span — try a couple of common layouts before giving up.
-        label = lf.query_selector("text=Created On")
-        if label:
-            created_on = lf.evaluate(
-                """(el) => {
-                    let sib = el.nextElementSibling;
-                    if (sib && sib.innerText.trim()) return sib.innerText.trim();
-                    let row = el.closest('tr');
-                    if (row) {
-                        const tds = row.querySelectorAll('td');
-                        if (tds.length > 1) return tds[1].innerText.trim();
-                    }
-                    let parent = el.parentElement;
-                    return parent ? parent.innerText.replace('Created On', '').trim() : '';
-                }""",
-                label,
-            )
-        else:
-            pr("  WARNING: 'Created On' label not found on detail page.")
-            screenshot(page, "no_created_on")
-
-        page.go_back()
-        page.wait_for_timeout(1500)
-        return created_on.strip()
+        link.click()
     except Exception as e:
-        pr(f"  Error scraping Created On: {e}")
-        try:
-            page.go_back()
-            page.wait_for_timeout(1000)
-        except Exception:
-            pass
-        return ""
-
-
-# ─────────────────────────────────────────────
-# LEAD TIME CALC
-# ─────────────────────────────────────────────
-def parse_date_safe(text):
-    if not text or text.strip() in ("-", ""):
-        return None
-    try:
-        return dateparser.parse(text.strip(), fuzzy=True).date()
-    except Exception:
+        print(f"    {prefix}Audit log click failed: {e}")
         return None
 
+    # Nested dialog — same jQuery dialog mechanism as the reservation
+    # popup itself, one level deeper. Wait for a NEW dialog frame that
+    # isn't the reservation popup, with content in it.
+    deadline = time.time() + 6
+    while time.time() < deadline:
+        for frame in page.frames:
+            try:
+                if frame == popup_frame:
+                    continue
+                if frame.name and "DialogWindowFrame" in frame.name:
+                    if frame.query_selector("table, div, span, input"):
+                        return frame
+            except Exception:
+                continue
+        page.wait_for_timeout(300)
 
-def compute_lead_time(created_on_text, arrival_text):
-    created = parse_date_safe(created_on_text)
-    arrival = parse_date_safe(arrival_text)
-    if created and arrival:
-        return (arrival - created).days
+    print(f"    {prefix}Audit log dialog frame not found")
     return None
 
+def scrape_created_on(audit_frame, conf_code, prefix=""):
+    """
+    Find the Created Reservation row in the Audit Log
+    and return ONLY its Date value.
+    """
+
+    try:
+        result = audit_frame.evaluate("""
+            () => {
+                const rows = Array.from(document.querySelectorAll('tr'));
+
+                for (const row of rows) {
+
+                    // IMPORTANT:
+                    // Only get cells that are DIRECT children of this row.
+                    // This prevents nested audit tables from being included.
+                    const cells = Array.from(row.children)
+                        .filter(el =>
+                            el.tagName === 'TD' ||
+                            el.tagName === 'TH'
+                        )
+                        .map(el =>
+                            (el.innerText || '')
+                                .replace(/\\u00a0/g, ' ')
+                                .replace(/Â/g, '')
+                                .trim()
+                        );
+
+                    if (cells.length < 3) {
+                        continue;
+                    }
+
+                    const activity = cells[0]
+                        .replace(/^\\+/, '')
+                        .trim()
+                        .toLowerCase();
+
+                    if (activity === 'created reservation') {
+                        return {
+                            activity: cells[0],
+                            changedBy: cells[1],
+                            date: cells[2]
+                        };
+                    }
+                }
+
+                return null;
+            }
+        """)
+
+    except Exception as e:
+        print(f"    {prefix}Could not read audit log: {e}")
+        return ""
+
+    if result:
+        created_date = result.get("date", "").strip()
+        changed_by = result.get("changedBy", "").strip()
+
+        print(
+            f"    {prefix}SCRAPED | "
+            f"Created Reservation | "
+            f"Changed By: {changed_by} | "
+            f"Created On: {created_date}"
+        )
+
+        return created_date
+
+    print(
+        f"    {prefix}Created Reservation row not found "
+        f"for conf {conf_code}"
+    )
+
+    _dump_dialog_rows(audit_frame, conf_code, prefix)
+
+    return ""
+
+def close_top_dialog(page, prefix=""):
+    """
+    Close whichever dialog is currently on top (the nested Audit Log
+    dialog). Same strategy ladder as journal_scraper.close_reservation_popup,
+    generalized to any DialogWindowFrame rather than just _0.
+    """
+    def top_dialog_open():
+        for frame in page.frames:
+            try:
+                if frame.name and "DialogWindowFrame" in frame.name:
+                    _ = frame.url
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def wait_gone(timeout_ms=2000):
+        deadline = time.time() + timeout_ms / 1000
+        while time.time() < deadline:
+            if not top_dialog_open():
+                return True
+            page.wait_for_timeout(200)
+        return not top_dialog_open()
+
+    if not top_dialog_open():
+        return True
+
+    for frame in page.frames:
+        try:
+            for sel in ("[id^='closeButtonId_']",
+                        "button[onclick='closeJQueryDialog()']",
+                        ".ui-dialog-titlebar-close"):
+                for btn in frame.query_selector_all(sel):
+                    try:
+                        if not btn.is_visible():
+                            continue
+                        btn.click(timeout=2000)
+                        if wait_gone():
+                            return True
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+
+    for frame in page.frames:
+        try:
+            frame.evaluate(
+                "() => { if (typeof closeJQueryDialog === 'function') closeJQueryDialog(); }"
+            )
+            if wait_gone(1500):
+                return True
+        except Exception:
+            continue
+
+    try:
+        page.keyboard.press("Escape")
+        if wait_gone(1500):
+            return True
+    except Exception:
+        pass
+
+    print(f"    {prefix}WARNING: audit log dialog would not close")
+    return False
+
 
 # ─────────────────────────────────────────────
-# PER-MEMBER PROCESS
+# LEAD TIME MATH
 # ─────────────────────────────────────────────
-def process_member(page, member_number):
-    pr(f"── Member {member_number} ──────────────────")
-
-    open_membership_menu(page)
-    navigate_to_search_member(page)
-    search_member_by_number(page, member_number)
-
-    lf = get_content_context(page)
-    lf = open_member_record(page, lf, member_number)
-    click_member_name_tab(page)
-    lf = click_rooms_subtab(page, member_number=member_number)
-
-    reservations = scrape_reservations_list(lf)
-    if not reservations:
-        return []
-
-    results = []
-    for res in reservations:
-        conf_link  = res.pop("_conf_link", None)
-        created_on = scrape_created_on(page, conf_link)
-        lead_time  = compute_lead_time(created_on, res["arrival_date"])
-
-        results.append({
-            "member_number":     member_number,
-            "confirmation_code": res["confirmation_code"],
-            "room_number":       res["room_number"],
-            "arrival_date":      res["arrival_date"],
-            "departure_date":    res["departure_date"],
-            "status":            res["status"],
-            "created_on":        created_on,
-            "lead_time_days":    lead_time,
-        })
-
-        # Rooms list frame may be stale after go_back(); refresh reference.
-        lf = click_rooms_subtab(page, member_number=member_number) or lf
-
-    return results
-
-
-# ─────────────────────────────────────────────
-# SAVE / LOAD
-# ─────────────────────────────────────────────
-def save_lead_time_rows(rows, append=False):
-    if not rows:
-        pr("No lead-time rows to save.")
+def compute_lead_time_days(created_on_raw, check_in_raw):
+    if not created_on_raw or not check_in_raw:
         return None
 
-    os.makedirs(REPORTS_FOLDER, exist_ok=True)
-    fieldnames = [
-        "member_number", "confirmation_code", "room_number",
-        "arrival_date", "departure_date", "status",
-        "created_on", "lead_time_days",
-    ]
+    created = None
+    check_in = None
 
-    file_exists = os.path.exists(LEAD_TIME_CSV)
-    mode = "a" if (append and file_exists) else "w"
-    with open(LEAD_TIME_CSV, mode, newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        if mode == "w" or not file_exists:
-            w.writeheader()
-        w.writerows(rows)
+    # Audit Log format:
+    # 08/12/2026 13:51:09
+    for fmt in (
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %I:%M:%S %p",
+        "%m/%d/%Y",
+    ):
+        try:
+            created = datetime.strptime(created_on_raw.strip(), fmt)
+            break
+        except ValueError:
+            continue
 
-    pr(f"Saved {len(rows)} row(s) → {LEAD_TIME_CSV}")
-    return LEAD_TIME_CSV
+    # Check-in is usually date only
+    for fmt in (
+        "%m/%d/%Y",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %I:%M:%S %p",
+    ):
+        try:
+            check_in = datetime.strptime(check_in_raw.strip(), fmt)
+            break
+        except ValueError:
+            continue
+
+    if created is None or check_in is None:
+        print(
+            f"    DATE PARSE FAILED | "
+            f"Created='{created_on_raw}' | "
+            f"Check-In='{check_in_raw}'"
+        )
+        return None
+
+    return (check_in.date() - created.date()).days
 
 
-def load_member_numbers(csv_path, limit=None):
-    numbers = []
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        # ADJUST: change "member_number" if your member map CSV uses a
-        # different column name (e.g. "memberNo", "MemberID").
-        col = "member_number"
-        if reader.fieldnames and col not in reader.fieldnames:
-            for candidate in reader.fieldnames:
-                if "member" in candidate.lower():
-                    col = candidate
-                    break
-        for row in reader:
-            val = row.get(col, "").strip()
-            if val:
-                numbers.append(val)
-    if limit:
-        numbers = numbers[:limit]
-    return numbers
+# ─────────────────────────────────────────────
+# ROOMS TAB — capture created-on + lead time per reservation
+# ─────────────────────────────────────────────
+def scrape_rooms_lead_time(page, folder_name, prefix=""):
+    """
+    Same rooms-table + confirmation-code-popup pattern as
+    journal_scraper.scrape_rooms_with_popups(), but instead of pulling
+    contact info, opens the Audit Log for each reservation and records
+    Created On + computed Lead Time.
+
+    Returns (success, lead_time_rows).
+    """
+    frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+    if not frame:
+        print(f"    {prefix}Rooms page failed: landing frame not found")
+        return False, []
+
+    lead_rows = []
+
+    try:
+        tables = frame.query_selector_all("table")
+        if not tables:
+            print(f"    {prefix}No tables found in rooms tab")
+            return True, []
+
+        room_rows = []
+        for table in tables:
+            for row in extract_table(table):
+                room_rows.append(row)
+
+        if not room_rows:
+            print(f"    {prefix}Rooms table is empty")
+            return True, []
+
+        print(f"    {prefix}Found {len(room_rows)} room row(s) — opening popups for audit log...")
+
+        for i, room_row in enumerate(room_rows, 1):
+            conf_code = (
+                room_row.get("Confirmation Code") or
+                room_row.get("Conf. Code") or
+                room_row.get("col_0") or
+                ""
+            ).strip()
+
+            if not conf_code:
+                print(f"    {prefix}Row {i}: no conf code — skipping")
+                continue
+
+            print(f"    {prefix}Row {i}/{len(room_rows)}: conf {conf_code}")
+
+            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not frame:
+                print(f"    {prefix}Rooms page failed: lost landing frame at row {i}")
+                return False, lead_rows
+
+            clicked = False
+            reservation_id = ""
+            try:
+                for link in frame.query_selector_all("a"):
+                    try:
+                        if strip_val(link.inner_text()) == conf_code:
+                            blob = ((link.get_attribute("href") or "") +
+                                    (link.get_attribute("onclick") or ""))
+                            m = re.search(r"openReservation\((\d+)\)", blob)
+                            if m:
+                                reservation_id = m.group(1)
+                            link.click()
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+            except Exception as e:
+                print(f"    {prefix}Click error for conf {conf_code}: {e}")
+
+            if not clicked:
+                print(f"    {prefix}Could not click conf code {conf_code} — skipping")
+                continue
+
+            popup_frame = get_popup_frame(page, timeout_ms=POPUP_TIMEOUT)
+            created_on = ""
+            if popup_frame:
+                max_created_retries = 3
+
+                for attempt in range(1, max_created_retries + 1):
+
+                    audit_frame = click_created_on_audit_log(
+                        popup_frame,
+                        page,
+                        prefix
+                    )
+
+                    if audit_frame:
+
+                        # Give the audit log table time to fully populate
+                        page.wait_for_timeout(800)
+
+                        created_on = scrape_created_on(
+                            audit_frame,
+                            conf_code,
+                            prefix
+                        )
+
+                        close_top_dialog(page, prefix)
+                        page.wait_for_timeout(500)
+
+                    if created_on:
+                        print(
+                            f"    {prefix}Created On found "
+                            f"for conf {conf_code}: {created_on}"
+                        )
+                        break
+
+                    print(
+                        f"    {prefix}Created On blank for conf {conf_code} "
+                        f"— retry {attempt}/{max_created_retries}"
+                    )
+
+                    # Small pause before trying again
+                    page.wait_for_timeout(1000)
+
+                if not created_on:
+                    print(
+                        f"    {prefix}WARNING: Created On still blank "
+                        f"for conf {conf_code} after "
+                        f"{max_created_retries} attempts"
+                    )
+            else:
+                print(f"    {prefix}Popup frame not found for conf {conf_code}")
+
+            check_in = strip_val(
+                room_row.get("Check-In Date") or
+                room_row.get("Check In Date") or
+                room_row.get("Check-In") or
+                ""
+            )
+
+            check_out = strip_val(
+                room_row.get("Check-Out Date") or
+                room_row.get("Check Out Date") or
+                room_row.get("Check-Out") or
+                ""
+            )
+
+            # Reservation status comes directly from the Rooms table
+            reservation_status = strip_val(
+                room_row.get("status") or
+                room_row.get("Status") or
+                room_row.get("Reservation Status") or
+                ""
+            )
+
+            lead_days = compute_lead_time_days(created_on, check_in)
+
+            print(
+                f"    {prefix}LEAD TIME RESULT | "
+                f"Conf: {conf_code} | "
+                f"Status: {reservation_status} | "
+                f"Created: {created_on} | "
+                f"Check-In: {check_in} | "
+                f"Check-Out: {check_out} | "
+                f"Lead Time: {lead_days if lead_days is not None else 'COULD NOT CALCULATE'} days"
+            )
+
+            lead_rows.append({
+                "Member #":           folder_name,
+                "Conf. Code":         conf_code,
+                "Reservation ID":     reservation_id,
+                "Guest Name":         strip_val(room_row.get("Guest Name", "")),
+                "Room #":             strip_val(room_row.get("Room #", "") or room_row.get("Room Number", "")),
+                "Check-In Date":      check_in,
+                "Check-Out Date":     check_out,
+                "Created On":         created_on,
+                "Lead Time (days)":   lead_days if lead_days is not None else "",
+                "Reservation Status": reservation_status,
+            })
+
+            close_reservation_popup(page, prefix)
+            page.wait_for_timeout(600)
+
+            frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not frame:
+                print(f"    {prefix}Rooms page failed: landing frame lost after closing popup")
+                return False, lead_rows
+
+    except Exception as e:
+        print(f"    {prefix}Rooms lead-time scrape error: {e}")
+        return False, lead_rows
+
+    return True, lead_rows
+
+
+# ─────────────────────────────────────────────
+# PER-MEMBER SCRAPE
+# ─────────────────────────────────────────────
+def scrape_member_lead_time(page, member_number, member_id, prefix=""):
+    folder_name = get_folder_name(member_number, member_id)
+    saved = {}
+
+    dismiss_popup(page)
+    if not navigate_to_member(page, member_id, prefix):
+        print(f"  {prefix}Navigation failed for {member_number}")
+        return False, saved
+
+    tab_done = False
+    for attempt in range(1, TAB_MAX_RETRIES + 1):
+        note = f" (attempt {attempt}/{TAB_MAX_RETRIES})" if attempt > 1 else ""
+        print(f"    {prefix}Rooms (lead time){note}")
+
+        shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+        if not shell:
+            print(f"    {prefix}Shell lost — re-navigating to member")
+            if not navigate_to_member(page, member_id, prefix):
+                break
+            shell = get_shell_frame(page, timeout_ms=FRAME_TIMEOUT)
+            if not shell:
+                break
+
+        open_member_dropdown(shell, page)
+        click_section(shell, page, "Member_Info")
+        if not click_subtab(shell, page, "rooms", TAB_HREF_FALLBACKS["rooms"], prefix):
+            take_screenshot(page, f"no_tab_{folder_name}_leadtime")
+            if attempt < TAB_MAX_RETRIES:
+                page.wait_for_timeout(1000 * attempt)
+            continue
+
+        success, lead_rows = scrape_rooms_lead_time(page, folder_name, prefix)
+        if not success:
+            print(f"    {prefix}Rooms (lead time) scraping failed")
+            if attempt < TAB_MAX_RETRIES:
+                page.wait_for_timeout(1000 * attempt)
+                continue
+            return False, saved
+
+        if lead_rows:
+            fp = save_tab_csv(folder_name, "lead_time", lead_rows)
+            if fp:
+                saved["lead_time"] = fp
+                print(f"    {prefix}Lead time: {len(lead_rows)} row(s) -> {os.path.basename(fp)}")
+        else:
+            print(f"    {prefix}Lead time: no data — processed successfully")
+
+        tab_done = True
+        break
+
+    if not tab_done:
+        print(f"    {prefix}Rooms (lead time): exhausted retries")
+        return False, saved
+
+    return True, saved
+
+
+# ─────────────────────────────────────────────
+# WORKER
+# ─────────────────────────────────────────────
+def _worker_init():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def scrape_chunk(args):
+    members_chunk, worker_id, force = args
+    time.sleep(worker_id * 3)
+    prefix = f"[W{worker_id}] "
+    results = {"success": [], "failed": [], "skipped": []}
+    done_set = load_done_set()
+
+    with sync_playwright() as p:
+        headless = os.environ.get("HEADFUL", "").lower() not in ("1", "true", "yes")
+        browser = p.chromium.launch(headless=headless)
+        page = browser.new_page()
+        try:
+            print(f"  {prefix}Logging in...")
+            login(page)
+            page.wait_for_timeout(2000)
+            dismiss_popup(page)
+
+            print(f"  {prefix}Loading Membership module...")
+            main_frame = get_frame_by_url(page, "default.jsp") or page
+            try:
+                main_frame.evaluate("changeSelModule(1,1,1,'#003565','Membership')")
+            except Exception:
+                pass
+            page.wait_for_timeout(3000)
+
+            landing = get_landing_frame(page, timeout_ms=8000)
+            if landing:
+                landing.goto(LIST_MEMBERS_URL)
+                page.wait_for_timeout(2000)
+                print(f"  {prefix}Ready — {len(members_chunk)} members to process")
+            else:
+                print(f"  {prefix}WARNING: landingFrame not found after login")
+
+            for i, (member_number, member_id) in enumerate(members_chunk, 1):
+                folder_name = get_folder_name(member_number, member_id)
+                print(f"\n  {prefix}[{i}/{len(members_chunk)}] {member_number} (id={member_id})")
+
+                ensure_session(page, worker_id)
+
+                if member_id in done_set and not force:
+                    print(f"  {prefix}Already done — skipping")
+                    results["skipped"].append(folder_name)
+                    continue
+
+                success, saved = scrape_member_lead_time(page, member_number, member_id, prefix)
+                if not success:
+                    if ensure_session(page, worker_id):
+                        print(f"  {prefix}Retrying {member_number} after re-login...")
+                        success, saved = scrape_member_lead_time(page, member_number, member_id, prefix)
+
+                if success:
+                    mark_done(member_id)
+                    done_set.add(member_id)
+                    if saved:
+                        print(f"  {prefix}OK {member_number}: {len(saved)} file(s) saved")
+                    else:
+                        print(f"  {prefix}OK {member_number}: processed — no records")
+                    results["success"].append(folder_name)
+                else:
+                    print(f"  {prefix}FAILED {member_number}: rooms/lead-time tab did not load")
+                    results["failed"].append(folder_name)
+
+        except Exception as e:
+            print(f"  {prefix}Fatal error: {e}")
+            take_screenshot(page, f"worker_{worker_id}_fatal_leadtime")
+        finally:
+            browser.close()
+
+    return results
 
 
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(
-        description="Scrape reservation 'Created On' dates for booking lead time."
-    )
-    parser.add_argument("--member", help="Single member number to scrape")
-    parser.add_argument("--members-csv", help="CSV file with a member_number column")
-    parser.add_argument("--limit", type=int, help="Max number of members to process")
+    parser = argparse.ArgumentParser(description="Scrape booking lead time (Created On vs Check-In).")
+    parser.add_argument("--all", action="store_true", help="Scrape all members")
+    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT, help="Max members (default: all)")
+    parser.add_argument("--member", type=str, default=None, help="Single member by number e.g. 1C")
+    parser.add_argument("--id", type=str, default=None, help="Single member by portal ID")
+    parser.add_argument("--members", type=str, default=None, help="Comma-separated member numbers")
+    parser.add_argument("--force", action="store_true", help="Ignore lead_time_done.txt for selected members")
+    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS, help=f"Parallel workers (default: {DEFAULT_WORKERS})")
+    parser.add_argument("--reset", action="store_true", help="Clear done log and rescrape everything")
     args = parser.parse_args()
 
-    if not args.member and not args.members_csv:
-        parser.error("Provide --member or --members-csv")
+    if not os.path.exists(MAP_FILE):
+        print(f"ERROR: {MAP_FILE} not found. Run build_member_map.py first.")
+        return
 
-    member_numbers = [args.member] if args.member else load_member_numbers(
-        args.members_csv, limit=args.limit
-    )
+    if args.reset and os.path.exists(DONE_LOG):
+        os.remove(DONE_LOG)
+        print("Done log cleared.")
+
+    all_members = load_member_map(MAP_FILE)
+    print(f"Loaded {len(all_members)} members from map.")
+
+    force = args.force or bool(args.member or args.id or args.members)
+
+    if args.members:
+        wanted = {m.strip() for m in args.members.split(",") if m.strip()}
+        members = [(n, i) for n, i in all_members if n in wanted]
+    elif args.member:
+        members = [(n, i) for n, i in all_members if n == args.member]
+    elif args.id:
+        members = [(n, i) for n, i in all_members if i == args.id]
+    elif args.all:
+        members = all_members
+    else:
+        members = all_members[:args.limit] if args.limit else all_members
+
+    if not members:
+        print("No matching members found.")
+        return
 
     print("=" * 60)
-    print("Reservation Lead Time Scraper")
+    print("Booking Lead Time Scraper")
     print("=" * 60)
-    print(f"Processing {len(member_numbers)} member(s).\n")
+    print(f"Members to process : {len(members)}")
+    print(f"Output             : {JOURNAL_FOLDER}/<member>/<member>_lead_time.csv")
 
-    results = {}
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        page = browser.new_page()
-
+    if len(members) == 1 or args.workers == 1:
+        all_results = [scrape_chunk((members, 1, force))]
+    else:
+        num_workers = min(args.workers, len(members))
+        chunk_size = math.ceil(len(members) / num_workers)
+        chunks = [
+            (members[i:i + chunk_size], wid, force)
+            for wid, i in enumerate(range(0, len(members), chunk_size), 1)
+        ]
+        pool = Pool(processes=num_workers, initializer=_worker_init)
         try:
-            login(page)
+            all_results = pool.map(scrape_chunk, chunks)
+        except KeyboardInterrupt:
+            print("\nInterrupted — shutting down...")
+            pool.terminate()
+            pool.join()
+            sys.exit(0)
+        else:
+            pool.close()
+            pool.join()
 
-            all_rows = []
-            for i, member_number in enumerate(member_numbers, 1):
-                print(f"{'=' * 40}")
-                print(f"Member {i} of {len(member_numbers)}: {member_number}")
-                print(f"{'=' * 40}")
-                try:
-                    rows = process_member(page, member_number)
-                    all_rows.extend(rows)
-                    save_lead_time_rows(rows, append=(i > 1))
-                    results[member_number] = len(rows)
-                except Exception as e:
-                    print(f"  Failed: {e}\n")
-                    screenshot(page, f"member_{member_number}_error")
-                    results[member_number] = False
+    success = sum(len(r["success"]) for r in all_results)
+    failed = sum(len(r["failed"]) for r in all_results)
+    skipped = sum(len(r["skipped"]) for r in all_results)
+    failed_names = [n for r in all_results for n in r["failed"]]
 
-            print("\n" + "=" * 60)
-            print("Scrape Summary")
-            print("=" * 60)
-            for member_number, outcome in results.items():
-                status = f"{outcome} reservation(s)" if outcome is not False else "Failed — check screenshot"
-                print(f"  Member {member_number}: {status}")
-            print(f"\nTotal reservations scraped: {len(all_rows)}")
-
-        except Exception as e:
-            print(f"\nError: {e}")
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            os.makedirs(SCREENSHOT_FOLDER, exist_ok=True)
-            screenshot_path = os.path.join(SCREENSHOT_FOLDER, f"error_screenshot_{timestamp}.png")
-            page.screenshot(path=screenshot_path)
-            print(f"Error screenshot saved: {screenshot_path}")
-
-        finally:
-            print("\nEnding session...")
-            browser.close()
-            sys.exit()
+    print("\n" + "=" * 60)
+    print("Summary")
+    print("=" * 60)
+    print(f"  Success : {success}")
+    print(f"  Failed  : {failed}")
+    print(f"  Skipped : {skipped}")
+    if failed_names:
+        print(f"  Failed members: {failed_names}")
 
 
 if __name__ == "__main__":
