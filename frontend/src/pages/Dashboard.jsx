@@ -45,7 +45,11 @@ import {
 import VillaFeesTab from "./VillaFeesTab";
 import { analyticsApi } from "../api/analytics";
 import { overviewApi } from "../api/overviewApi";
-import { FinancePeriodFilter, periodToParams, DEFAULT_PERIOD } from "./finance/FinanceShared";
+import {
+  FinancePeriodFilter,
+  periodToParams,
+  DEFAULT_PERIOD,
+} from "./finance/FinanceShared";
 import { COLORS, TOOLTIP_STYLE } from "./styles/Dashboardstyles";
 import {
   StatCard,
@@ -62,6 +66,7 @@ import "./styles/styles.css";
 import VisitsRoomsTab from "./visits/VisitsRoomsTab";
 import DemographicsTab from "./demographics/DemographicsTab";
 import FinanceTab from "./finance/FinanceTab";
+import Leadtimetab from "./Leadtimetab";
 
 //Overview tab components
 import OverviewTab from "./OverviewTab";
@@ -80,6 +85,7 @@ const TABS = [
   { id: "ml", label: "ML Insights", Icon: Sparkles },
   { id: "villa_fees", label: "Annual Fees", Icon: Home },
   { id: "guest_revenue", label: "Guest Revenue", Icon: TrendingUp },
+  { id: "lead_time", label: "Lead Time", Icon: Clock },
 ];
 
 const SUB = {
@@ -90,8 +96,12 @@ const SUB = {
   reports: "View and filter raw report data",
   market: "Analysis and Insights on market Targeting",
   ml: "Segmentation, amenity insights and campaign recommendations — all monetary figures in $USD",
-  villa_fees: "Maintenance, Capital Expenditure and membership dues billed per villa",
-  guest_revenue: "New vs repeat guest revenue — trends by month and summary averages",
+  villa_fees:
+    "Maintenance, Capital Expenditure and membership dues billed per villa",
+  guest_revenue:
+    "New vs repeat guest revenue — trends by month and summary averages",
+  lead_time:
+    "Booking confirmed vs arrival date — full detail, trends and averages",
 };
 
 /* ─── Recharts shared props ──────────────────────────────────── */
@@ -171,9 +181,11 @@ export default function Dashboard() {
   const [anomaliesSummary, setAnomaliesSummary] = useState(null);
   const [anomalies, setAnomalies] = useState([]);
   const [tipsSummary, setTipsSummary] = useState(null);
-  const [internalTransfersSummary, setInternalTransfersSummary] = useState(null);
+  const [internalTransfersSummary, setInternalTransfersSummary] =
+    useState(null);
   const [paymentsSummary, setPaymentsSummary] = useState(null);
-  const [paymentCorrectionsSummary, setPaymentCorrectionsSummary] = useState(null);
+  const [paymentCorrectionsSummary, setPaymentCorrectionsSummary] =
+    useState(null);
   // Added 2026-07-17 — three datasets OverviewTab already consumed via
   // props that were never wired up here (their backend endpoints didn't
   // exist until the same day; see overview_analytics.py):
@@ -290,9 +302,13 @@ export default function Dashboard() {
           setAnomaliesSummary(data.overviewAnomaliesSummary ?? null);
           setAnomalies(data.overviewAnomalies ?? []);
           setTipsSummary(data.overviewTipsSummary ?? null);
-          setInternalTransfersSummary(data.overviewInternalTransfersSummary ?? null);
+          setInternalTransfersSummary(
+            data.overviewInternalTransfersSummary ?? null,
+          );
           setPaymentsSummary(data.overviewPaymentsSummary ?? null);
-          setPaymentCorrectionsSummary(data.overviewPaymentCorrectionsSummary ?? null);
+          setPaymentCorrectionsSummary(
+            data.overviewPaymentCorrectionsSummary ?? null,
+          );
           setMemberDuesSummary(data.overviewMemberDuesSummary ?? null);
           setEmailOnFile(data.overviewEmailOnFile ?? null);
           setRackRateSummary(data.overviewRackRateSummary ?? null);
@@ -407,9 +423,9 @@ export default function Dashboard() {
     rowLimit === "all"
       ? sortedRows
       : sortedRows.slice(
-        (page - 1) * Number(rowLimit),
-        page * Number(rowLimit),
-      );
+          (page - 1) * Number(rowLimit),
+          page * Number(rowLimit),
+        );
 
   const getExportRows = () =>
     sortedRows.map((row) => {
@@ -508,7 +524,6 @@ export default function Dashboard() {
             </button>
           </div>
         </header>
-
         {/* ════ OVERVIEW ════ */}
         {activeTab === "overview" && (
           <OverviewTab
@@ -557,7 +572,6 @@ export default function Dashboard() {
             newMembersPerYear={newMembersPerYear}
           />
         )}
-
         {/* ════ DEMOGRAPHICS ════ */}
         {activeTab === "demographics" && (
           <DemographicsTab
@@ -575,7 +589,6 @@ export default function Dashboard() {
             dependentsPerMember={dependentsPerMember}
           />
         )}
-
         {activeTab === "visits" && (
           <VisitsRoomsTab
             selectedVillaName={selectedVillaName}
@@ -583,14 +596,10 @@ export default function Dashboard() {
             onGoToML={() => setActiveTab("ml")}
           />
         )}
-
         {/* ════ FINANCE ════ */}
         {activeTab === "finance" && <FinanceTab />}
-
-
         {/* ════ VILLA FEES (TEST) ════ */}
         {activeTab === "villa_fees" && <VillaFeesTab />}
-
         {/* ════ GUEST REVENUE (New vs Repeat) ════ */}
         {activeTab === "guest_revenue" && (
           <ErrorBoundary title="Guest Revenue">
@@ -598,6 +607,11 @@ export default function Dashboard() {
           </ErrorBoundary>
         )}
 
+        {activeTab === "lead_time" && (
+          <ErrorBoundary title="Lead Time">
+            <Leadtimetab />
+          </ErrorBoundary>
+        )}
         {/* ════ REPORTS ════ */}
         {activeTab === "reports" && (
           <div className="dashboard-section dashboard-section-sm">
@@ -1157,7 +1171,6 @@ export default function Dashboard() {
             </div>
           </div>
         )}
-
         {/* ════ MARKET TARGETING ════ */}
         {activeTab === "market" && (
           <div className="dashboard-section">
