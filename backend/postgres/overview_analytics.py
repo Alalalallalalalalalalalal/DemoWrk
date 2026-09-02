@@ -343,6 +343,16 @@ def overview_villa_stats(
             JOIN overview_booking_meta ovb2 USING (overview_conf_code)
             WHERE otl.overview_line_category = 'Villa'
               AND otl.overview_line_status   = 'Paid'
+              -- [2026-08-13] Rental-programme payouts only (synthetic
+              -- conf_code >= 9,000,000) — this card was summing ALL paid
+              -- Villa lines (direct + programme), a different scope than
+              -- the hero tile above (overview_total_villa_revenue) and
+              -- Finance's headline figure, so this card's per-villa rows
+              -- didn't foot to the hero total. Same basis now used
+              -- everywhere: analytics_villas.py's paid_villa_amounts CTE,
+              -- overview_total_villa_revenue, _villa_statement_net_revenue.
+              AND otl.overview_conf_code::text ~ '^[0-9]+$'
+              AND otl.overview_conf_code::text::bigint >= 9000000
               {overview_non_villa_filter_sql("otl", "overview_villa_name", keep_null=False)}
               {overview_payment_type_filter_sql("ovb2")}
               {overview_date_filter_sql("ovb2")}
@@ -481,54 +491,11 @@ def overview_monthly_revenue_by_category(
         ORDER BY month_num
     """, params)
 # ─────────────────────────────────────────────────────────────────────────
-# /overview/visits-summary
-#
-# total_bookings, total_members_booked, and total_guests_booked are ALL
-# COUNT(*) — every one of them counts BOOKINGS (reservations), not
-# distinct people. total_members_booked + total_guests_booked therefore
-# always equals total_bookings exactly.
-#
-# (Changed 2026-06-26 from COUNT(DISTINCT member_number) — that version
-# counted each person once even if they booked more than once, which
-# meant the three numbers didn't visibly add up and needed a separate
-# "repeat bookings" figure to reconcile them. Counting bookings instead
-# of people removes the need for that entirely. If you need a distinct-
-# person count specifically, see overview_villa_stats's unique_members or
-# the member-vs-guest-revenue endpoints' uniqueAccounts — those are
-# unaffected by this change.)
-# ─────────────────────────────────────────────────────────────────────────
-@router.get("/visits-summary")
-def overview_visits_summary(
-    overview_payment_type: str | None = Query(default=None),
-    year: int | None = Query(default=None),
-    month: int | None = Query(default=None),
-    date: date | None = Query(default=None),
-    start_date: date | None = Query(default=None),
-    end_date: date | None = Query(default=None),
-    db: Session = Depends(overview_get_db),
-):
-    params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
-    params["overview_payment_type"] = overview_payment_type
-    return overview_one(db, f"""
-        SELECT
-            COUNT(*)                                              AS total_bookings,
-            COUNT(*) FILTER (
-                WHERE overview_member_or_guest = 'Member'
-                   OR overview_member_or_guest IS NULL
-            )                                                    AS total_members_booked,
-            COUNT(*) FILTER (
-                WHERE overview_member_or_guest = 'Guest'
-            )                                                    AS total_guests_booked,
-            ROUND(AVG(overview_nights)::numeric, 1)              AS avg_length_of_stay,
-            ROUND(AVG(overview_persons)::numeric, 1)             AS avg_party_size,
-            COALESCE(SUM(overview_nights), 0)                    AS total_room_nights,
-            COALESCE(SUM(overview_villa_revenue), 0)             AS villa_rental_revenue
-        FROM overview_villa_bookings ovb
-        WHERE 1=1
-          {overview_payment_type_filter_sql("ovb")}
-          {overview_non_villa_filter_sql("ovb")}
-          {overview_date_filter_sql("ovb")}
-    """, params)
+# [2026-08-13] /overview/visits-summary (bare, no -by-payment-type suffix)
+# removed — confirmed via repo-wide grep it had zero callers anywhere
+# (not the frontend, not /overview/summary, not any other backend
+# module). Its by-payment-type sibling immediately below is the one
+# actually in use and is unaffected by this removal.
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/visits-summary-by-payment-type
 #
@@ -558,6 +525,14 @@ def overview_visits_summary_by_payment_type(
             )                                                    AS total_guests_booked,
             ROUND(AVG(overview_nights)::numeric, 1)              AS avg_length_of_stay,
             ROUND(AVG(overview_persons)::numeric, 1)             AS avg_party_size,
+            -- [2026-08-13] Denominator behind avg_party_size: AVG() skips
+            -- NULL overview_persons rows, so avg_party_size is computed
+            -- from fewer bookings than total_bookings whenever some
+            -- bookings have no persons data. OverviewTab.jsx's "Avg. party
+            -- size" sub-text (`from N of M bookings`) has always read this
+            -- field but it never existed on this response, so the
+            -- sub-text silently never rendered.
+            COUNT(overview_persons)                              AS party_size_sample,
             COALESCE(SUM(overview_nights), 0)                    AS total_room_nights,
             COALESCE(SUM(overview_villa_revenue), 0)             AS villa_rental_revenue
         FROM overview_villa_bookings ovb
@@ -578,6 +553,7 @@ def overview_visits_summary_by_payment_type(
             )                                                    AS total_guests_booked,
             ROUND(AVG(overview_nights)::numeric, 1)              AS avg_length_of_stay,
             ROUND(AVG(overview_persons)::numeric, 1)             AS avg_party_size,
+            COUNT(overview_persons)                              AS party_size_sample,
             COALESCE(SUM(overview_nights), 0)                    AS total_room_nights,
             COALESCE(SUM(overview_villa_revenue), 0)             AS villa_rental_revenue
         FROM overview_villa_bookings ovb
@@ -932,70 +908,10 @@ def overview_member_vs_guest_revenue(
             overview_payment_type
     """, params)
 # ─────────────────────────────────────────────────────────────────────────
-# /overview/member-vs-guest-revenue-by-payment-type
-#
-# Convenience endpoint: returns member-vs-guest revenue for ALL payment
-# types in one call, pre-grouped by overview_payment_type, so the frontend
-# can switch the Paid/Free/Overall toggle without refetching.
-# ─────────────────────────────────────────────────────────────────────────
-@router.get("/member-vs-guest-revenue-by-payment-type")
-def overview_member_vs_guest_revenue_by_payment_type(
-    year: int | None = Query(default=None),
-    month: int | None = Query(default=None),
-    date: date | None = Query(default=None),
-    start_date: date | None = Query(default=None),
-    end_date: date | None = Query(default=None),
-    db: Session = Depends(overview_get_db),
-):
-    params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
-    overview_overall_rows = overview_rows(db, f"""
-        SELECT
-            CASE
-                WHEN overview_member_or_guest = 'Guest' THEN 'Guests'
-                ELSE 'Member'
-            END                                                  AS "customerType",
-            COALESCE(SUM(overview_villa_revenue), 0)             AS revenue,
-            COUNT(*)                                              AS transactions,
-            COUNT(DISTINCT overview_member_number)                AS "uniqueAccounts"
-        FROM overview_villa_bookings ovb
-        WHERE 1=1
-          {overview_non_villa_filter_sql("ovb")}
-          {overview_date_filter_sql("ovb")}
-        GROUP BY
-            CASE
-                WHEN overview_member_or_guest = 'Guest' THEN 'Guests'
-                ELSE 'Member'
-            END
-    """, params)
-    overview_rows_with_type = overview_rows(db, f"""
-        SELECT
-            CASE
-                WHEN overview_member_or_guest = 'Guest' THEN 'Guests'
-                ELSE 'Member'
-            END                                                  AS "customerType",
-            overview_payment_type AS villa_payment_type,
-            COALESCE(SUM(overview_villa_revenue), 0)             AS revenue,
-            COUNT(*)                                              AS transactions,
-            COUNT(DISTINCT overview_member_number)                AS "uniqueAccounts"
-        FROM overview_villa_bookings ovb
-        WHERE 1=1
-          {overview_non_villa_filter_sql("ovb")}
-          {overview_date_filter_sql("ovb")}
-        GROUP BY
-            CASE
-                WHEN overview_member_or_guest = 'Guest' THEN 'Guests'
-                ELSE 'Member'
-            END,
-            overview_payment_type
-    """, params)
-    overview_by_type: dict[str, list] = {}
-    for row in overview_rows_with_type:
-        key = row["villa_payment_type"]
-        overview_by_type.setdefault(key, []).append(row)
-    return {
-        "overall": overview_overall_rows,
-        "by_payment_type": overview_by_type,
-    }
+# [2026-08-13] /overview/member-vs-guest-revenue-by-payment-type removed —
+# confirmed via repo-wide grep it had zero callers anywhere. Its
+# non-payment-type-split sibling, /overview/member-vs-guest-revenue
+# (defined above), is still in use and unaffected.
 # ─────────────────────────────────────────────────────────────────────────
 # /overview/transaction-finance-summary
 #
@@ -1433,13 +1349,24 @@ def overview_transaction_member_vs_guest_revenue(
 #
 # line_category here is a 3-way split (Villa / Amenity / Membership),
 # NOT the same thing as overview_line_category on overview_transaction_lines
-# (which only ever has Villa / Amenity). 'Membership' is carved out of
-# what would otherwise be 'Amenity' specifically for this card — any line
-# whose description starts with "Temp Membership Fee" (the per-stay fee
-# charged to non-member guests for temporary club access during their
-# visit; first surfaced during the amenity-categorization audit on
-# 2026-06-25: 111 charges, $65,299). Added 2026-06-26 per request,
-# deliberately scoped to ONLY this endpoint/card — overview_line_category
+# (which as of the 2026-08-20 rearchitecture is Villa / Amenity / Service —
+# Membership lives inside 'Service' there, alongside Adjustment/Transport/
+# etc.). 'Membership' is carved out of 'Service' specifically for this
+# card, using the authoritative overview_transaction_category column
+# (also exposed on overview_transaction_lines since 2026-08-20) rather
+# than description-matching.
+#
+# [2026-08-13, superseded 2026-08-20] Originally matched only
+# `description ILIKE 'Temp Membership Fee%'`, missing TMD-worded
+# transfers/refunds ("Miscellaneous Charge - ... Prepaid TMD - Debit
+# Folio 5") that CLASSIFICATION_SQL's own category CASE already folds
+# into 'Membership' — those rows leaked into 'Amenity' on this card only,
+# a ~$41K gap versus Finance at a glance's Amenity figure on the same
+# page. Reading overview_transaction_category directly closes that gap
+# by construction: this card and every other Overview/Finance consumer
+# now agree because they read the same column, not two keyword lists.
+#
+# Deliberately scoped to ONLY this endpoint/card — overview_line_category
 # itself, and every other card that reads it (Top villas by revenue,
 # Finance at a glance, Revenue by month, etc.), is unchanged, so this
 # doesn't shift any other number on the page.
@@ -1464,11 +1391,21 @@ def overview_transaction_member_vs_guest_revenue_by_category(
 ):
     params = filter_params(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
     params["overview_line_status"] = overview_line_status
+    # [2026-08-20] Was 3-way (Villa/Amenity/Membership), with everything
+    # non-Villa/non-Membership falling into 'Amenity' — that included
+    # overview_line_category='Service' rows (Adjustment/Transport/
+    # Laundry/etc, everything outside Finance's AMENITY_CATS), inflating
+    # this card's Amenity figure well past Finance's Amenities Revenue
+    # (reported live: $30,522,287 here vs Finance's ~$26.7M). Now a
+    # genuine 4-way split matching overview_line_category's own
+    # Villa/Amenity/Service buckets, with Membership carved out of
+    # Service specifically for this card (as before).
     card_category_case = """
         CASE
             WHEN otl.overview_line_category = 'Villa' THEN 'Villa'
-            WHEN otl.overview_line_description ILIKE 'Temp Membership Fee%' THEN 'Membership'
-            ELSE 'Amenity'
+            WHEN otl.overview_transaction_category = 'Membership' THEN 'Membership'
+            WHEN otl.overview_line_category = 'Amenity' THEN 'Amenity'
+            ELSE 'Service'
         END
     """
     return overview_rows(db, f"""
@@ -1604,16 +1541,22 @@ def overview_summary(
 ):
     date_kwargs = dict(year=year, month=month, date=date, start_date=start_date, end_date=end_date)
     return {
-        "overviewMemberStatus": overview_member_status(db=db),
-        "overviewMemberType": overview_member_type(db=db),
-        "overviewAmountDue": overview_amount_due(db=db),
-        "overviewAmountDueByPeriod": overview_amount_due_by_period(db=db),
+        # [2026-08-13] Removed from this bundle: overviewMemberStatus,
+        # overviewMemberType, overviewAmountDue, overviewAmountDueByPeriod,
+        # overviewMonthlyRevenue, overviewMemberVsGuestRevenue. Confirmed
+        # via repo-wide grep that Dashboard.jsx/OverviewTab.jsx never read
+        # any of these six bundle keys (member status/type come from
+        # /analytics/dashboard-summary instead; the other four had no
+        # reader at all) — every page load was computing and discarding
+        # six queries' worth of work. The underlying /overview/member-status,
+        # /overview/member-type, /overview/amount-due,
+        # /overview/amount-due-by-period, /overview/monthly-revenue, and
+        # /overview/member-vs-guest-revenue endpoints are untouched and
+        # still directly callable if something needs them later.
         "overviewDependents": overview_dependents(db=db),
         "overviewVillaStats": overview_villa_stats(overview_payment_type=None, **date_kwargs, db=db),
         "overviewBookingsByBedroom": overview_bookings_by_bedroom(overview_payment_type=None, **date_kwargs, db=db),
-        "overviewMonthlyRevenue": overview_monthly_revenue(overview_payment_type=None, **date_kwargs, db=db),
         "overviewVisitsSummary": overview_visits_summary_by_payment_type(**date_kwargs, db=db),
-        "overviewMemberVsGuestRevenue": overview_member_vs_guest_revenue(overview_payment_type=None, **date_kwargs, db=db),
         "overviewTransactionFinanceSummary": overview_transaction_finance_summary(overview_line_status=None, **date_kwargs, db=db),
         "overviewTransactionMemberVsGuestRevenue": overview_transaction_member_vs_guest_revenue(overview_line_status=None, **date_kwargs, db=db),
         "overviewTransactionMemberVsGuestRevenueByCategory": overview_transaction_member_vs_guest_revenue_by_category(overview_line_status=None, **date_kwargs, db=db),

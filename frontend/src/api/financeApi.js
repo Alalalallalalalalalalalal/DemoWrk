@@ -64,34 +64,37 @@ const withQuery = (endpoint, params = {}) => {
 };
 
 export const financeApi = {
-  overview: (params = {}) => fetchData(withQuery("/finance/overview", params)),
+  overview: (params = {}, options = {}) =>
+    fetchData(withQuery("/finance/overview", params), options),
 
-  sourceBreakdown: (params = {}) =>
-    fetchData(withQuery("/finance/source-breakdown", params)),
+  sourceBreakdown: (params = {}, options = {}) =>
+    fetchData(withQuery("/finance/source-breakdown", params), options),
 
-  memberVsGuest: (params = {}) =>
-    fetchData(withQuery("/finance/member-vs-guest", params)),
+  memberVsGuest: (params = {}, options = {}) =>
+    fetchData(withQuery("/finance/member-vs-guest", params), options),
 
-  villaRevenue: (params = {}) =>
-    fetchData(withQuery("/finance/villa-revenue", params)),
+  villaRevenue: (params = {}, options = {}) =>
+    fetchData(withQuery("/finance/villa-revenue", params), options),
 
   // ── Reservation-level drill-in for ONE villa (rate_details-sourced,
   // not folios) — powers the drawer when a villa row is clicked
   // directly from the Villa Revenue table. `villa` is required.
-  villaReservations: ({ villa, ...periodParams }) =>
+  villaReservations: ({ villa, ...periodParams }, options = {}) =>
     fetchData(
       withQuery("/finance/villa-reservations", { villa, ...periodParams }),
+      options,
     ),
 
-  amenityRevenue: (params = {}) =>
-    fetchData(withQuery("/finance/amenity-revenue", params)),
+  amenityRevenue: (params = {}, options = {}) =>
+    fetchData(withQuery("/finance/amenity-revenue", params), options),
 
-  categoryCompBreakdown: (params = {}) =>
-    fetchData(withQuery("/finance/category-comp-breakdown", params)),
+  categoryCompBreakdown: (params = {}, options = {}) =>
+    fetchData(withQuery("/finance/category-comp-breakdown", params), options),
 
-  villaStatementTotals: (params = {}) =>
+  villaStatementTotals: (params = {}, options = {}) =>
     fetchData(
       `/finance/villa-statement-totals${params.years ? `?years=${params.years}` : ""}`,
+      options,
     ),
 
   // ── Flat folio-record drilldown ──────────────────────────────────
@@ -109,7 +112,7 @@ export const financeApi = {
   // no longer sent (previously a positional 3rd arg / `limit` key,
   // default 200). If a caller still passes `limit`, it's silently
   // ignored here rather than sent to a backend that no longer reads it.
-  drilldown: (typeOrOptions, value, params = {}) => {
+  drilldown: (typeOrOptions, value, params = {}, options = {}) => {
     let query;
     if (typeof typeOrOptions === "string") {
       query = { type: typeOrOptions, value, ...params };
@@ -121,7 +124,7 @@ export const financeApi = {
       } = typeOrOptions || {};
       query = { ...filters, ...rest };
     }
-    return fetchData(withQuery("/finance/drilldown", query));
+    return fetchData(withQuery("/finance/drilldown", query), options);
   },
 
   // ── Grouped breakdown for a dimension, scoped by every other active

@@ -43,6 +43,35 @@ export const analyticsApi = {
   // Combined dashboard endpoint
   dashboardSummary: () => fetchData("/analytics/dashboard-summary"),
 
+  // ── Guest Revenue ────────────────────────────────────────────────
+  guestRevenueNewVsRepeat: (params = {}) =>
+    fetchData(withQuery("/analytics/guest-revenue/new-vs-repeat", params)),
+
+  guestRevenueNewVsRepeatSummary: (params = {}) =>
+    fetchData(
+      withQuery("/analytics/guest-revenue/new-vs-repeat/summary", params),
+    ),
+
+  // Accounts behind one chart bar / trend-table cell — requires
+  // params.guest_status ("New" or "Repeat") plus the same year/month or
+  // start_date/end_date shape the two calls above use.
+  guestRevenueAccounts: (params = {}) =>
+    fetchData(
+      withQuery("/analytics/guest-revenue/new-vs-repeat/accounts", params),
+    ),
+
+  // One guest's revenue-by-source breakdown for a given period (same
+  // year/month params as guestRevenueAccounts, scoped to that one guest).
+  guestRevenueAccountBreakdown: (memberNumber, params = {}) =>
+    fetchData(
+      withQuery(
+        `/analytics/guest-revenue/new-vs-repeat/account/${encodeURIComponent(
+          memberNumber,
+        )}/breakdown`,
+        params,
+      ),
+    ),
+
   // Demographics detail endpoints
   demographicsSummary: (params = {}) =>
     fetchData(withQuery("/analytics/demographics-summary", params)),
@@ -253,4 +282,51 @@ export const analyticsApi = {
     fetchData(`/analytics/ml/marketing-campaigns/${campaignKey}`, {
       method: "DELETE",
     }),
+
+  // ── Lead Time ─────────────────────────────────────────────────────
+  //
+  // Lead Time = Booking Confirmed Date (Created On) -> Arrival Date
+  //
+  // Supports:
+  //   year
+  //   month
+  //   date
+  //   start_date
+  //   end_date
+  //   include_cancelled
+  //
+  // Full/export also support:
+  //   search
+  //
+  // Example:
+  //   analyticsApi.leadTimeAverage({ year: 2026 })
+  //
+  //   analyticsApi.leadTimeTrends({
+  //     start_date: "2026-01-01",
+  //     end_date: "2026-08-31",
+  //   })
+
+  leadTimeAvailableYears: () =>
+    fetchData("/analytics/lead-time/available-years"),
+
+  leadTimeAverage: (params = {}, options = {}) =>
+    fetchData(
+      withQuery("/analytics/lead-time/average", params),
+      withSignal(options),
+    ),
+
+  leadTimeTrends: (params = {}, options = {}) =>
+    fetchData(
+      withQuery("/analytics/lead-time/trends", params),
+      withSignal(options),
+    ),
+
+  leadTimeFull: (params = {}, options = {}) =>
+    fetchData(
+      withQuery("/analytics/lead-time/full", params),
+      withSignal(options),
+    ),
+
+  leadTimeExportUrl: (params = {}) =>
+    `${API_BASE_URL}${withQuery("/analytics/lead-time/export", params)}`,
 };

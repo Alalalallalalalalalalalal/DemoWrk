@@ -84,41 +84,105 @@ def _save(df: pd.DataFrame, table: str) -> None:
 
 
 # ─── Amenity Classification (single source of truth) ──────────────────────────
-
-AMENITY_PATTERNS: dict[str, str] = {
-    "Spa":        r"\b(spa|massage|facial)\b",
-    "Golf":       r"\b(golf|pro shop|cart)\b",
-    "Grill":      r"\bgrill\b",
-    "Bar":        r"\bbar\b",
-    "Restaurant": r"\b(restaurant|dinner|lunch|breakfast)\b",
-    "Tennis":     r"\btennis\b",
-    "Boutique":    r"\bboutique\b",
-    "Shop":         r"\bshop\b",
-    "Commissary":   r"\bcommissary\b",
+#
+# [2026-08-13, redone after being lost to an uncommitted-changes discard —
+# see 2026-08-19 note below] Classifies off folios.transaction_category
+# (the same column CLASSIFICATION_SQL populates and finance_backend.py's
+# headline "Amenities Revenue" card sums) instead of an independent
+# live-regex match on description. The old version only recognized 9
+# literal keywords (spa/massage/facial, golf/pro shop/cart, grill, bar,
+# restaurant/dinner/lunch/breakfast, tennis, boutique, shop, commissary)
+# and silently DROPPED any row whose description didn't contain one of
+# them — e.g. "Villa Wine Sales", "-9H Bar", "-Beach Night Functions" are
+# all F&B by transaction_category but matched none of those patterns.
+# Measured effect on live data: amenity_season_spend totalled $14.81M
+# against the headline card's $26.73M for the exact same period — a
+# $11.92M gap, concentrated almost entirely in F&B (missing ~56% of it)
+# plus four categories (Water Sports, Equipment, Cart Rental, Events)
+# that had no keyword bucket at all and were 100% dropped.
+#
+# AMENITY_CATEGORY_LABELS must stay in sync with finance_backend.py's
+# AMENITY_CATS tuple — those are the transaction_category values that
+# count as "Amenities" everywhere else in the app.
+#
+# [2026-08-19] Commissary moved here from _FNB_SUB_PATTERNS — per the
+# repo owner, Commissary is its own category, matching how
+# STATEMENT_SPEND_SQL's statement_amenity_lines already classified it on
+# the homeowner-statement side (its own 'Commissary' amenity_category, a
+# peer of 'F&B', never nested under it). CLASSIFICATION_SQL
+# (overview_sql.py) now splits "Commissary Charge%" into its own
+# transaction_category = 'Commissary' instead of folding it into 'F&B',
+# so this table follows the same split.
+AMENITY_CATEGORY_LABELS: dict[str, str] = {
+    "Golf":          "Golf",
+    "Commissary":    "Commissary",
+    "Spa & Beauty":  "Spa",
+    "Tennis":        "Tennis",
+    "Boutique":      "Boutique",
+    "Water Sports":  "Water Sports",
+    "Equipment":     "Equipment",
+    "Cart Rental":   "Cart Rental",
+    "Events":        "Events",
 }
 
-_AMENITY_RE: dict[str, re.Pattern] = {
-    name: re.compile(pattern, re.IGNORECASE)
-    for name, pattern in AMENITY_PATTERNS.items()
+# F&B is still worth splitting further (it's the biggest amenity bucket
+# by far, and the old table already had these labels). Any F&B-category
+# row that doesn't match one of these keywords still gets counted — as
+# 'F&B' — instead of being silently dropped, which is the actual bug
+# being fixed here.
+_FNB_SUB_PATTERNS: dict[str, re.Pattern] = {
+    "Grill":      re.compile(r"\bgrill\b", re.IGNORECASE),
+    "Bar":        re.compile(r"\bbar\b", re.IGNORECASE),
+    "Restaurant": re.compile(r"\b(restaurant|dinner|lunch|breakfast)\b", re.IGNORECASE),
 }
 
-_EXCLUDED_RE = re.compile(
-    r"\b(villa|rental|airport|transfer|shuttle|transport|transportation"
-    r"|membership|dues|fee)\b",
-    re.IGNORECASE,
-)
+
+def classify_amenity(transaction_category: str | None, description: str | None) -> str | None:
+    """
+    None means "not an amenity" (excludes Villa, Payment, Membership,
+    Adjustment, Cash Advance, Laundry, Reversal, Other, etc. — anything
+    outside finance_backend.py's AMENITY_CATS scope), matching the
+    headline card's WHERE f.transaction_category IN (...) exactly.
+    """
+    if transaction_category == "F&B":
+        desc = "" if pd.isna(description) else str(description)
+        for label, pattern in _FNB_SUB_PATTERNS.items():
+            if pattern.search(desc):
+                return label
+        return "F&B"
+    return AMENITY_CATEGORY_LABELS.get(transaction_category)
 
 
-def classify_amenity(description: str | None) -> str | None:
-    if pd.isna(description):
-        return None
-    desc = str(description)
-    if _EXCLUDED_RE.search(desc):
-        return None
-    for amenity, pattern in _AMENITY_RE.items():
-        if pattern.search(desc):
-            return amenity
-    return None
+# ─── Revenue Bucket (mirrors finance_backend.py's _bucket_case_sql()) ─────────
+#
+# Only 'collected' should ever be summed as revenue; 'forgone_revenue' is
+# comp/free value (real cost, $0 actually charged); 'reversed'/'other'
+# rows are excluded entirely, matching the headline card's scope.
+_FORGONE_RE = re.compile(r"(comp|free|complimentary|gratis|no charge)", re.IGNORECASE)
+
+
+def _clean_str(value) -> str:
+    """pandas returns NaN (a float) for SQL NULL, not None — plain `or`
+    truthiness doesn't catch that (NaN is truthy), so .strip() on it
+    blows up. pd.isna() is the reliable check for both None and NaN."""
+    if value is None or pd.isna(value):
+        return ""
+    return str(value).strip()
+
+
+def compute_bucket(
+    transaction_flow: str | None,
+    payment_type: str | None,
+    business_source_payment_type: str | None,
+) -> str:
+    if transaction_flow == "Reversal":
+        return "reversed"
+    if transaction_flow != "Charge":
+        return "other"
+    effective_payment_type = _clean_str(payment_type) or _clean_str(business_source_payment_type)
+    if effective_payment_type and _FORGONE_RE.search(effective_payment_type):
+        return "forgone_revenue"
+    return "collected"
 
 
 # ─── Season helpers ───────────────────────────────────────────────────────────
@@ -218,12 +282,18 @@ def _load_folios_with_names() -> pd.DataFrame:
             f.check_in_date,
             f.check_out_date,
             f.villa_name,
-            f.bedroom_count
+            f.bedroom_count,
+            f.transaction_category,
+            f.transaction_flow,
+            f.payment_type,
+            bs.payment_type AS business_source_payment_type
         FROM folios f
         LEFT JOIN members m
             ON f.member_number = m.member_number
         LEFT JOIN member_addresses a
             ON f.member_number = a.member_number
+        LEFT JOIN business_source bs
+            ON LOWER(TRIM(f.source)) = LOWER(TRIM(bs.source_name))
         LEFT JOIN (
             SELECT DISTINCT ON (member_number)
                 member_number,
@@ -248,9 +318,22 @@ def _load_folios_with_names() -> pd.DataFrame:
     df["check_in_date"]    = pd.to_datetime(df["check_in_date"], errors="coerce")
     df["check_out_date"]   = pd.to_datetime(df["check_out_date"], errors="coerce")
     df["dob"]              = pd.to_datetime(df["dob"], errors="coerce")
-    df["amenity"]          = df["description"].apply(classify_amenity)
+    df["amenity"] = df.apply(
+        lambda r: classify_amenity(r["transaction_category"], r["description"]), axis=1
+    )
+    df["bucket"] = df.apply(
+        lambda r: compute_bucket(
+            r["transaction_flow"], r["payment_type"], r["business_source_payment_type"]
+        ),
+        axis=1,
+    )
 
-    amenity_df = df[df["amenity"].notna()].copy()
+    # Amenity scope (transaction_category) AND revenue scope (collected /
+    # forgone_revenue only — 'reversed' and 'other' rows are excluded
+    # entirely, same as finance_backend.py's headline card).
+    amenity_df = df[
+        df["amenity"].notna() & df["bucket"].isin(["collected", "forgone_revenue"])
+    ].copy()
     log.info(
         "Folios loaded: %d total  |  %d amenity rows  |  %d excluded",
         len(df), len(amenity_df), len(df) - len(amenity_df),
@@ -291,7 +374,10 @@ def build_amenity_season_spend(
 ) -> pd.DataFrame:
     """
     Per amenity × per season:
-      total_spend, transaction_count, avg_spend_per_visit, member_count
+      revenue (collected bucket only — reconciles with finance_backend.py's
+      headline Amenities Revenue card), free_value (forgone_revenue bucket),
+      total_spend (revenue + free_value), transaction_count, avg_spend_per_visit,
+      member_count.
     """
     ref_date = amenity_df["check_in_date"].fillna(amenity_df["transaction_date"])
     amenity_df = amenity_df.copy()
@@ -300,9 +386,14 @@ def build_amenity_season_spend(
     )
     amenity_df = amenity_df[amenity_df["season"].notna()]
 
+    amenity_df["revenue_amt"] = amenity_df["amount"].where(amenity_df["bucket"] == "collected", 0)
+    amenity_df["free_amt"] = amenity_df["amount"].where(amenity_df["bucket"] == "forgone_revenue", 0)
+
     agg = (
         amenity_df.groupby(["amenity", "season"])
         .agg(
+            revenue=("revenue_amt", "sum"),
+            free_value=("free_amt", "sum"),
             total_spend=("amount", "sum"),
             transaction_count=("amount", "count"),
             member_count=("member_id", "nunique"),
@@ -310,7 +401,8 @@ def build_amenity_season_spend(
         .reset_index()
     )
     agg["avg_spend_per_visit"] = (agg["total_spend"] / agg["transaction_count"]).round(2)
-    agg["total_spend"] = agg["total_spend"].round(2)
+    for col in ("revenue", "free_value", "total_spend"):
+        agg[col] = agg[col].round(2)
 
     _save(agg, "amenity_season_spend")
     return agg

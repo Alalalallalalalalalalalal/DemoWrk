@@ -49,3 +49,12 @@ app.include_router(
     villa_fees_router,
     prefix="/analytics",   # same prefix as the other analytics routers
 )
+
+#For New vs Repeat Guest Revenue (Marketing tab)
+from postgres.analytics_guest_revenue import router as guest_revenue_router  # New vs Repeat guest revenue
+
+app.include_router(
+    guest_revenue_router,
+    prefix="/analytics",   # same prefix as the other analytics routers
+    tags=["Guest Revenue"],
+)

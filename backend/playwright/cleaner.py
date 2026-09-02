@@ -16,6 +16,7 @@ What the default run loads (python cleaner.py):
     _profile.csv            -> members, member_addresses, member_phones
     _dependents.csv         -> dependents, dependent_addresses, dependent_phones
     _rooms.csv              -> rooms
+    _lead_time.csv          -> reservation_lead_time
     _rate_details.csv       -> rate_details       (per-night Room Rates, 2025+)
     _recent_activity.csv    -> recent_activity
     _statements.csv         -> statements         (Homeowner receivable, 2025+)
@@ -46,6 +47,7 @@ Usage:
     python cleaner.py --folios-only            # Just folios/business_source/report rate details
     python cleaner.py --business-source-only   # Just the Source -> Payment Type mapping
     python cleaner.py --rate-details-only      # Just reports/ rate detail CSVs
+    python cleaner.py --lead-time-only         # Just journal *_lead_time.csv files
     python cleaner.py --services-and-statements-only
     python cleaner.py --statement-details-only
 """
@@ -390,6 +392,24 @@ CREATE TABLE IF NOT EXISTS interests (
     interest_value      VARCHAR(255),
     UNIQUE (member_number, interest_name)
 );
+
+CREATE TABLE IF NOT EXISTS reservation_lead_time (
+    id                  SERIAL PRIMARY KEY,
+    member_number       VARCHAR(50) REFERENCES members(member_number) ON DELETE CASCADE,
+    confirmation_code   VARCHAR(100),
+    reservation_id      VARCHAR(100),
+    guest_name          VARCHAR(255),
+    room_number         VARCHAR(50),
+    check_in_date       DATE,
+    check_out_date      DATE,
+    created_on          TIMESTAMP,
+    lead_time_days      INTEGER,
+    reservation_status  VARCHAR(100),
+    created_at          TIMESTAMP DEFAULT NOW(),
+    updated_at          TIMESTAMP DEFAULT NOW(),
+
+    UNIQUE (member_number, confirmation_code)
+);
 """
 
 # rack_rate = original_amount when overridden, else modified + addon.
@@ -411,7 +431,7 @@ FROM rate_details rd;
 """
 
 DROP_ALL = """
-DROP TABLE IF EXISTS interests, services, statement_details, statements, recent_activity,
+DROP TABLE IF EXISTS reservation_lead_time, interests, services, statement_details, statements, recent_activity,
     reservation_guests, business_source, rate_details, folios, rooms, dependent_phones, dependent_addresses, dependents,
     member_phones, member_addresses, members CASCADE;
 """
@@ -443,6 +463,27 @@ def clean_date(val):
             continue
     return None
 
+def clean_datetime(val):
+    """Parse reservation audit timestamps into a datetime object."""
+    if val is None or str(val).strip() in ("", "nan", "None"):
+        return None
+
+    value = str(val).strip()
+
+    for fmt in (
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %I:%M:%S %p",
+        "%m/%d/%Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+
+    log.warning(f"  Could not parse datetime: {value!r}")
+    return None
 
 def clean_amount(val):
     # val is None / NaN / blank -> None; but a genuine 0 or 0.0 is a
@@ -1178,6 +1219,138 @@ def load_rooms(conn, member_number, filepath, dry_run=False):
                     ["member_number", "confirmation_code"], dry_run)
         log.info(f"  rooms: {len(rows)} rows")
 
+def load_lead_time(conn, member_number, filepath, dry_run=False):
+    """
+    Load *_lead_time.csv into reservation_lead_time.
+
+    Expected CSV columns:
+        Member #
+        Conf. Code
+        Reservation ID
+        Guest Name
+        Room #
+        Check-In Date
+        Check-Out Date
+        Created On
+        Lead Time (days)
+        Reservation Status
+    """
+    try:
+        df = pd.read_csv(filepath)
+    except Exception as e:
+        log.warning(f"  Could not read {filepath}: {e}")
+        return
+
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
+
+    rows = []
+
+    for _, row in df.iterrows():
+
+        conf_code = clean_str(
+            get_first(
+                row,
+                "Conf. Code",
+                "Confirmation Code"
+            ),
+            100
+        )
+
+        if not conf_code:
+            continue
+
+        csv_member = clean_str(
+            get_first(
+                row,
+                "Member #",
+                "Member Number"
+            ),
+            50
+        )
+
+        rows.append({
+            "member_number":
+                csv_member or clean_str(member_number, 50),
+
+            "confirmation_code":
+                conf_code,
+
+            "reservation_id":
+                clean_str(
+                    get_first(row, "Reservation ID"),
+                    100
+                ),
+
+            "guest_name":
+                clean_name(
+                    get_first(row, "Guest Name")
+                ),
+
+            "room_number":
+                clean_str(
+                    get_first(row, "Room #", "Room Number"),
+                    50
+                ),
+
+            "check_in_date":
+                clean_date(
+                    get_first(
+                        row,
+                        "Check-In Date",
+                        "Check In Date"
+                    )
+                ),
+
+            "check_out_date":
+                clean_date(
+                    get_first(
+                        row,
+                        "Check-Out Date",
+                        "Check Out Date"
+                    )
+                ),
+
+            "created_on":
+                clean_datetime(
+                    get_first(row, "Created On")
+                ),
+
+            "lead_time_days":
+                clean_int(
+                    get_first(row, "Lead Time (days)")
+                ),
+
+            "reservation_status":
+                clean_category(
+                    get_first(
+                        row,
+                        "Reservation Status",
+                        "Status",
+                        "status"
+                    ),
+                    100
+                ),
+        })
+
+    # reservation_lead_time has a member FK
+    rows = filter_rows_to_existing_members(
+        conn,
+        rows,
+        "reservation_lead_time"
+    )
+
+    if rows:
+        upsert_multi(
+            conn,
+            "reservation_lead_time",
+            rows,
+            ["member_number", "confirmation_code"],
+            dry_run
+        )
+
+        log.info(
+            f"  reservation_lead_time: {len(rows)} rows"
+        )
 
 def load_recent_activity(conn, member_number, filepath, dry_run=False):
     """Load _recent_activity.csv into recent_activity table."""
@@ -1757,11 +1930,8 @@ LOADERS = {
     "profile":            load_profile,
     "dependents":         load_dependents,
     "rooms":              load_rooms,
-    "rate_details":       load_member_rate_details,
+    "lead_time":          load_lead_time,
     "recent_activity":    load_recent_activity,
-    "statements":         load_statements,
-    "statement_details":  load_statement_details,
-    "services":           load_services,
     "interests":          load_interests,
 }
 
@@ -1884,6 +2054,11 @@ def main():
                         help="Only load *_services.csv and *_statements.csv from journal folders")
     parser.add_argument("--statement-details-only", action="store_true",
                         help="Only load *_statement_details.csv from journal folders")
+    parser.add_argument(
+            "--lead-time-only",
+            action="store_true",
+            help="Only load *_lead_time.csv from journal folders"
+        )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -1898,6 +2073,7 @@ def main():
     print(f"Business source only: {args.business_source_only}")
     print(f"Rate details only: {args.rate_details_only}")
     print(f"Rooms only: {args.rooms_only}")
+    print(f"Lead time only: {args.lead_time_only}")
     print(f"Services and statements only: {args.services_and_statements_only}")
     print(f"Statement details only: {args.statement_details_only}")
     print()
@@ -2056,6 +2232,62 @@ def main():
         print("=" * 60)
         print(f"  Loaded:  {len(loaded)}")
         print(f"  Skipped (no _rooms.csv): {len(skipped)}")
+        print(f"  Failed:  {len(failed)}")
+        if failed:
+            print(f"  Failed members: {failed}")
+        return
+
+    if args.lead_time_only:
+        log.info("Skipping everything except reservation lead time because --lead-time-only was used.")
+
+        if args.member:
+            folders = [os.path.join(JOURNAL_FOLDER, args.member)]
+            if not os.path.isdir(folders[0]):
+                log.error(f"Folder not found: {folders[0]}")
+                conn.close()
+                return
+        else:
+            folders = sorted([
+                f.path for f in os.scandir(JOURNAL_FOLDER)
+                if f.is_dir()
+            ])
+
+        if args.sample_rate < 1.0:
+            folders = [
+                f for f in folders
+                if keep_sample(os.path.basename(f), args.sample_rate)
+            ]
+
+        print(f"Members to check: {len(folders)}\n")
+
+        loaded, skipped, failed = [], [], []
+
+        for folder in folders:
+            folder_name = os.path.basename(folder)
+            lead_time_fp = os.path.join(folder, f"{folder_name}_lead_time.csv")
+
+            if not os.path.exists(lead_time_fp):
+                skipped.append(folder_name)
+                continue
+
+            try:
+                load_lead_time(conn, folder_name, lead_time_fp, args.dry_run)
+                if not args.dry_run:
+                    conn.commit()
+                loaded.append(folder_name)
+            except Exception as e:
+                conn.rollback()
+                log.error(f"Failed lead_time for {folder_name}: {e}")
+                failed.append(folder_name)
+
+        conn.close()
+
+        print()
+        print("=" * 60)
+        print("ETL Complete (lead time only)")
+        print("=" * 60)
+        print(f"  Loaded:  {len(loaded)}")
+        print(f"  Skipped (no _lead_time.csv): {len(skipped)}")
         print(f"  Failed:  {len(failed)}")
         if failed:
             print(f"  Failed members: {failed}")

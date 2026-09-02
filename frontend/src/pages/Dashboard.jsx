@@ -45,7 +45,11 @@ import {
 import VillaFeesTab from "./VillaFeesTab";
 import { analyticsApi } from "../api/analytics";
 import { overviewApi } from "../api/overviewApi";
-import { FinancePeriodFilter, periodToParams, DEFAULT_PERIOD } from "./finance/FinanceShared";
+import {
+  FinancePeriodFilter,
+  periodToParams,
+  DEFAULT_PERIOD,
+} from "./finance/FinanceShared";
 import { COLORS, TOOLTIP_STYLE } from "./styles/Dashboardstyles";
 import {
   StatCard,
@@ -62,9 +66,13 @@ import "./styles/styles.css";
 import VisitsRoomsTab from "./visits/VisitsRoomsTab";
 import DemographicsTab from "./demographics/DemographicsTab";
 import FinanceTab from "./finance/FinanceTab";
+import Leadtimetab from "./Leadtimetab";
 
 //Overview tab components
 import OverviewTab from "./OverviewTab";
+
+// New vs Repeat Guest Revenue — its own tab (not nested inside Marketing)
+import GuestRevenueTab from "./GuestRevenueTab";
 
 /* ─── Sidebar nav config ─────────────────────────────────────── */
 const TABS = [
@@ -76,6 +84,8 @@ const TABS = [
   { id: "market", label: "Marketing Targeting", Icon: PartyPopper },
   { id: "ml", label: "ML Insights", Icon: Sparkles },
   { id: "villa_fees", label: "Annual Fees", Icon: Home },
+  { id: "guest_revenue", label: "Guest Revenue", Icon: TrendingUp },
+  { id: "lead_time", label: "Lead Time", Icon: Clock },
 ];
 
 const SUB = {
@@ -86,7 +96,12 @@ const SUB = {
   reports: "View and filter raw report data",
   market: "Analysis and Insights on market Targeting",
   ml: "Segmentation, amenity insights and campaign recommendations — all monetary figures in $USD",
-  villa_fees: "Maintenance, Capital Expenditure and membership dues billed per villa",
+  villa_fees:
+    "Maintenance, Capital Expenditure and membership dues billed per villa",
+  guest_revenue:
+    "New vs repeat guest revenue — trends by month and summary averages",
+  lead_time:
+    "Booking confirmed vs arrival date — full detail, trends and averages",
 };
 
 /* ─── Recharts shared props ──────────────────────────────────── */
@@ -126,8 +141,6 @@ export default function Dashboard() {
   const [totalRecentActivitySpend, setTotalRecentActivitySpend] =
     useState(null);
   const [topSpendDescriptions, setTopSpendDescriptions] = useState([]);
-  const [totalAmountDue, setTotalAmountDue] = useState(null);
-  const [amountDueByPeriod, setAmountDueByPeriod] = useState([]);
   const [totalDependents, setTotalDependents] = useState(null);
   const [dependentsPerHousehold, setDependentsPerHousehold] = useState([]);
   const [dependentsByAgeGroup, setDependentsByAgeGroup] = useState([]);
@@ -147,12 +160,10 @@ export default function Dashboard() {
   const [exportMenu, setExportMenu] = useState(false);
 
   const [selectedVillaName, setSelectedVillaName] = useState(null);
-  const [memberVsGuestRevenue, setMemberVsGuestRevenue] = useState([]);
   const [villaStats, setVillaStats] = useState([]);
   const [visitsTabSummary, setVisitsTabSummary] = useState(null);
   const [bedroomBookings, setBedroomBookings] = useState([]);
   const [villaRevenue, setVillaRevenue] = useState([]);
-  const [monthlyRevenue, setMonthlyRevenue] = useState([]);
   const [transactionFinanceSummary, setTransactionFinanceSummary] = useState(
     [],
   );
@@ -170,9 +181,11 @@ export default function Dashboard() {
   const [anomaliesSummary, setAnomaliesSummary] = useState(null);
   const [anomalies, setAnomalies] = useState([]);
   const [tipsSummary, setTipsSummary] = useState(null);
-  const [internalTransfersSummary, setInternalTransfersSummary] = useState(null);
+  const [internalTransfersSummary, setInternalTransfersSummary] =
+    useState(null);
   const [paymentsSummary, setPaymentsSummary] = useState(null);
-  const [paymentCorrectionsSummary, setPaymentCorrectionsSummary] = useState(null);
+  const [paymentCorrectionsSummary, setPaymentCorrectionsSummary] =
+    useState(null);
   // Added 2026-07-17 — three datasets OverviewTab already consumed via
   // props that were never wired up here (their backend endpoints didn't
   // exist until the same day; see overview_analytics.py):
@@ -212,9 +225,14 @@ export default function Dashboard() {
         setDependentsByAgeGroup(data.dependentsByAgeGroup ?? []);
         setDependentsPerMember(data.dependentsPerMember ?? []);
         setDependentsPerHousehold(data.dependentsPerHousehold ?? []);
-        // NOTE: totalAmountDue, amountDueByPeriod, and totalDependents are
-        // intentionally NOT set here anymore — they now come from
-        // /overview/summary below, so there's only one writer for each.
+        // NOTE: totalDependents is intentionally NOT set here anymore — it
+        // comes from /overview/summary below, so there's only one writer.
+        // totalAmountDue / amountDueByPeriod used to follow the same
+        // pattern but were removed entirely on 2026-08-13 — OverviewTab.jsx
+        // stopped reading them back on 2026-07-01 (statements no longer
+        // generate from folios), and overview_analytics.py's /summary
+        // bundle was still computing both on every page load for no
+        // reader. See overview_analytics.py's /overview/summary docstring.
       })
       .catch(console.error);
 
@@ -264,8 +282,6 @@ export default function Dashboard() {
           setVillaStats(data.overviewVillaStats ?? []);
           setVisitsTabSummary(data.overviewVisitsSummary ?? null);
           setBedroomBookings(data.overviewBookingsByBedroom ?? []);
-          setMonthlyRevenue(data.overviewMonthlyRevenue ?? []);
-          setMemberVsGuestRevenue(data.overviewMemberVsGuestRevenue ?? []);
           setTransactionFinanceSummary(
             data.overviewTransactionFinanceSummary ?? [],
           );
@@ -279,8 +295,6 @@ export default function Dashboard() {
           setMonthlyRevenueByCategory(
             data.overviewMonthlyRevenueByCategory ?? [],
           );
-          setTotalAmountDue(data.overviewAmountDue ?? null);
-          setAmountDueByPeriod(data.overviewAmountDueByPeriod ?? []);
           setTotalDependents(data.overviewDependents ?? null);
           setReversalsSummary(data.overviewReversalsSummary ?? null);
           setVillaRackRateFree(data.overviewVillaRackRateFree ?? []);
@@ -288,9 +302,13 @@ export default function Dashboard() {
           setAnomaliesSummary(data.overviewAnomaliesSummary ?? null);
           setAnomalies(data.overviewAnomalies ?? []);
           setTipsSummary(data.overviewTipsSummary ?? null);
-          setInternalTransfersSummary(data.overviewInternalTransfersSummary ?? null);
+          setInternalTransfersSummary(
+            data.overviewInternalTransfersSummary ?? null,
+          );
           setPaymentsSummary(data.overviewPaymentsSummary ?? null);
-          setPaymentCorrectionsSummary(data.overviewPaymentCorrectionsSummary ?? null);
+          setPaymentCorrectionsSummary(
+            data.overviewPaymentCorrectionsSummary ?? null,
+          );
           setMemberDuesSummary(data.overviewMemberDuesSummary ?? null);
           setEmailOnFile(data.overviewEmailOnFile ?? null);
           setRackRateSummary(data.overviewRackRateSummary ?? null);
@@ -405,9 +423,9 @@ export default function Dashboard() {
     rowLimit === "all"
       ? sortedRows
       : sortedRows.slice(
-        (page - 1) * Number(rowLimit),
-        page * Number(rowLimit),
-      );
+          (page - 1) * Number(rowLimit),
+          page * Number(rowLimit),
+        );
 
   const getExportRows = () =>
     sortedRows.map((row) => {
@@ -506,7 +524,6 @@ export default function Dashboard() {
             </button>
           </div>
         </header>
-
         {/* ════ OVERVIEW ════ */}
         {activeTab === "overview" && (
           <OverviewTab
@@ -526,17 +543,13 @@ export default function Dashboard() {
             mostUsedRoomTypes={mostUsedRoomTypes}
             totalDependents={totalDependents}
             dependentsPerMember={dependentsPerMember}
-            totalAmountDue={totalAmountDue}
-            amountDueByPeriod={amountDueByPeriod}
             totalRecentActivitySpend={totalRecentActivitySpend}
             topSpendDescriptions={topSpendDescriptions}
             directoryMembers={[]}
-            memberVsGuestRevenue={memberVsGuestRevenue}
             villaStats={villaStats}
             visitsTabSummary={visitsTabSummary}
             bedroomBookings={bedroomBookings}
             villaRevenue={villaRevenue}
-            monthlyRevenue={monthlyRevenue}
             transactionFinanceSummary={transactionFinanceSummary}
             transactionMemberVsGuestRevenue={transactionMemberVsGuestRevenue}
             transactionMemberVsGuestRevenueByCategory={
@@ -559,7 +572,6 @@ export default function Dashboard() {
             newMembersPerYear={newMembersPerYear}
           />
         )}
-
         {/* ════ DEMOGRAPHICS ════ */}
         {activeTab === "demographics" && (
           <DemographicsTab
@@ -577,7 +589,6 @@ export default function Dashboard() {
             dependentsPerMember={dependentsPerMember}
           />
         )}
-
         {activeTab === "visits" && (
           <VisitsRoomsTab
             selectedVillaName={selectedVillaName}
@@ -585,14 +596,22 @@ export default function Dashboard() {
             onGoToML={() => setActiveTab("ml")}
           />
         )}
-
         {/* ════ FINANCE ════ */}
         {activeTab === "finance" && <FinanceTab />}
-
-
         {/* ════ VILLA FEES (TEST) ════ */}
         {activeTab === "villa_fees" && <VillaFeesTab />}
+        {/* ════ GUEST REVENUE (New vs Repeat) ════ */}
+        {activeTab === "guest_revenue" && (
+          <ErrorBoundary title="Guest Revenue">
+            <GuestRevenueTab />
+          </ErrorBoundary>
+        )}
 
+        {activeTab === "lead_time" && (
+          <ErrorBoundary title="Lead Time">
+            <Leadtimetab />
+          </ErrorBoundary>
+        )}
         {/* ════ REPORTS ════ */}
         {activeTab === "reports" && (
           <div className="dashboard-section dashboard-section-sm">
@@ -1152,7 +1171,6 @@ export default function Dashboard() {
             </div>
           </div>
         )}
-
         {/* ════ MARKET TARGETING ════ */}
         {activeTab === "market" && (
           <div className="dashboard-section">

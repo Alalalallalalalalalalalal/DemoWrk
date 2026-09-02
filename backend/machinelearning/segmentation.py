@@ -14,13 +14,13 @@ acquires locks on the live tables (important for Supabase environments).
 
 import os
 import logging
+import re
 from datetime import date, timedelta
 
 import psycopg
 from dotenv import load_dotenv
 
 from season_tables import load_active_seasons, season_for_date
-from ml_amenity_seasons import classify_amenity
 
 load_dotenv()
 
@@ -282,10 +282,58 @@ def swap_tables(conn):
 # ─────────────────────────────────────────────
 # UTIL: SPEND CATEGORIZATION
 # ─────────────────────────────────────────────
+# [2026-08-13, redone 2026-08-19 after an uncommitted-changes discard]
+# classify_amenity() in ml_amenity_seasons.py requires transaction_category
+# (fixing a $11.9M reconciliation gap between the Finance headline
+# Amenities card and the amenity_season_spend table it and ML Insights
+# read from — see that file's docstring). This call site only has raw
+# description text available (build_spenders()'s `spend` CTE below
+# aggregates ARRAY_AGG(DISTINCT description), not paired with category),
+# and only feeds segment_spenders.spend_categories — a display tag list,
+# not a summed dollar figure — so the stakes for an exact match are much
+# lower here than for amenity_season_spend. Kept as a local,
+# explicitly-legacy classifier rather than importing the new two-arg
+# classify_amenity with a dummy category (which would just always return
+# None and silently break every spend_categories tag). Commissary stays
+# its own label here too, same as everywhere else.
+_LEGACY_AMENITY_PATTERNS: dict[str, str] = {
+    "Spa":        r"\b(spa|massage|facial)\b",
+    "Golf":       r"\b(golf|pro shop|cart)\b",
+    "Grill":      r"\bgrill\b",
+    "Bar":        r"\bbar\b",
+    "Restaurant": r"\b(restaurant|dinner|lunch|breakfast)\b",
+    "Tennis":     r"\btennis\b",
+    "Boutique":   r"\bboutique\b",
+    "Shop":       r"\bshop\b",
+    "Commissary": r"\bcommissary\b",
+}
+_LEGACY_AMENITY_RE = {
+    name: re.compile(pattern, re.IGNORECASE)
+    for name, pattern in _LEGACY_AMENITY_PATTERNS.items()
+}
+_LEGACY_EXCLUDED_RE = re.compile(
+    r"\b(villa|rental|airport|transfer|shuttle|transport|transportation"
+    r"|membership|dues|fee)\b",
+    re.IGNORECASE,
+)
+
+
+def _classify_amenity_description_only(description) -> str | None:
+    if not description:
+        return None
+    desc = str(description)
+    if _LEGACY_EXCLUDED_RE.search(desc):
+        return None
+    for amenity, pattern in _LEGACY_AMENITY_RE.items():
+        if pattern.search(desc):
+            return amenity
+    return None
+
+
 def categorize_spend(descriptions):
     categories = set()
     for d in descriptions or []:
-        amenity = classify_amenity(d)
+        amenity = _classify_amenity_description_only(d)
         if amenity:
             categories.add(amenity)
     return list(categories)

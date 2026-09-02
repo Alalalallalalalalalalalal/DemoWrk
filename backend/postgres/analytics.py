@@ -25,8 +25,8 @@ from .analytics_tables import router as tables_router
 from .analytics_ml_insights import router as ml_insights_router
 from .analytics_villas import router as villas_router
 from .analytics_demographics import router as demographics_router
-from .finance_backend import router as finance_router
 from .analytics_marketing import router as marketing_router
+from .analytics_lead_time import router as lead_time_router
 
 router = APIRouter()
 
@@ -36,5 +36,5 @@ router.include_router(tables_router)
 router.include_router(ml_insights_router)
 router.include_router(villas_router)
 router.include_router(demographics_router)
-router.include_router(finance_router, prefix="/finance")
 router.include_router(marketing_router)
+router.include_router(lead_time_router)

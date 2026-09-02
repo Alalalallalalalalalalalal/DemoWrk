@@ -4,6 +4,47 @@ login.py — Handles portal login.
 from config import USERNAME, PASSWORD, PORTAL_URL
 import time
 
+def open_membership_menu(page):
+    """
+    Open the Membership menu via JavaScript, same mechanism as
+    open_reporting_menu but for the Membership tab.
+
+    Reporting's call was:
+        changeSelModule(16, 1, 1, '#003565', 'Reporting')
+
+    Rather than hardcoding Membership's numeric module ID (which I can't see
+    from here), this reads the *actual* onclick="changeSelModule(...)" off
+    the Membership tab element itself and evals that directly — so it works
+    regardless of what ID your portal assigns it.
+    """
+    print("Opening Membership menu...")
+    page.wait_for_timeout(2500)
+
+    main_frame = get_frame_by_url(page, "default.jsp")
+    if not main_frame:
+        raise Exception("Could not find main navigation frame.")
+
+    onclick = main_frame.evaluate(
+        """
+        () => {
+            const els = Array.from(document.querySelectorAll("[onclick*='changeSelModule']"));
+            const match = els.find(el => el.textContent.trim().includes('Membership'));
+            return match ? match.getAttribute('onclick') : null;
+        }
+        """
+    )
+
+    if not onclick:
+        raise Exception(
+            "Could not find the Membership tab's changeSelModule() call. "
+            "Open devtools on the top nav and check the exact tab element/text."
+        )
+
+    main_frame.evaluate(onclick)
+    page.wait_for_timeout(2500)
+    print("Membership menu opened.")
+
+
 def get_frame_by_url(page, keyword):
     """Find a frame by a keyword in its URL."""
     for frame in page.frames:

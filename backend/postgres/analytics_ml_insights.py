@@ -214,8 +214,35 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
         )
     """
 
+    # [2026-08-13] Materialize season_amenity_rows ONCE instead of
+    # re-running the full amenity_rows -> season_amenity_rows chain three
+    # separate times (once per spend_raw/profile_raw/visits_raw query
+    # below). That chain joins ~90k amenity-qualifying folios rows to
+    # members/member_addresses/member_phones, then does a non-indexed
+    # season date-range join (SEASON_JOIN_SQL has no equality key, so
+    # it's a per-row nested-loop test against every active season) —
+    # expensive once, and this endpoint was running it three times per
+    # request. That's why /analytics/ml/amenity-season-insights?group_id=N
+    # (the call the live page always makes once a season group exists)
+    # hung past a 20s timeout instead of returning, even though the
+    # no-group_id path (reading pre-materialized summary tables) was fine.
+    # Same temp-table pattern analytics_villas.py's _materialize() uses.
+    db.execute(text("DROP TABLE IF EXISTS _ml_season_amenity_rows"))
+    db.execute(
+        text(f"""
+            CREATE TEMP TABLE _ml_season_amenity_rows
+            ON COMMIT DROP AS
+            {base_ctes}
+            SELECT * FROM season_amenity_rows
+        """),
+        {"group_id": group_id},
+    )
+    db.execute(text(
+        "CREATE INDEX ON _ml_season_amenity_rows (year, member_id, amenity)"
+    ))
+    db.execute(text("ANALYZE _ml_season_amenity_rows"))
+
     spend_raw = rows(f"""
-        {base_ctes}
         SELECT year,
                amenity,
                season,
@@ -225,14 +252,13 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                COUNT(*)::INT AS transaction_count,
                ROUND((SUM(amount) / NULLIF(COUNT(*), 0))::NUMERIC, 2) AS avg_spend_per_visit,
                COUNT(DISTINCT member_id)::INT AS member_count
-        FROM season_amenity_rows
+        FROM _ml_season_amenity_rows
         GROUP BY year, amenity, season
         ORDER BY year DESC, season, total_spend DESC
     """)
 
     profile_raw = rows(f"""
-        {base_ctes},
-        per_member_amenity AS (
+        WITH per_member_amenity AS (
             SELECT year,
                    member_id,
                    MAX(member_full_name) AS member_full_name,
@@ -242,7 +268,7 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                    SUM(amount) AS amenity_spend,
                    SUM(CASE WHEN NOT is_free THEN amount ELSE 0 END) AS amenity_revenue,
                    SUM(CASE WHEN is_free THEN amount ELSE 0 END) AS amenity_free_value
-            FROM season_amenity_rows
+            FROM _ml_season_amenity_rows
             GROUP BY year, member_id, amenity
         ),
         ranked AS (
@@ -274,7 +300,6 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
     """)
 
     visits_raw = rows(f"""
-        {base_ctes}
         SELECT year,
                member_id,
                member_full_name,
@@ -295,7 +320,7 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
                ROUND(SUM(amount)::NUMERIC, 2) AS total_spend,
                TO_CHAR(check_in_date, 'Mon DD, YYYY') AS check_in_fmt,
                TO_CHAR(check_out_date, 'Mon DD, YYYY') AS check_out_fmt
-        FROM season_amenity_rows
+        FROM _ml_season_amenity_rows
         GROUP BY year,
                  member_id,
                  member_full_name,
@@ -412,12 +437,36 @@ def _ml_amenity_season_insights_for_group(group_id: int, db: Session):
     }
 
 
+def _business_group_id(db: Session) -> int | None:
+    """
+    The id of the single 'business' group_type season group, if one
+    exists — this is the group ml_amenity_seasons.py always builds its
+    pre-materialized tables against (see that script's
+    _load_active_seasons(), which filters on group_type = 'business').
+    """
+    return db.execute(
+        text("SELECT id FROM season_groups WHERE group_type = 'business' LIMIT 1")
+    ).scalar()
+
+
 @router.get("/ml/amenity-season-insights")
 def ml_amenity_season_insights(
     group_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    if group_id is not None:
+    # [2026-08-13] The live per-group computation below
+    # (_ml_amenity_season_insights_for_group) takes ~33s on its own —
+    # 9 live regex passes over all of folios with no supporting index,
+    # then a non-indexed season-range join — and the frontend always
+    # requests group_id=<the business group>, so every page load paid
+    # that cost. ml_amenity_seasons.py already builds and maintains
+    # pre-materialized tables for exactly the business-type group (that's
+    # what the group_id-less branch below reads). Route business-group
+    # requests to that instant path instead of recomputing live; only a
+    # genuinely custom (non-business) season group falls through to live
+    # computation, which is the case that path exists for. Zero new
+    # storage — reuses tables already built this session.
+    if group_id is not None and group_id != _business_group_id(db):
         return _ml_amenity_season_insights_for_group(group_id, db)
 
     def rows(sql: str):
