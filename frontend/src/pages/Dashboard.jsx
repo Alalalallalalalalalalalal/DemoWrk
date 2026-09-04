@@ -584,7 +584,9 @@ export default function Dashboard() {
           />
         )}
         {activeTab === "visits" && (
-          <>
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: "40px" }}
+          >
             <VisitsRoomsTab
               selectedVillaName={selectedVillaName}
               onVillaSelect={setSelectedVillaName}
@@ -594,21 +596,23 @@ export default function Dashboard() {
             <ErrorBoundary title="Lead Time">
               <Leadtimetab />
             </ErrorBoundary>
-          </>
+          </div>
         )}
 
         {/* ════ FINANCE ════ */}
-        {activeTab === "finance" && <FinanceTab />}
-        {/* ════ VILLA FEES (TEST) ════ */}
         {activeTab === "finance" && (
-          <>
+          <div
+            style={{ display: "flex", flexDirection: "column", gap: "40px" }}
+          >
             <FinanceTab />
 
             <ErrorBoundary title="Guest Revenue">
               <GuestRevenueTab />
             </ErrorBoundary>
-          </>
+          </div>
         )}
+        {/* ════ VILLA FEES (TEST) ════ */}
+        {activeTab === "villa_fees" && <VillaFeesTab />}
 
         {/* ════ REPORTS ════ */}
         {activeTab === "reports" && (
