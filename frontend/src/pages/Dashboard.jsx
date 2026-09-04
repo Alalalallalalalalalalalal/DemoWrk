@@ -84,8 +84,6 @@ const TABS = [
   { id: "market", label: "Marketing Targeting", Icon: PartyPopper },
   { id: "ml", label: "ML Insights", Icon: Sparkles },
   { id: "villa_fees", label: "Annual Fees", Icon: Home },
-  { id: "guest_revenue", label: "Guest Revenue", Icon: TrendingUp },
-  { id: "lead_time", label: "Lead Time", Icon: Clock },
 ];
 
 const SUB = {
@@ -98,10 +96,6 @@ const SUB = {
   ml: "Segmentation, amenity insights and campaign recommendations — all monetary figures in $USD",
   villa_fees:
     "Maintenance, Capital Expenditure and membership dues billed per villa",
-  guest_revenue:
-    "New vs repeat guest revenue — trends by month and summary averages",
-  lead_time:
-    "Booking confirmed vs arrival date — full detail, trends and averages",
 };
 
 /* ─── Recharts shared props ──────────────────────────────────── */
@@ -590,28 +584,32 @@ export default function Dashboard() {
           />
         )}
         {activeTab === "visits" && (
-          <VisitsRoomsTab
-            selectedVillaName={selectedVillaName}
-            onVillaSelect={setSelectedVillaName}
-            onGoToML={() => setActiveTab("ml")}
-          />
+          <>
+            <VisitsRoomsTab
+              selectedVillaName={selectedVillaName}
+              onVillaSelect={setSelectedVillaName}
+              onGoToML={() => setActiveTab("ml")}
+            />
+
+            <ErrorBoundary title="Lead Time">
+              <Leadtimetab />
+            </ErrorBoundary>
+          </>
         )}
+
         {/* ════ FINANCE ════ */}
         {activeTab === "finance" && <FinanceTab />}
         {/* ════ VILLA FEES (TEST) ════ */}
-        {activeTab === "villa_fees" && <VillaFeesTab />}
-        {/* ════ GUEST REVENUE (New vs Repeat) ════ */}
-        {activeTab === "guest_revenue" && (
-          <ErrorBoundary title="Guest Revenue">
-            <GuestRevenueTab />
-          </ErrorBoundary>
+        {activeTab === "finance" && (
+          <>
+            <FinanceTab />
+
+            <ErrorBoundary title="Guest Revenue">
+              <GuestRevenueTab />
+            </ErrorBoundary>
+          </>
         )}
 
-        {activeTab === "lead_time" && (
-          <ErrorBoundary title="Lead Time">
-            <Leadtimetab />
-          </ErrorBoundary>
-        )}
         {/* ════ REPORTS ════ */}
         {activeTab === "reports" && (
           <div className="dashboard-section dashboard-section-sm">

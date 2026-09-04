@@ -36,6 +36,7 @@ Usage:
     python reservation_lead_time_scraper.py --member 17A
     python reservation_lead_time_scraper.py --members 67,67A,23B
     python reservation_lead_time_scraper.py --limit 50 --workers 5
+    HEADFUL=1 python reservation_lead_time_scraper.py --all --workers 1
     python reservation_lead_time_scraper.py --reset      # clear done log
 """
 import os
