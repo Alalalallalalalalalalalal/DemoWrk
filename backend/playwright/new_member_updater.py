@@ -219,7 +219,8 @@ def main():
 
     with sync_playwright() as p:
 
-        browser = p.chromium.launch(headless=False)
+        headless = os.environ.get("HEADFUL", "").lower() not in ("1", "true", "yes")
+        browser = p.chromium.launch(headless=headless)
 
         page = browser.new_page()
 

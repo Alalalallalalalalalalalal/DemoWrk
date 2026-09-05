@@ -119,7 +119,10 @@ def scrape_rooms_and_rates(page, member_number, member_id, prefix=""):
             take_screenshot(page, f"rates_no_tab_{folder_name}")
             return False, 0, 0
 
-        ok, room_rows, merged_contact, rate_rows = \
+        # lead_time_rows is discarded here — this script deliberately stays
+        # narrow (rooms + rate details only, see module docstring); lead
+        # time is now collected by journal_scraper.py's own normal run.
+        ok, room_rows, merged_contact, rate_rows, _lead_time_rows = \
             scrape_rooms_with_popups(page, folder_name, prefix)
 
         if not ok:

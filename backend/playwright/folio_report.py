@@ -7,13 +7,25 @@ Usage:
     python new_folio_report.py                        # default: every year, current year back to Nov 2019
     python new_folio_report.py --year 2025             # single year, Jan-Dec (or Jan-current month if it's the current year)
     python new_folio_report.py --year 2025 --month 3   # single month only, merged into the existing master file
+    python new_folio_report.py --workers 3             # split the month list across 3 parallel browser sessions
+
+--workers: each worker opens its own visible browser window and logs in
+independently (same pattern folio_scraper.py/journal_scraper.py use for
+their own --workers). Raise gradually and watch how the portal responds
+before pushing higher — concurrent-session behavior beyond 2 sessions was
+untested at the time this was added.
 """
 import os
 import csv
 import re
+import sys
 import time
+import math
+import signal
 import calendar
 import argparse
+from multiprocessing import Pool, Manager
+from queue import Empty
 from datetime import datetime, date
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 from config import OUTPUT_FOLDER, BASE_URL
@@ -31,7 +43,7 @@ NAV_TIMEOUT        = 15000
 FRAME_TIMEOUT      = 8000
 FOLIO_TIMEOUT       = 12000
 
-SEARCH_TIMEOUT      = 600000   # 10 min
+SEARCH_TIMEOUT      = 800000   # ~13.3 min
 # After switching the page-size dropdown to "All", the full table
 # can take up to ~2-3 min to finish
 # rendering.
@@ -45,6 +57,14 @@ STABLE_POLLS_NEEDED = 15
 EARLIEST_YEAR  = 2019          # floor year for the default all-years mode
 EARLIEST_MONTH = 11             # floor month within EARLIEST_YEAR — Nov 2019
 DATE_FORMAT    = "%m/%d/%Y"    # matches the portal's checkInDateFrom/To fields
+
+# Defaults to 1 (the original, always-safe single-session behavior) so
+# that pipeline.py and scheduler.py, which invoke this script with no
+# --workers flag, are completely unaffected until --workers is passed
+# explicitly. 2 concurrent sessions against this portal were confirmed to
+# work without issue; higher counts are untested — raise gradually only
+# after watching a run at the current value behave correctly.
+DEFAULT_WORKERS = 1
 
 EXPECTED_RESULT_COLUMNS = {
     "conf", "group", "member", "check", "room", "folio",
@@ -850,6 +870,96 @@ def month_bounds(year, month):
     return first_day.strftime(DATE_FORMAT), last_day.strftime(DATE_FORMAT)
 
 # ─────────────────────────────────────────────
+# ONE PERIOD (shared by the single-browser path and each worker)
+# ─────────────────────────────────────────────
+def scrape_one_period(page, y, m):
+    """
+    Scrapes a single (year, month) period against an already-logged-in
+    page. Identical to the per-period body of the old single-threaded
+    main() loop, extracted unchanged so both the sequential path and the
+    parallel workers below call the exact same logic — nothing about
+    navigate_to_folios()/run_search() or their timing-sensitive helpers
+    is touched by adding worker support.
+
+    Returns (label, display, rows, success). success=False means this
+    period should be recorded as failed (rows will be []).
+    """
+    label   = f"{y}_{m:02d}"
+    display = f"{y}-{m:02d}"
+    date_from, date_to = month_bounds(y, m)
+    print(f"\n--- Period {display} ({date_from} to {date_to}) ---")
+    try:
+        if not navigate_to_folios(page):
+            print(f"  ERROR: Could not reach Folios search page for {label}.")
+            return label, display, [], False
+        rows, success = run_search(page, date_from=date_from, date_to=date_to)
+    except Exception as e:
+        print(f"  ERROR: unexpected exception while processing {label}: {e}")
+        screenshot(page, f"error_{label}")
+        return label, display, [], False
+    if not success:
+        print(f"  Marking {display} as FAILED.")
+        return label, display, [], False
+    return label, display, rows, True
+
+# ─────────────────────────────────────────────
+# WORKER (one browser + login per worker, own subset of periods)
+# ─────────────────────────────────────────────
+def _worker_init():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+def scrape_period_chunk(args):
+    """
+    Runs in a separate process. Opens its own browser, logs in once, and
+    scrapes every period in periods_chunk sequentially within itself —
+    the parallelism is across workers, not within one.
+
+    Pushes one result dict onto progress_queue immediately after EACH
+    period finishes, rather than batching everything until the whole
+    chunk is done. A worker's chunk can hold many periods (total periods
+    / worker count), so waiting for the full chunk to return — as an
+    earlier version of this function did — could delay the first
+    checkpoint by an hour or more. Streaming per period instead means
+    the parent can checkpoint (CSV + done log) at single-period
+    granularity even though each worker still only logs in once and
+    handles several periods sequentially. Does NOT call
+    mark_period_done() itself — the parent does that, from the queue,
+    avoiding concurrent writers to the same file.
+    """
+    periods_chunk, worker_id, progress_queue = args
+    prefix = f"[W{worker_id}] "
+
+    with sync_playwright() as pw:
+        headless = os.environ.get("HEADFUL", "").lower() not in ("1", "true", "yes")
+        browser = pw.chromium.launch(headless=headless)
+        page = browser.new_page()
+        try:
+            print(f"{prefix}Logging in...")
+            login(page)
+            dismiss_popup(page)
+            print(f"{prefix}Ready — {len(periods_chunk)} period(s) assigned")
+
+            for (y, m) in periods_chunk:
+                print(f"\n{prefix}{'=' * 50}")
+                label, display, rows, success = scrape_one_period(page, y, m)
+                if success:
+                    for r in rows:
+                        r["_period"] = label
+                    print(f"{prefix}{len(rows)} row(s) collected for {label}.")
+                progress_queue.put({
+                    "worker_id": worker_id,
+                    "label": label,
+                    "display": display,
+                    "rows": rows,
+                    "success": success,
+                })
+        except Exception as e:
+            print(f"{prefix}Fatal: {e}")
+            screenshot(page, f"worker_{worker_id}_fatal")
+        finally:
+            browser.close()
+
+# ─────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────
 def parse_args():
@@ -872,6 +982,14 @@ def parse_args():
         help="Re-scrape periods even if they're already recorded in "
              "folio_report_done.txt. Ignored for --month, which always runs."
     )
+    parser.add_argument(
+        "--workers", type=int, default=DEFAULT_WORKERS,
+        help=f"Parallel browser workers, each scraping a distinct subset "
+             f"of months independently (default: {DEFAULT_WORKERS}). Each "
+             f"worker opens its own visible browser window and logs in "
+             f"separately. A single remaining period (e.g. --month mode) "
+             f"always runs on one worker regardless of this value."
+    )
     args = parser.parse_args()
     if args.month is not None and not args.year:
         parser.error("--month requires --year (e.g. --year 2025 --month 3).")
@@ -880,10 +998,10 @@ def parse_args():
 def resolve_mode():
     args = parse_args()
     if args.month is not None:
-        return "month", args.year, args.month, args.force
+        return "month", args.year, args.month, args.force, args.workers
     if args.year:
-        return "single", args.year, None, args.force
-    return "all", None, None, args.force
+        return "single", args.year, None, args.force, args.workers
+    return "all", None, None, args.force, args.workers
 
 # ─────────────────────────────────────────────
 # MAIN
@@ -893,8 +1011,14 @@ def main():
     print("Folio Report — Phase 1: Collect reservation listing")
     print("=" * 60)
 
-    mode, year, month, force = resolve_mode()
+    mode, year, month, force, workers = resolve_mode()
     periods = get_periods(mode, year=year, month=month)
+
+    # The current calendar month is never "closed" — new folios keep landing
+    # in it all month long, so a periodic re-run must always re-scrape it
+    # even though a prior run already recorded it in the done log.
+    _today = datetime.now()
+    current_period = (_today.year, _today.month)
 
     if mode == "month":
         print(f"\nMode: single month {year}-{month:02d} (merged into existing master file)")
@@ -911,71 +1035,130 @@ def main():
         print(f"  {len(done_periods)} period(s) already in {DONE_LOG} — "
               f"these will be skipped (use --force to re-scrape them).")
 
+    # Resolve which periods actually need scraping BEFORE touching a
+    # browser, so workers are only handed real work — same skip condition
+    # as before (--month and the current calendar month always run;
+    # otherwise skip anything already in DONE_LOG unless --force).
+    periods_to_process = []
+    skipped = []   # display strings, e.g. "2025-02"
+    for (y, m) in periods:
+        label   = f"{y}_{m:02d}"
+        display = f"{y}-{m:02d}"
+        if (mode != "month" and not force and label in done_periods
+                and (y, m) != current_period):
+            skipped.append(display)
+            continue
+        periods_to_process.append((y, m))
+
+    if skipped:
+        print(f"\nSkipping {len(skipped)} period(s) already in "
+              f"{os.path.basename(DONE_LOG)}: {', '.join(skipped)}")
+
     successes = []   # display strings, e.g. "2025-03"
     failures  = []   # display strings, e.g. "2025-04"
-    skipped   = []   # display strings, e.g. "2025-02"
     refreshed_labels = set()   # "_period" values, e.g. "2025_03"
     all_rows  = []
 
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
-        page    = browser.new_page()
-        try:
-            login(page)
-            dismiss_popup(page)
+    num_workers = max(1, min(workers, len(periods_to_process)))
 
-            for (y, m) in periods:
-                label   = f"{y}_{m:02d}"
-                display = f"{y}-{m:02d}"
-
-                # --month always runs regardless of the done log — an
-                # explicit single-month request is a deliberate ask for
-                # that period. Otherwise, skip anything already recorded
-                # unless --force was passed.
-                if mode != "month" and not force and label in done_periods:
-                    print(f"\n--- Period {display}: already in {os.path.basename(DONE_LOG)} — skipping ---")
-                    skipped.append(display)
-                    continue
-
-                date_from, date_to = month_bounds(y, m)
-                print(f"\n--- Period {display} ({date_from} to {date_to}) ---")
-
+    if num_workers <= 1:
+        # Single browser, sequential — identical to the pre-worker
+        # behavior. Used whenever there's nothing to parallelize (0 or 1
+        # period left to scrape) or --workers 1 was requested explicitly.
+        if periods_to_process:
+            with sync_playwright() as pw:
+                headless = os.environ.get("HEADFUL", "").lower() not in ("1", "true", "yes")
+                browser = pw.chromium.launch(headless=headless)
+                page    = browser.new_page()
                 try:
-                    if not navigate_to_folios(page):
-                        print(f"  ERROR: Could not reach Folios search page for {label}.")
-                        failures.append(display)
-                        continue
+                    login(page)
+                    dismiss_popup(page)
 
-                    rows, success = run_search(page, date_from=date_from, date_to=date_to)
+                    for (y, m) in periods_to_process:
+                        label, display, rows, success = scrape_one_period(page, y, m)
+                        if not success:
+                            failures.append(display)
+                            continue
+                        for r in rows:
+                            r["_period"] = label
+                        all_rows.extend(rows)
+                        successes.append(display)
+                        refreshed_labels.add(label)
+                        mark_period_done(label)
+                        print(f"  {len(rows)} row(s) collected for {label} "
+                            f"(running total: {len(all_rows)}).")
+
+                        # Checkpoint to disk after every period so a kill/crash
+                        # partway through only costs the period in flight, not
+                        # the whole run.
+                        checkpoint = merge_rows_for_save(all_rows, refreshed_labels)
+                        save_master_csv(checkpoint)
                 except Exception as e:
-                    print(f"  ERROR: unexpected exception while processing {label}: {e}")
-                    screenshot(page, f"error_{label}")
-                    failures.append(display)
+                    print(f"Fatal: {e}")
+                    screenshot(page, "fatal")
+                    raise
+                finally:
+                    browser.close()
+    else:
+        # Multiple workers: split periods_to_process into num_workers
+        # contiguous chunks, each scraped by its own browser/login,
+        # running concurrently. See scrape_period_chunk()'s docstring for
+        # why done-log writes happen here in the parent, not per-worker.
+        chunk_size = math.ceil(len(periods_to_process) / num_workers)
+        manager = Manager()
+        progress_queue = manager.Queue()
+        chunks = [
+            (periods_to_process[i:i + chunk_size], wid, progress_queue)
+            for wid, i in enumerate(range(0, len(periods_to_process), chunk_size), 1)
+        ]
+        print(f"\nUsing {num_workers} parallel worker(s), "
+              f"~{chunk_size} period(s) each.")
+
+        pool = Pool(processes=num_workers, initializer=_worker_init)
+        try:
+            # map_async dispatches all chunks without blocking, so the loop
+            # below can drain progress_queue — which each worker pushes to
+            # after every single period, not just at the end of its whole
+            # chunk — and checkpoint (CSV + done log) at single-period
+            # granularity across all workers combined. Runs until every
+            # task has finished (ready()) and the queue has been fully
+            # drained, so a checkpoint pushed right as the last task
+            # finishes is never dropped.
+            async_result = pool.map_async(scrape_period_chunk, chunks, chunksize=1)
+            while not async_result.ready() or not progress_queue.empty():
+                try:
+                    item = progress_queue.get(timeout=1)
+                except Empty:
                     continue
 
-                if not success:
-                    print(f"  Marking {display} as FAILED.")
+                label, display, rows = item["label"], item["display"], item["rows"]
+                if not item["success"]:
                     failures.append(display)
+                    print(f"  [W{item['worker_id']}] {display} FAILED.")
                     continue
 
-                for r in rows:
-                    r["_period"] = label
                 all_rows.extend(rows)
                 successes.append(display)
                 refreshed_labels.add(label)
                 mark_period_done(label)
-                print(f"  {len(rows)} row(s) collected for {label} "
-                    f"(running total: {len(all_rows)}).")
 
-            combined_rows = merge_rows_for_save(all_rows, refreshed_labels)
-            save_master_csv(combined_rows)
+                checkpoint = merge_rows_for_save(all_rows, refreshed_labels)
+                save_master_csv(checkpoint)
+                print(f"  Checkpoint saved after {display} "
+                      f"(worker {item['worker_id']}, {len(all_rows)} row(s) total so far).")
 
-        except Exception as e:
-            print(f"Fatal: {e}")
-            screenshot(page, "fatal")
-            raise
-        finally:
-            browser.close()
+            async_result.get()   # re-raises if any worker process hit an uncaught error
+        except KeyboardInterrupt:
+            print("\nInterrupted — shutting down workers...")
+            pool.terminate()
+            pool.join()
+            sys.exit(0)
+        else:
+            pool.close()
+            pool.join()
+
+    combined_rows = merge_rows_for_save(all_rows, refreshed_labels)
+    save_master_csv(combined_rows)
 
     print("\n" + "=" * 60)
     print("Run Summary")

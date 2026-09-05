@@ -46,6 +46,36 @@ def parse_statement_date(val):
             continue
     return None
 
+def load_recently_active_members():
+    """
+    Reads reports/folio_report.csv (refreshed earlier in the same pipeline
+    run by folio_report.py) and returns the set of "Member #" values with a
+    reservation checking in or out within RECENT_ACTIVITY_DAYS, in either
+    direction — i.e. still open enough that new bookings/statements could
+    still be posted for that member. Returns an empty set if the report
+    doesn't exist yet (e.g. journal_scraper.py run standalone before any
+    folio scrape), which simply falls back to the normal done-log behavior.
+    """
+    if not os.path.exists(FOLIO_REPORT_CSV):
+        return set()
+    today = date.today()
+    recent = set()
+    try:
+        with open(FOLIO_REPORT_CSV, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                member_number = (row.get("Member #") or "").strip()
+                if not member_number:
+                    continue
+                for key in ("Check-Out Date", "Check-In Date"):
+                    d = parse_statement_date(row.get(key, ""))
+                    if d and abs((today - d).days) <= RECENT_ACTIVITY_DAYS:
+                        recent.add(member_number)
+                        break
+    except Exception as e:
+        print(f"WARNING: could not read {FOLIO_REPORT_CSV} for recent-activity check: {e}")
+        return set()
+    return recent
+
 # ─────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────
@@ -53,6 +83,14 @@ MAP_FILE          = os.path.join(OUTPUT_FOLDER, "member_id_map.csv")
 JOURNAL_FOLDER    = os.path.join(OUTPUT_FOLDER, "journal")
 SCREENSHOT_FOLDER = os.path.join(OUTPUT_FOLDER, "screenshots")
 DONE_LOG          = os.path.join(OUTPUT_FOLDER, "journal_done.txt")
+REPORTS_FOLDER    = os.path.join(OUTPUT_FOLDER, "reports")
+FOLIO_REPORT_CSV  = os.path.join(REPORTS_FOLDER, "folio_report.csv")
+# A member with a reservation checking in/out this many days in the past (or
+# still in the future) is re-scraped even if already in journal_done.txt —
+# new bookings, statements, and services keep landing on existing members,
+# and the done log otherwise treats "done" as permanent. See folio_scraper.py's
+# matching RECENT_ACTIVITY_DAYS / is_recently_active().
+RECENT_ACTIVITY_DAYS = 60
 # [2026-07-18] Accounts that finished with an unresolved tab — they
 # are deliberately NOT written to DONE_LOG, so the next run retries
 # them. This file is the audit trail of what is still outstanding.
@@ -1040,15 +1078,226 @@ def scrape_reservation_rate_details(page, conf_code, reservation_id,
     return out
 
 # ─────────────────────────────────────────────
+# AUDIT LOG / BOOKING LEAD TIME
+# ─────────────────────────────────────────────
+# Folded in from reservation_lead_time_scraper.py so lead time is captured
+# while the reservation popup is already open for contact info and rate
+# details, instead of a second full pass re-opening the same popup for
+# every reservation just to read one more field. See scrape_rooms_with_popups()
+# below for the call site.
+def _dump_dialog_rows(frame, conf_code, prefix=""):
+    print(f"    {prefix}[DEBUG] Audit log row dump for conf {conf_code}:")
+    try:
+        rows = frame.evaluate("""
+            () => Array.from(document.querySelectorAll('tr')).map(tr =>
+                Array.from(tr.querySelectorAll('td,th')).map(c => (c.innerText || '').trim())
+            ).filter(r => r.length)
+        """)
+        for r in rows:
+            print(f"      {r}")
+    except Exception as e:
+        print(f"    {prefix}[DEBUG] dump failed: {e}")
+
+
+def click_created_on_audit_log(popup_frame, page, prefix=""):
+    """
+    Click the "Created On" link inside the open reservation popup
+    (fires javascript:viewAuditLog()), which opens a nested Audit Log
+    dialog. Returns the frame for that dialog, or None.
+    """
+    link = None
+    try:
+        for a in popup_frame.query_selector_all("a"):
+            try:
+                blob = (a.get_attribute("onclick") or "") + (a.get_attribute("href") or "")
+                if "viewAuditLog" in blob:
+                    link = a
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    if not link:
+        print(f"    {prefix}Audit log link (viewAuditLog) not found in popup")
+        return None
+
+    try:
+        link.click()
+    except Exception as e:
+        print(f"    {prefix}Audit log click failed: {e}")
+        return None
+
+    # Nested dialog — same jQuery dialog mechanism as the reservation
+    # popup itself, one level deeper. Wait for a NEW dialog frame that
+    # isn't the reservation popup, with content in it.
+    deadline = time.time() + 6
+    while time.time() < deadline:
+        for frame in page.frames:
+            try:
+                if frame == popup_frame:
+                    continue
+                if frame.name and "DialogWindowFrame" in frame.name:
+                    if frame.query_selector("table, div, span, input"):
+                        return frame
+            except Exception:
+                continue
+        page.wait_for_timeout(300)
+
+    print(f"    {prefix}Audit log dialog frame not found")
+    return None
+
+
+def scrape_created_on(audit_frame, conf_code, prefix=""):
+    """
+    Find the Created Reservation row in the Audit Log and return ONLY
+    its Date value.
+    """
+    try:
+        result = audit_frame.evaluate("""
+            () => {
+                const rows = Array.from(document.querySelectorAll('tr'));
+                for (const row of rows) {
+                    const cells = Array.from(row.children)
+                        .filter(el => el.tagName === 'TD' || el.tagName === 'TH')
+                        .map(el =>
+                            (el.innerText || '')
+                                .replace(/\\u00a0/g, ' ')
+                                .replace(/Â/g, '')
+                                .trim()
+                        );
+                    if (cells.length < 3) {
+                        continue;
+                    }
+                    const activity = cells[0].replace(/^\\+/, '').trim().toLowerCase();
+                    if (activity === 'created reservation') {
+                        return { activity: cells[0], changedBy: cells[1], date: cells[2] };
+                    }
+                }
+                return null;
+            }
+        """)
+    except Exception as e:
+        print(f"    {prefix}Could not read audit log: {e}")
+        return ""
+
+    if result:
+        created_date = result.get("date", "").strip()
+        changed_by = result.get("changedBy", "").strip()
+        print(f"    {prefix}SCRAPED | Created Reservation | Changed By: {changed_by} | Created On: {created_date}")
+        return created_date
+
+    print(f"    {prefix}Created Reservation row not found for conf {conf_code}")
+    _dump_dialog_rows(audit_frame, conf_code, prefix)
+    return ""
+
+
+def close_top_dialog(page, prefix=""):
+    """
+    Close whichever dialog is currently on top (the nested Audit Log
+    dialog). Same strategy ladder as close_reservation_popup, generalized
+    to any DialogWindowFrame rather than just _0.
+    """
+    def top_dialog_open():
+        for frame in page.frames:
+            try:
+                if frame.name and "DialogWindowFrame" in frame.name:
+                    _ = frame.url
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def wait_gone(timeout_ms=2000):
+        deadline = time.time() + timeout_ms / 1000
+        while time.time() < deadline:
+            if not top_dialog_open():
+                return True
+            page.wait_for_timeout(200)
+        return not top_dialog_open()
+
+    if not top_dialog_open():
+        return True
+
+    for frame in page.frames:
+        try:
+            for sel in ("[id^='closeButtonId_']",
+                        "button[onclick='closeJQueryDialog()']",
+                        ".ui-dialog-titlebar-close"):
+                for btn in frame.query_selector_all(sel):
+                    try:
+                        if not btn.is_visible():
+                            continue
+                        btn.click(timeout=2000)
+                        if wait_gone():
+                            return True
+                    except Exception:
+                        continue
+        except Exception:
+            continue
+
+    for frame in page.frames:
+        try:
+            frame.evaluate(
+                "() => { if (typeof closeJQueryDialog === 'function') closeJQueryDialog(); }"
+            )
+            if wait_gone(1500):
+                return True
+        except Exception:
+            continue
+
+    try:
+        page.keyboard.press("Escape")
+        if wait_gone(1500):
+            return True
+    except Exception:
+        pass
+
+    print(f"    {prefix}WARNING: audit log dialog would not close")
+    return False
+
+
+def compute_lead_time_days(created_on_raw, check_in_raw):
+    if not created_on_raw or not check_in_raw:
+        return None
+
+    created = None
+    check_in = None
+
+    # Audit Log format: 08/12/2026 13:51:09
+    for fmt in ("%m/%d/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p", "%m/%d/%Y"):
+        try:
+            created = datetime.strptime(created_on_raw.strip(), fmt)
+            break
+        except ValueError:
+            continue
+
+    # Check-in is usually date only
+    for fmt in ("%m/%d/%Y", "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %I:%M:%S %p"):
+        try:
+            check_in = datetime.strptime(check_in_raw.strip(), fmt)
+            break
+        except ValueError:
+            continue
+
+    if created is None or check_in is None:
+        print(f"    DATE PARSE FAILED | Created='{created_on_raw}' | Check-In='{check_in_raw}'")
+        return None
+
+    return (check_in.date() - created.date()).days
+
+
+# ─────────────────────────────────────────────
 # ROOMS TAB
 # ─────────────────────────────────────────────
 def scrape_rooms_with_popups(page, folder_name, prefix=""):
     """
     1. Scrape the rooms table rows.
     2. For each row, click the confirmation code link to open the popup.
-    3. Extract contact info AND per-night rate details from the popup.
+    3. Extract contact info, per-night rate details, AND booking lead
+       time (Created On from the nested Audit Log dialog) from the popup.
     4. Close the popup and move to the next row.
-    Returns (success, room_rows, merged_contact_data, rate_rows)
+    Returns (success, room_rows, merged_contact_data, rate_rows, lead_time_rows)
     success=True:
         Rooms page loaded correctly, even if it contains no records.
     success=False:
@@ -1057,17 +1306,18 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
     frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
     if not frame:
         print(f"    {prefix}Rooms page failed: landing frame not found")
-        return False, [], {}, []
+        return False, [], {}, [], []
 
     room_rows      = []
     merged_contact = {}
     rate_rows      = []
+    lead_time_rows = []
 
     try:
         tables = frame.query_selector_all("table")
         if not tables:
             print(f"    {prefix}No tables found in rooms tab")
-            return True, [], {}, []
+            return True, [], {}, [], []
 
         for table in tables:
             for row in extract_table(table):
@@ -1078,7 +1328,7 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
 
         if not room_rows:
             print(f"    {prefix}Rooms table is empty")
-            return True, [], {}, []
+            return True, [], {}, [], []
 
         print(f"    {prefix}Found {len(room_rows)} room row(s) — opening popups...")
 
@@ -1099,7 +1349,7 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
             frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
             if not frame:
                 print(f"    {prefix}Rooms page failed: Lost landing frame at row {i}")
-                return False, room_rows, merged_contact, rate_rows
+                return False, room_rows, merged_contact, rate_rows, lead_time_rows
 
             # Click the confirmation code link — the link's
             # openReservation(N) argument is the reservationId, capture
@@ -1158,19 +1408,72 @@ def scrape_rooms_with_popups(page, folder_name, prefix=""):
             except Exception as e:
                 print(f"    {prefix}Rate details error for conf {conf_code}: {e}")
 
+            # Booking lead time — Created On is read from the Audit Log
+            # dialog nested inside this same reservation popup, opened
+            # here (before the popup itself closes) instead of a second
+            # full pass re-opening every reservation just for this field.
+            # A failure here does not fail the reservation's other data;
+            # Lead Time (days) is simply left blank for this row.
+            try:
+                popup_frame = get_popup_frame(page, timeout_ms=POPUP_TIMEOUT)
+                created_on = ""
+                if popup_frame:
+                    for attempt in range(1, 4):
+                        audit_frame = click_created_on_audit_log(popup_frame, page, prefix)
+                        if audit_frame:
+                            page.wait_for_timeout(800)
+                            created_on = scrape_created_on(audit_frame, conf_code, prefix)
+                            close_top_dialog(page, prefix)
+                            page.wait_for_timeout(500)
+                        if created_on:
+                            break
+                        page.wait_for_timeout(1000)
+                    if not created_on:
+                        print(f"    {prefix}WARNING: Created On still blank for conf {conf_code} after 3 attempts")
+                else:
+                    print(f"    {prefix}Popup frame not found for conf {conf_code} (lead time)")
+
+                check_in = strip_val(
+                    room_row.get("Check-In Date") or room_row.get("Check In Date") or
+                    room_row.get("Check-In") or ""
+                )
+                check_out = strip_val(
+                    room_row.get("Check-Out Date") or room_row.get("Check Out Date") or
+                    room_row.get("Check-Out") or ""
+                )
+                reservation_status = strip_val(
+                    room_row.get("status") or room_row.get("Status") or
+                    room_row.get("Reservation Status") or ""
+                )
+                lead_days = compute_lead_time_days(created_on, check_in)
+                lead_time_rows.append({
+                    "Member #":           folder_name,
+                    "Conf. Code":         conf_code,
+                    "Reservation ID":     reservation_id,
+                    "Guest Name":         strip_val(room_row.get("Guest Name", "")),
+                    "Room #":             strip_val(room_row.get("Room #", "") or room_row.get("Room Number", "")),
+                    "Check-In Date":      check_in,
+                    "Check-Out Date":     check_out,
+                    "Created On":         created_on,
+                    "Lead Time (days)":   lead_days if lead_days is not None else "",
+                    "Reservation Status": reservation_status,
+                })
+            except Exception as e:
+                print(f"    {prefix}Lead time/audit log error for conf {conf_code}: {e}")
+
             close_reservation_popup(page, prefix)
             page.wait_for_timeout(800)
 
             frame = get_landing_frame(page, timeout_ms=FRAME_TIMEOUT)
             if not frame:
                 print(f"    {prefix}Rooms page failed: " "Landing frame lost after closing popup — stopping")
-                return False, room_rows, merged_contact, rate_rows
+                return False, room_rows, merged_contact, rate_rows, lead_time_rows
 
     except Exception as e:
         print(f"    {prefix}Rooms+popup scrape error: {e}")
-        return False, room_rows, merged_contact, rate_rows
+        return False, room_rows, merged_contact, rate_rows, lead_time_rows
 
-    return True, room_rows, merged_contact, rate_rows
+    return True, room_rows, merged_contact, rate_rows, lead_time_rows
 
 # ─────────────────────────────────────────────
 # SERVICES TAB (Billing > Services)
@@ -1869,7 +2172,7 @@ def scrape_member(page, member_number, member_id, prefix="", status=None):
                 page.wait_for_timeout(1000 * attempt)
             continue
 
-        rooms_success, room_rows, merged_contact, rate_rows = \
+        rooms_success, room_rows, merged_contact, rate_rows, lead_time_rows = \
             scrape_rooms_with_popups(page, folder_name, prefix)
         if not rooms_success:
             print(f"    {prefix}Rooms scraping failed")
@@ -1897,6 +2200,13 @@ def scrape_member(page, member_number, member_id, prefix="", status=None):
                     print(f"    {prefix}Rate details: {len(rate_rows)} night row(s) → {os.path.basename(fp)}")
                 else:
                     print(f"    {prefix}Rate details CSV could not be saved")
+            if lead_time_rows:
+                fp = save_tab_csv(folder_name, "lead_time", lead_time_rows)
+                if fp:
+                    saved["lead_time"] = fp
+                    print(f"    {prefix}Lead time: {len(lead_time_rows)} reservation(s) → {os.path.basename(fp)}")
+                else:
+                    print(f"    {prefix}Lead time CSV could not be saved")
         else:
             print(f"    {prefix}Rooms: no data — processed successfully")
 
@@ -2145,7 +2455,7 @@ def _worker_init():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 def scrape_chunk(args):
-    members_chunk, worker_id, force, statements_only = args
+    members_chunk, worker_id, force, statements_only, recent_members = args
     time.sleep(worker_id * 3)
     prefix   = f"[W{worker_id}] "
     results  = {"success": [], "failed": [], "skipped": [], "incomplete": []}
@@ -2183,7 +2493,7 @@ def scrape_chunk(args):
 
                 ensure_session(page, worker_id)
 
-                if member_id in done_set and not force:
+                if member_id in done_set and not force and member_number not in recent_members:
                     print(f"  {prefix}Already done — skipping")
                     results["skipped"].append(folder_name)
                     continue
@@ -2289,6 +2599,11 @@ def main():
 
     force = args.force or bool(args.member or args.id or args.members)
 
+    recent_members = load_recently_active_members()
+    if recent_members:
+        print(f"Recently active (within {RECENT_ACTIVITY_DAYS} days, per {os.path.basename(FOLIO_REPORT_CSV)}): "
+              f"{len(recent_members)} member(s) — rescraped even if already done.")
+
     if args.members:
         wanted = {m.strip() for m in args.members.split(",") if m.strip()}
         members = [(n, i) for n, i in all_members if n in wanted]
@@ -2322,12 +2637,12 @@ def main():
 
     if len(members) == 1 or args.workers == 1:
         print("Mode               : single worker\n")
-        all_results = [scrape_chunk((members, 1, force, args.statements_only))]
+        all_results = [scrape_chunk((members, 1, force, args.statements_only, recent_members))]
     else:
         num_workers = min(args.workers, len(members))
         chunk_size  = math.ceil(len(members) / num_workers)
         chunks = [
-            (members[i: i + chunk_size], wid, force, args.statements_only)
+            (members[i: i + chunk_size], wid, force, args.statements_only, recent_members)
             for wid, i in enumerate(range(0, len(members), chunk_size), 1)
         ]
         print(f"Workers            : {num_workers}")

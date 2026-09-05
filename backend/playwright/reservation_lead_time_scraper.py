@@ -1,6 +1,15 @@
 """
 reservation_lead_time_scraper.py — Booking Lead Time scraper.
 
+NOT A PIPELINE STAGE. journal_scraper.py (the audit-log click, the Created
+On read, and the lead-time math, all ported into scrape_rooms_with_popups())
+now collects this same data inline, while each reservation's popup is
+already open for contact info and rate details, instead of a second full
+pass re-opening the same popup for every reservation just to read one more
+field. This script is kept only as a manual/backfill tool for targeted
+re-scraping of lead time on its own, without a full journal_scraper.py run —
+same pattern as rates_backfill.py.
+
 Portal flow this automates:
   Accounts Receivable tab -> switch to Membership
   -> search member -> click the member number
@@ -65,6 +74,7 @@ from journal_scraper import (
     get_landing_frame, get_shell_frame, open_member_dropdown, click_section,
     click_subtab, get_popup_frame, close_reservation_popup,
     reservation_dialog_open, get_input_val,
+    load_recently_active_members, RECENT_ACTIVITY_DAYS,
 )
 
 # ─────────────────────────────────────────────
@@ -608,7 +618,7 @@ def _worker_init():
 
 
 def scrape_chunk(args):
-    members_chunk, worker_id, force = args
+    members_chunk, worker_id, force, recent_members = args
     time.sleep(worker_id * 3)
     prefix = f"[W{worker_id}] "
     results = {"success": [], "failed": [], "skipped": []}
@@ -646,7 +656,7 @@ def scrape_chunk(args):
 
                 ensure_session(page, worker_id)
 
-                if member_id in done_set and not force:
+                if member_id in done_set and not force and member_number not in recent_members:
                     print(f"  {prefix}Already done — skipping")
                     results["skipped"].append(folder_name)
                     continue
@@ -706,6 +716,10 @@ def main():
 
     force = args.force or bool(args.member or args.id or args.members)
 
+    recent_members = load_recently_active_members()
+    if recent_members:
+        print(f"Recently active (within {RECENT_ACTIVITY_DAYS} days): {len(recent_members)} member(s) — rescraped even if already done.")
+
     if args.members:
         wanted = {m.strip() for m in args.members.split(",") if m.strip()}
         members = [(n, i) for n, i in all_members if n in wanted]
@@ -729,12 +743,12 @@ def main():
     print(f"Output             : {JOURNAL_FOLDER}/<member>/<member>_lead_time.csv")
 
     if len(members) == 1 or args.workers == 1:
-        all_results = [scrape_chunk((members, 1, force))]
+        all_results = [scrape_chunk((members, 1, force, recent_members))]
     else:
         num_workers = min(args.workers, len(members))
         chunk_size = math.ceil(len(members) / num_workers)
         chunks = [
-            (members[i:i + chunk_size], wid, force)
+            (members[i:i + chunk_size], wid, force, recent_members)
             for wid, i in enumerate(range(0, len(members), chunk_size), 1)
         ]
         pool = Pool(processes=num_workers, initializer=_worker_init)

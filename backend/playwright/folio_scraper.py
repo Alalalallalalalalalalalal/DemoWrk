@@ -35,7 +35,7 @@ import math
 import time
 import signal
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from multiprocessing import Pool
 import sys
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -54,6 +54,11 @@ FOLIO_REPORT_CSV      = os.path.join(REPORTS_FOLDER, "folio_report.csv")
 ENRICHED_REPORT_CSV   = FOLIO_REPORT_CSV
 DEFAULT_LIMIT   = 10    # only used if --limit is explicitly passed
 DEFAULT_WORKERS = 4
+# A reservation whose check-out date is this many days in the past (or still
+# in the future) is re-scraped even if its confirmation code is already in
+# folio_done.txt — late charges and corrections can post to a folio well
+# after checkout, and the done log otherwise treats "done" as permanent.
+RECENT_ACTIVITY_DAYS = 60
 NAV_TIMEOUT   = 15000
 FRAME_TIMEOUT = 8000
 FOLIO_TIMEOUT = 12000
@@ -140,6 +145,22 @@ def get_conf_code(row):
         if v:
             return v
     return "UNKNOWN"
+def is_recently_active(row, today=None):
+    """
+    True if this reservation's check-out date is in the future, or within
+    RECENT_ACTIVITY_DAYS in the past. Used to bypass the done log for
+    reservations that could still receive new charges, instead of treating
+    an old "done" mark as permanent. Rows with a missing or unparseable
+    Check-Out Date fall back to the normal done-log behavior.
+    """
+    check_out = (row.get("Check-Out Date") or "").strip()
+    if not check_out:
+        return False
+    try:
+        co_date = datetime.strptime(check_out, "%m/%d/%Y")
+    except ValueError:
+        return False
+    return (today or datetime.now()) - co_date <= timedelta(days=RECENT_ACTIVITY_DAYS)
 def parse_bedroom_count_from_rate(rate_text):
     """
     Extract bedroom integer from rate name.
@@ -881,7 +902,8 @@ def scrape_chunk(args):
     results  = {"success": [], "failed": [], "skipped": [], "summary": {}}
     done_set = load_done_set()
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
+        headless = os.environ.get("HEADFUL", "").lower() not in ("1", "true", "yes")
+        browser = pw.chromium.launch(headless=headless)
         page    = browser.new_page()
         try:
             pr(prefix, "Logging in...")
@@ -899,7 +921,7 @@ def scrape_chunk(args):
                 conf_code = get_conf_code(row)
                 pr(prefix, f"[{i}/{len(reservations_chunk)}] {conf_code}")
                 ensure_session(page, worker_id)
-                if conf_code in done_set:
+                if conf_code in done_set and not is_recently_active(row):
                     pr(prefix, "Already done — skipping.")
                     results["skipped"].append(conf_code)
                     continue

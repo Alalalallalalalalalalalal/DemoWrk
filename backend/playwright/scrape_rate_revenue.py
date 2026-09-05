@@ -36,6 +36,7 @@ import os
 import argparse
 import time
 from pathlib import Path
+from datetime import datetime, timedelta
 
 try:
     import requests
@@ -63,6 +64,11 @@ PAID_DETAIL_CSV      = REPORTS_DIR / "rate_details_paid.csv"
 FREE_SUMMARY_CSV     = REPORTS_DIR / "free_revenue_summary.csv"
 PAID_SUMMARY_CSV     = REPORTS_DIR / "paid_revenue_summary.csv"
 DONE_LOG             = REPORTS_DIR / "rate_details_done.txt"
+# A reservation whose check-out date is this many days in the past (or still
+# in the future) is re-scraped even if it's already in rate_details_done.txt
+# — late charges/discount corrections can post well after checkout. Mirrors
+# folio_scraper.py's RECENT_ACTIVITY_DAYS / is_recently_active().
+RECENT_ACTIVITY_DAYS = 60
 
 # If folio_report.csv is in the same folder as this script, use:
 # FOLIO_CSV = Path(__file__).parent / "folio_report.csv"
@@ -475,6 +481,22 @@ def mark_done(res_id):
     with open(DONE_LOG, "a") as f:
         f.write(f"{res_id}\n")
 
+def is_recently_active(row, today=None):
+    """
+    True if this reservation's check-out date is in the future, or within
+    RECENT_ACTIVITY_DAYS in the past. Used to bypass the done log for
+    reservations that could still receive a late charge or discount
+    correction, instead of treating an old "done" mark as permanent.
+    """
+    check_out = (row.get("Check-Out Date") or "").strip()
+    if not check_out:
+        return False
+    try:
+        co_date = datetime.strptime(check_out, "%m/%d/%Y")
+    except ValueError:
+        return False
+    return (today or datetime.now()) - co_date <= timedelta(days=RECENT_ACTIVITY_DAYS)
+
 
 def save_csv(all_rows, path, mode='w'):
     """Write rows to CSV. mode='a' to append, 'w' to overwrite."""
@@ -543,7 +565,8 @@ def main():
             seen_ids.add(rid)
             unique_reservations.append(r)
     print(f"  Unique reservations: {len(unique_reservations)} (from {len(reservations)} folio rows)")
-    todo = [r for r in unique_reservations if r["_reservation_id"] not in done]
+    todo = [r for r in unique_reservations
+            if r["_reservation_id"] not in done or is_recently_active(r)]
     print(f"  To scrape: {len(todo)}  Already done: {len(done)}")
 
     # Load existing rows if we're resuming — needed for the final summary
@@ -565,6 +588,15 @@ def main():
                 print(f"  Resuming — loaded {len(paid_rows)} existing Paid rows")
             except Exception as e:
                 print(f"  Could not load existing Paid CSV ({e}), starting fresh.")
+
+    # Reservations in `todo` that were already "done" are being re-scraped
+    # only because is_recently_active() flagged them — drop their old rows
+    # here so the fresh scrape replaces them instead of duplicating them.
+    rescraping_ids = {r["_reservation_id"] for r in todo if r["_reservation_id"] in done}
+    if rescraping_ids:
+        free_rows = [r for r in free_rows if r.get("Reservation ID") not in rescraping_ids]
+        paid_rows = [r for r in paid_rows if r.get("Reservation ID") not in rescraping_ids]
+        print(f"  Dropped stale rows for {len(rescraping_ids)} recently-active reservation(s) being re-scraped.")
 
     if not todo:
         print("Nothing new to scrape.")

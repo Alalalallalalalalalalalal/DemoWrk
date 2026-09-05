@@ -251,6 +251,19 @@ def scrape_room_inquiry(page):
             screenshot(page, "room_nav_error")
             return None
 
+        # The portal sometimes lands directly on a populated results table
+        # (tabGrpModuleID=13 appears to preserve search state from a prior
+        # session), with no Search button on the page at all — confirmed by
+        # a screenshot showing 95 fully-rendered room rows and no button.
+        # Check for already-present results BEFORE requiring a Search
+        # button, so that case is treated as success rather than failure.
+        try:
+            lf.wait_for_selector("tbody tr", timeout=3000)
+            pr("Results already present — skipping Search click.")
+            return lf
+        except PWTimeout:
+            pass
+
         pr("Clicking Search...")
         try:
             search_btn = lf.query_selector(
@@ -523,7 +536,8 @@ def main():
     print("=" * 60)
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False)
+        headless = os.environ.get("HEADFUL", "").lower() not in ("1", "true", "yes")
+        browser = pw.chromium.launch(headless=headless)
         page    = browser.new_page()
         try:
             pr("Logging in...")

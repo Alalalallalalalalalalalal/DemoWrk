@@ -17,6 +17,7 @@ Output:
 import os
 import re
 import csv
+import time
 import argparse
 from datetime import datetime
 import sys
@@ -132,10 +133,55 @@ def get_total_pages(page):
                 per_page = int(per_page_match.group(1)) if per_page_match else 100
                 pages = (total + per_page - 1) // per_page
                 print(f"  Total rows: {total}, per page: {per_page}, pages: {pages}")
-                return pages, total
+                return pages, total, per_page
         except Exception:
             continue
-    return None, None
+    return None, None, None
+
+
+def count_member_links(page):
+    """Counts member/guest links currently rendered in the DOM, across all frames."""
+    count = 0
+    for frame in page.frames:
+        try:
+            n = len(frame.query_selector_all("a#memberNumber[href*='retrieve.jsp']"))
+            count = max(count, n)
+        except Exception:
+            continue
+    return count
+
+
+def wait_for_members_loaded(page, expected_count, timeout_ms=60000, poll_ms=2000, stable_polls_needed=4):
+    """
+    Polls the number of member/guest links actually rendered until it
+    reaches expected_count (how many rows this page should hold) or stops
+    changing across stable_polls_needed consecutive polls.
+
+    Switching to a larger page size (e.g. 1000 rows) doesn't render
+    instantly — the table can take a while to finish painting all the
+    rows. Without this wait, extract_members_from_page() reads whatever
+    happens to be in the DOM at that instant, which is how a "1000 rows
+    per page" run was only capturing ~100 rows per page.
+    """
+    deadline = time.time() + timeout_ms / 1000
+    last_count = -1
+    stable_hits = 0
+    while time.time() < deadline:
+        count = count_member_links(page)
+        print(f"  ...{count} member link(s) rendered so far"
+              + (f" (expecting {expected_count})" if expected_count else ""))
+        if expected_count and count >= expected_count:
+            return count
+        if count == last_count and count > 0:
+            stable_hits += 1
+            if stable_hits >= stable_polls_needed:
+                return count
+        else:
+            stable_hits = 0
+        last_count = count
+        page.wait_for_timeout(poll_ms)
+    print(f"  Timed out waiting for rows to finish loading (last observed: {last_count}).")
+    return last_count
 
 
 def extract_members_from_page(page):
@@ -252,7 +298,8 @@ def main():
     all_members = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        headless = os.environ.get("HEADFUL", "").lower() not in ("1", "true", "yes")
+        browser = p.chromium.launch(headless=headless)
         page = browser.new_page()
 
         try:
@@ -270,7 +317,7 @@ def main():
             set_rows_per_page(page)
 
             # Get total pages
-            total_pages, total_rows = get_total_pages(page)
+            total_pages, total_rows, per_page = get_total_pages(page)
             if total_pages:
                 print(f"\nStarting map build — {total_pages} pages to process...")
             else:
@@ -280,8 +327,12 @@ def main():
             while True:
                 print(f"\nPage {page_num}" + (f"/{total_pages}" if total_pages else "") + "...")
 
-                members = extract_members_from_page(page)
+                expected_this_page = None
+                if per_page and total_rows:
+                    expected_this_page = min(per_page, total_rows - (page_num - 1) * per_page)
+                wait_for_members_loaded(page, expected_this_page)
 
+                members = extract_members_from_page(page)
 
                 print(f"  Found {len(members)} members.")
                 all_members.extend(members)
@@ -299,6 +350,11 @@ def main():
                 has_next = go_to_next_page(page)
                 if not has_next:
                     print("  No more pages.")
+                    if total_pages and page_num < total_pages:
+                        print(f"  WARNING: stopped after page {page_num}/{total_pages} — "
+                              f"{len(all_members)} of {total_rows} expected members captured. "
+                              f"Saving a pagination-failure screenshot for diagnosis.")
+                        screenshot(page, f"pagination_stopped_early_page{page_num}")
                     break
 
                 page_num += 1
